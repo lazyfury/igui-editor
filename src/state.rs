@@ -15,6 +15,7 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 use igui_core::{Key, NodeId, Rect, Vec2, ViewportSize};
 use igui_ui::{Clipboard, TextEdit};
 
+use crate::keymap::{KeyChord, Keymap, KeymapId, Resolution, Scope};
 use crate::model::brackets::match_bracket;
 use crate::model::doc::Document;
 use crate::model::find::{find_all, Matcher};
@@ -135,8 +136,19 @@ pub enum Action {
     Paste,
     SelectAll,
     Find,
+    FindReplace,
+    FindNext,
+    FindPrevious,
     QuickOpen,
     ProjectSearch,
+    CycleView,
+    DeleteLine,
+    DuplicateLine,
+    MoveLineUp,
+    MoveLineDown,
+    DeleteWordBackward,
+    DeleteWordForward,
+    ToggleComment,
     LspHover,
     LspCompletion,
     LspDefinition,
@@ -177,8 +189,19 @@ impl Action {
             Action::Paste => "Paste".into(),
             Action::SelectAll => "Select All".into(),
             Action::Find => "Find…".into(),
+            Action::FindReplace => "Find and Replace…".into(),
+            Action::FindNext => "Find Next".into(),
+            Action::FindPrevious => "Find Previous".into(),
             Action::QuickOpen => "Quick Open…".into(),
             Action::ProjectSearch => "Search in Folder…".into(),
+            Action::CycleView => "Cycle View".into(),
+            Action::DeleteLine => "Delete Line".into(),
+            Action::DuplicateLine => "Duplicate Line".into(),
+            Action::MoveLineUp => "Move Line Up".into(),
+            Action::MoveLineDown => "Move Line Down".into(),
+            Action::DeleteWordBackward => "Delete Word Backward".into(),
+            Action::DeleteWordForward => "Delete Word Forward".into(),
+            Action::ToggleComment => "Toggle Comment".into(),
             Action::LspHover => "Show Hover".into(),
             Action::LspCompletion => "Complete".into(),
             Action::LspDefinition => "Go to Definition".into(),
@@ -304,6 +327,17 @@ impl Action {
                 _ => "Alt+Z",
             },
             Action::SetLanguage(_) => "",
+            Action::FindReplace
+            | Action::FindNext
+            | Action::FindPrevious
+            | Action::CycleView
+            | Action::DeleteLine
+            | Action::DuplicateLine
+            | Action::MoveLineUp
+            | Action::MoveLineDown
+            | Action::DeleteWordBackward
+            | Action::DeleteWordForward
+            | Action::ToggleComment => "",
             Action::OpenRecent(_) | Action::ClearRecent => "",
         }
     }
@@ -318,6 +352,7 @@ impl Action {
             | Action::ToggleSidebar
             | Action::ToggleTheme
             | Action::Find
+            | Action::FindReplace
             | Action::Settings
             | Action::ToggleScrollSync
             | Action::ToggleTerminal => true,
@@ -334,6 +369,15 @@ impl Action {
                 doc.is_some_and(|doc| !doc.is_read_only()) && state.clipboard.is_some()
             }
             Action::SelectAll => doc.is_some(),
+            Action::FindNext | Action::FindPrevious => doc.is_some(),
+            Action::CycleView => doc.is_some(),
+            Action::DeleteLine
+            | Action::DuplicateLine
+            | Action::MoveLineUp
+            | Action::MoveLineDown
+            | Action::DeleteWordBackward
+            | Action::DeleteWordForward
+            | Action::ToggleComment => doc.is_some_and(|doc| !doc.is_read_only()),
             Action::LspHover | Action::LspCompletion | Action::LspDefinition => doc
                 .and_then(|doc| doc.path())
                 .is_some_and(|path| state.lsp.supports(path)),
@@ -948,6 +992,11 @@ pub struct AppState {
     pub git: GitState,
     pub terminal: TerminalState,
     pub lsp: LspController,
+    pub keymap: Keymap,
+    keymap_pending: Vec<KeyChord>,
+    keymap_pending_at: Instant,
+    keymap_overrides: Option<serde_json::Value>,
+    pub vim: crate::vim::VimState,
     pub syntax: SyntaxRegistry,
     pub highlight: HighlightCache,
     /// Matched bracket byte positions for the caret (`open`, `close`).
@@ -1074,6 +1123,15 @@ impl AppState {
                 ..TerminalState::default()
             },
             lsp: LspController::default(),
+            keymap: Keymap::for_id(settings.keymap),
+            keymap_pending: Vec::new(),
+            keymap_pending_at: Instant::now(),
+            keymap_overrides: None,
+            vim: {
+                let mut vim = crate::vim::VimState::default();
+                vim.reset_for_keymap(settings.keymap == KeymapId::Vim);
+                vim
+            },
             syntax: SyntaxRegistry::with_builtins(),
             highlight: HighlightCache::new(),
             bracket: None,
@@ -1550,6 +1608,81 @@ impl AppState {
     }
 
     /// Drains Git worker events and issues a pending status request.
+    fn rebuild_keymap(&mut self) {
+        self.keymap = Keymap::for_id(self.settings.keymap);
+        if let Some(overrides) = self.keymap_overrides.clone() {
+            self.keymap.apply_overrides(&overrides);
+        }
+        self.keymap_pending.clear();
+        self.vim
+            .reset_for_keymap(self.settings.keymap == KeymapId::Vim);
+    }
+
+    /// Loads `<config>/keymaps.json` once at startup. Invalid JSON is reported
+    /// but never prevents the editor from starting.
+    pub fn load_keymap_overrides(&mut self) {
+        let path = self
+            .config_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("keymaps.json");
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return;
+        };
+        match serde_json::from_str::<serde_json::Value>(&text) {
+            Ok(value) => {
+                if let Some(base) = value.get("base").and_then(serde_json::Value::as_str) {
+                    let id = KeymapId::from_session(base);
+                    if id != self.settings.keymap {
+                        self.settings.keymap = id;
+                        self.session.keymap = id.session_value().into();
+                        self.config_dirty = true;
+                    }
+                }
+                self.keymap_overrides = Some(value);
+                self.rebuild_keymap();
+                self.status("keymap overrides loaded");
+            }
+            Err(error) => eprintln!("keymaps.json: {error}"),
+        }
+    }
+
+    /// Resolves a host key through the active keymap. Overlay modules must run
+    /// before this; plain editor keys and text stay untouched when no binding
+    /// matches.
+    pub fn keymap_key(&mut self, key: Key, modifiers: igui_core::Modifiers) -> bool {
+        let scope = match self.focus {
+            Focus::Terminal => Scope::Terminal,
+            Focus::Editor => Scope::Editor,
+            Focus::Find | Focus::Replace => Scope::Global,
+        };
+        if !self.keymap_pending.is_empty()
+            && self.keymap_pending_at.elapsed() >= Duration::from_millis(900)
+        {
+            self.keymap_pending.clear();
+        }
+        let chord = KeyChord::from_event(key, modifiers, cfg!(target_os = "macos"));
+        self.keymap_pending.push(chord);
+        self.keymap_pending_at = Instant::now();
+        match self.keymap.resolve(scope, &self.keymap_pending) {
+            Resolution::Command(action) => {
+                self.keymap_pending.clear();
+                self.run(action);
+                true
+            }
+            Resolution::Prefix => true,
+            Resolution::None => {
+                self.keymap_pending.clear();
+                false
+            }
+        }
+    }
+
+    pub fn clear_keymap_pending(&mut self) {
+        self.keymap_pending.clear();
+        self.keymap_pending_at = Instant::now();
+    }
+
     /// Pumps the language server and applies a pending go-to-definition.
     pub fn tick_lsp(&mut self) {
         self.lsp.tick(&self.ws, &self.services.language_servers);
@@ -2294,6 +2427,11 @@ impl AppState {
     }
 
     /// Provider for the active document (override, then extension).
+    fn comment_marker(&self) -> Option<&'static str> {
+        self.language_of_active()
+            .and_then(|provider| provider.line_comment())
+    }
+
     pub fn language_of_active(&self) -> Option<Arc<dyn SyntaxProvider>> {
         let doc = self.ws.active_doc()?;
         self.language_override_for(doc)
@@ -2491,6 +2629,7 @@ impl AppState {
             Row::Syntax => on_off(self.settings.syntax),
             Row::Autosave => on_off(self.settings.autosave),
             Row::SidebarWidth => format!("{} px", self.settings.sidebar_width as i32),
+            Row::Keymap => self.settings.keymap.name().into(),
             Row::Reset => "DEFAULT".into(),
         }
     }
@@ -2533,6 +2672,22 @@ impl AppState {
                 self.settings_changed();
                 self.pending_sidebar_sync = true;
             }
+            Row::Keymap => {
+                if delta != 0 {
+                    self.settings.keymap = if delta > 0 {
+                        self.settings.keymap.next()
+                    } else {
+                        let mut previous = self.settings.keymap;
+                        for _ in 0..KeymapId::ALL.len() - 1 {
+                            previous = previous.next();
+                        }
+                        previous
+                    };
+                    self.rebuild_keymap();
+                    self.settings_changed();
+                    self.status(format!("keymap: {}", self.settings.keymap.name()));
+                }
+            }
             Row::Reset => self.reset_settings(),
         }
         self.dirty = true;
@@ -2546,6 +2701,7 @@ impl AppState {
 
     pub fn reset_settings(&mut self) {
         self.settings = Settings::default();
+        self.rebuild_keymap();
         self.settings_changed();
         self.pending_sidebar_sync = true;
         self.status("settings reset");
@@ -2564,6 +2720,7 @@ impl AppState {
         self.session.syntax = self.settings.syntax;
         self.session.autosave = self.settings.autosave;
         self.session.sidebar_width = self.settings.sidebar_width;
+        self.session.keymap = self.settings.keymap.session_value().into();
         self.session.theme = match self.theme.mode {
             Mode::Dark => "dark".into(),
             Mode::Light => "light".into(),
@@ -3514,6 +3671,13 @@ impl AppState {
                     | Action::Paste
                     | Action::Undo
                     | Action::Redo
+                    | Action::DeleteLine
+                    | Action::DuplicateLine
+                    | Action::MoveLineUp
+                    | Action::MoveLineDown
+                    | Action::DeleteWordBackward
+                    | Action::DeleteWordForward
+                    | Action::ToggleComment
             )
         {
             self.status("read-only Git view");
@@ -3606,6 +3770,78 @@ impl AppState {
                 }
             }
             Action::Find => self.open_find(false),
+            Action::FindReplace => {
+                if self.find.open {
+                    self.focus = Focus::Replace;
+                    self.dirty = true;
+                } else {
+                    self.open_find(true);
+                }
+            }
+            Action::FindNext => {
+                if self.find.open {
+                    self.find_step(1);
+                } else {
+                    self.open_find(false);
+                }
+            }
+            Action::FindPrevious => {
+                if self.find.open {
+                    self.find_step(-1);
+                } else {
+                    self.open_find(false);
+                }
+            }
+            Action::CycleView => {
+                let next = self.view_of_active().next();
+                self.set_view(next);
+            }
+            Action::DeleteLine => {
+                if let Some(doc) = self.ws.active_doc_mut() {
+                    doc.cut_current_line();
+                }
+                self.find.dirty = true;
+            }
+            Action::DuplicateLine => {
+                if let Some(doc) = self.ws.active_doc_mut() {
+                    doc.duplicate_line();
+                }
+                self.find.dirty = true;
+            }
+            Action::MoveLineUp => {
+                if let Some(doc) = self.ws.active_doc_mut() {
+                    doc.move_line_up();
+                }
+                self.find.dirty = true;
+            }
+            Action::MoveLineDown => {
+                if let Some(doc) = self.ws.active_doc_mut() {
+                    doc.move_line_down();
+                }
+                self.find.dirty = true;
+            }
+            Action::DeleteWordBackward => {
+                if let Some(doc) = self.ws.active_doc_mut() {
+                    doc.delete_word_backward();
+                }
+                self.find.dirty = true;
+            }
+            Action::DeleteWordForward => {
+                if let Some(doc) = self.ws.active_doc_mut() {
+                    doc.delete_word_forward();
+                }
+                self.find.dirty = true;
+            }
+            Action::ToggleComment => {
+                if let Some(marker) = self.comment_marker() {
+                    if let Some(doc) = self.ws.active_doc_mut() {
+                        doc.toggle_line_comment(marker);
+                    }
+                    self.find.dirty = true;
+                } else {
+                    self.status("no line-comment marker for this document");
+                }
+            }
             Action::QuickOpen => self.open_quick_open(),
             Action::ProjectSearch => self.open_project_search(),
             Action::LspHover => self.request_lsp_hover(),
@@ -3736,6 +3972,7 @@ fn settings_from_session(session: &Session) -> Settings {
         syntax: session.syntax,
         autosave: session.autosave,
         sidebar_width: session.sidebar_width,
+        keymap: KeymapId::from_session(&session.keymap),
     }
     .normalized()
 }

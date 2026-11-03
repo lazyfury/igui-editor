@@ -20,7 +20,7 @@ const MAX_RECENT: usize = 8;
 /// Persisted application state. Missing/corrupt files fall back to defaults.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Session {
-    /// Format version (currently `4`); unknown keys are ignored so older/newer
+    /// Format version (currently `7`); unknown keys are ignored so older/newer
     /// files keep loading.
     pub version: u32,
     /// `"dark"` or `"light"`.
@@ -53,6 +53,8 @@ pub struct Session {
     pub sidebar_tab: String,
     pub terminal_open: bool,
     pub terminal_height: f32,
+    /// Keyboard profile (`vscode`, `idea`, `vim`).
+    pub keymap: String,
     /// Last window geometry (logical size + position).
     pub window: Option<WindowGeometry>,
 }
@@ -67,7 +69,7 @@ pub struct WindowGeometry {
 impl Default for Session {
     fn default() -> Self {
         Self {
-            version: 6,
+            version: 7,
             theme: "dark".into(),
             sidebar: true,
             folder: None,
@@ -87,6 +89,7 @@ impl Default for Session {
             sidebar_tab: "explorer".into(),
             terminal_open: false,
             terminal_height: 220.0,
+            keymap: "vscode".into(),
             window: None,
         }
     }
@@ -142,6 +145,7 @@ impl Session {
                 "terminal_height" => {
                     session.terminal_height = value.parse().unwrap_or(session.terminal_height)
                 }
+                "keymap" => session.keymap = value,
                 key if key.starts_with("lang.") => {
                     let rest = &key["lang.".len()..];
                     let Some((index, field)) = rest.split_once('.') else {
@@ -195,7 +199,7 @@ impl Session {
     pub fn render(&self) -> String {
         let mut out = String::new();
         // Always write the current format; parsing older files still works.
-        out.push_str("version=6\n");
+        out.push_str("version=7\n");
         out.push_str(&format!("theme={}\n", self.theme));
         out.push_str(&format!("sidebar={}\n", u8::from(self.sidebar)));
         if let Some(folder) = &self.folder {
@@ -214,6 +218,7 @@ impl Session {
         out.push_str(&format!("sidebar_tab={}\n", escape(&self.sidebar_tab)));
         out.push_str(&format!("terminal_open={}\n", u8::from(self.terminal_open)));
         out.push_str(&format!("terminal_height={}\n", self.terminal_height));
+        out.push_str(&format!("keymap={}\n", self.keymap));
         for (index, (path, name)) in self.languages.iter().enumerate() {
             out.push_str(&format!(
                 "lang.{index}.path={}\nlang.{index}.name={}\n",
@@ -356,6 +361,7 @@ mod tests {
             languages: vec![(PathBuf::from("/tmp/x.lua"), "lua".into())],
             sync_scroll: false,
             soft_wrap: true,
+            keymap: "vim".into(),
             window: Some(WindowGeometry {
                 size: (1024.0, 700.0),
                 position: (40.0, 60.0),

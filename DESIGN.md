@@ -90,9 +90,9 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    modal → menu Esc → find field (if focused) → global shortcuts → editor/tree.
    Text and IME events follow the `Focus` value (`Editor` / `Find` / `Replace`).
    Global commands therefore work in every mode, and a field edit can never leak
-   into the document. The shortcut tables are still hard-coded; the planned
-   command/keymap layer is specified in
-   [`DESIGN-keymaps.md`](DESIGN-keymaps.md).
+   into the document. Shortcuts now go through the command/keymap layer in
+   `keymap.rs`; see [`DESIGN-keymaps.md`](DESIGN-keymaps.md) for profiles and
+   the remaining Vim scope.
 10. **Find state is a value, matching is pure.** `model::find` maps `(text,
    matcher)` to byte ranges; `FindState` holds two `igui_ui::TextEdit` fields
    (the engine's pure text/caret state), the match list and the bar geometry.

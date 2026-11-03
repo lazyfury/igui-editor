@@ -99,6 +99,12 @@ pub trait SyntaxProvider: Send + Sync + 'static {
     /// Highlights one line and returns the carried state for the next line.
     fn highlight_line(&self, line: &str, state: u32) -> (Vec<Highlight>, u32);
 
+    /// Line-comment marker for editor comment toggling, if this language has
+    /// one (e.g. `//` or `#`). `None` leaves the command unavailable.
+    fn line_comment(&self) -> Option<&'static str> {
+        None
+    }
+
     /// The neutral state at the start of a document (always `0` unless a
     /// provider needs a different sentinel).
     fn neutral_state(&self) -> u32 {

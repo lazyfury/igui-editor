@@ -47,7 +47,7 @@ pub fn layout(viewport: Rect) -> Layout {
         rows_rect.push(rect);
         let steppable = matches!(
             row,
-            Row::Theme | Row::FontSize | Row::TabWidth | Row::SidebarWidth
+            Row::Theme | Row::FontSize | Row::TabWidth | Row::SidebarWidth | Row::Keymap
         );
         if steppable {
             let plus_rect = Rect::from_min_size(

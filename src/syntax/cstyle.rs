@@ -77,6 +77,10 @@ macro_rules! provider {
             fn highlight_line(&self, line: &str, state: u32) -> (Vec<Highlight>, u32) {
                 highlight(&$spec, line, state)
             }
+
+            fn line_comment(&self) -> Option<&'static str> {
+                $spec.line_comment.first().copied()
+            }
         }
     };
 }
@@ -97,6 +101,10 @@ impl SyntaxProvider for PackProvider {
 
     fn highlight_line(&self, line: &str, state: u32) -> (Vec<Highlight>, u32) {
         highlight(self.spec, line, state)
+    }
+
+    fn line_comment(&self) -> Option<&'static str> {
+        self.spec.line_comment.first().copied()
     }
 
     fn max_line_len(&self) -> usize {

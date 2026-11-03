@@ -7,8 +7,9 @@ use igui_core::{NodeId, Rect, Size, Vec2};
 use igui_scene::SceneTree;
 use igui_ui::{Container, PaintEnv};
 
+use crate::keymap::KeymapId;
 use crate::kit::{self, RectExt};
-use crate::state::{AppState, Menu};
+use crate::state::{AppState, Focus, Menu};
 
 pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>) -> NodeId {
     let id = kit::node(tree, parent, "status");
@@ -154,6 +155,13 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     }
     if let Some(lsp) = lsp.as_deref() {
         facts.push(lsp);
+    }
+    if state.settings.keymap == KeymapId::Vim && state.focus == Focus::Editor {
+        facts.push(match state.vim.mode.label() {
+            "INSERT" => "VIM INSERT",
+            "NORMAL" => "VIM NORMAL",
+            _ => "VIM VISUAL",
+        });
     }
     facts.extend([size.as_str(), "UTF-8", spaces.as_str()]);
     let wrap_effective = state.session.soft_wrap

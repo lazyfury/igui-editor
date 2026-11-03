@@ -15,10 +15,23 @@
 
 use igui_core::{EventResult, Key, Modifiers};
 
+use crate::keymap::KeymapId;
 use crate::state::{Action, AppState, Focus, Modal, ModalButton};
 
 /// App-wide commands. `Some` means the key was consumed.
 pub fn shortcut(state: &mut AppState, key: Key, modifiers: Modifiers) -> Option<EventResult> {
+    if state.focus == Focus::Editor
+        && state.settings.keymap == KeymapId::Vim
+        && !modifiers.meta
+        && !modifiers.alt
+        && (!modifiers.ctrl || matches!(key, Key::Character('r')))
+        && crate::vim::handle_key(state, key, modifiers)
+    {
+        return Some(EventResult::Handled);
+    }
+    if state.keymap_key(key, modifiers) {
+        return Some(EventResult::Handled);
+    }
     // Option/Alt+Z is the soft-wrap toggle (not a Cmd/Ctrl accelerator).
     if modifiers.alt && !modifiers.meta && !modifiers.ctrl {
         if state.focus == Focus::Editor

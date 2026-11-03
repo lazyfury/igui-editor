@@ -38,6 +38,7 @@
 //! let _ = TokenKind::Keyword;
 //! ```
 
+pub mod keymap;
 pub mod settings;
 pub mod syntax;
 pub mod theme;
@@ -56,5 +57,6 @@ mod native;
 mod services;
 mod state;
 mod ui;
+mod vim;
 
 pub use app::EditorApp;

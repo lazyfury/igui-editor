@@ -71,9 +71,11 @@ Git is a **built-in plugin** (`services/git.rs`) over a native worker
 (`model/git.rs`), not a JS or dynamic-library extension. See
 [`DESIGN-services.md`](DESIGN-services.md).
 
-The current shortcuts are documented in **Keys** below. A selectable
-VS Code / JetBrains / Vim keymap layer is designed in
-[`DESIGN-keymaps.md`](DESIGN-keymaps.md); it is not implemented yet.
+The selectable **VS Code / JetBrains / Vim** keymaps are implemented. The
+profile lives in **Settings → Keymap** and persists in the session; VS Code and
+JetBrains share the command layer, while Vim has a real Normal/Visual/Insert
+state machine for the common motions and operators. See
+[`DESIGN-keymaps.md`](DESIGN-keymaps.md) for the design and boundaries.
 
 ## Language intelligence (LSP, Rust first)
 
@@ -128,7 +130,7 @@ placement at the terminal cursor. The terminal requests frames while a PTY is
 alive, so full-screen programs repaint without extra input. `Ctrl+\`` closes it
 and kills the child. Focus is visible: the active editor gets an accent top line and caret, the inactive caret
 dims, and the terminal header/cursor accent only while it owns keyboard focus.
-Open state and height persist in the session (v6); the shell process and screen
+Open state and height persist in the session (v7); the shell process and screen
 contents do not. Multiple sessions are a follow-up.
 
 ## macOS integration
@@ -159,6 +161,10 @@ contents do not. Multiple sessions are a follow-up.
 | `⌘W` | close tab (asks Save / Discard / Cancel when dirty) |
 | `⌘Z` / `⇧⌘Z` | undo / redo (typing runs coalesce) |
 | `⌘X` / `⌘C` / `⌘V` | cut / copy / paste (empty selection: cut/copy the current line) |
+| `⌘⇧K` (VS Code) | delete the current line |
+| `⌘/` | toggle line comment (when the language has a marker) |
+| `⌘D` / `⌘⌫` (JetBrains) | duplicate / delete the current line |
+| `⌥↑` / `⌥↓` | move the current line up / down (VS Code profile) |
 | `⌘A` | select all |
 | `⌘P` | Quick Open (fuzzy file picker) |
 | `⇧⌘F` | search in folder |
@@ -192,6 +198,21 @@ selection operate on the current line, double-click selects a word, and
 triple-click selects the line (including its newline). Put the caret at the end
 of a line and press `⌘X` to remove that line; no special “line selection” click
 mode is required.
+
+Keymap profiles:
+
+- **VS Code** — default; `⌘⇧K` delete line, `⌥↑/↓` move line,
+  `⇧⌥↓` duplicate line, empty-selection line cut/copy.
+- **JetBrains** — `⌘D` duplicate line, `⌘⌫` delete line on macOS;
+  `Ctrl+D` / `Ctrl+Y` on Linux/Windows; `⌘⇧↑/↓` move line.
+- **Vim** — starts in Normal mode. Supports `i a I A o O`, `h j k l`,
+  `w b`, `0 $`, `gg G`, `x`, `dd`, `yy`, `p`, `u`, `Ctrl+r`, and simple
+  Visual (`v`/`V`, motions, `d`/`y`). Ex commands, text objects and registers
+  are not implemented.
+
+Overrides can be added in `<config>/keymaps.json` (read at startup), using
+command ids such as `edit.deleteLine`, `edit.duplicateLine` or `file.save`.
+The selected built-in profile supplies the base bindings; null removes one.
 
 Find bar: query and replacement fields, `Aa` (case) and `W` (whole word)
 toggles, `Replace` / `Replace All`, match counter, prev/next/close. All matches
@@ -315,6 +336,7 @@ setting is persisted in the session. Preview-only and Edit modes ignore it.
 | Line Numbers | on / off |
 | Indent Guides | on / off |
 | Syntax Highlight | on / off |
+| Keymap | VS Code / JetBrains / Vim |
 | Autosave | on / off |
 | Sidebar Width | 180–420 px |
 | Reset to Defaults | — |
@@ -401,7 +423,8 @@ remembered per document and the last ratio is persisted.
   original name/path and are marked dirty so the first save writes them back.
 - **Window state**: size and position are persisted and restored (skipped while
   maximized/fullscreen).
-- Session format is version 6 (`terminal_open`, `terminal_height`; v5 added
+- Session format is version 7 (`keymap`; v6 added `terminal_open`,
+  `terminal_height`; v5 added
   `sidebar_tab`, v4 `soft_wrap`); older files still load (v1 infers the folder
   from the first tab).
 
@@ -507,6 +530,8 @@ src/
   model/fuzzy.rs      Quick Open ranking
   model/workspace_index.rs  ignored-dir file index (Quick Open)
   model/search.rs     background project search (worker + caps)
+  keymap.rs           chord parser, profiles, user override resolver
+  vim.rs              Normal/Insert/Visual key handling (Vim profile)
   syntax/pack.rs      declarative JSON language packs
   model/lsp.rs        stdio JSON-RPC client, diagnostics, hover/completion
   services/lsp.rs     built-in Rust language-server spec (rust-analyzer)
@@ -524,6 +549,7 @@ src/
   services/           native service registry + built-in plugin descriptors
   ui/git.rs           GIT sidebar tab + diff overlay + commit prompt
   ui/lsp.rs           hover card + completion list overlays
+  ui/settings.rs      settings + Keymap row
   ui/terminal.rs      vt100 cell renderer + terminal key encoding
   input.rs            keyboard dispatch: modal -> find -> shortcuts -> tree
   state.rs            shared state, actions, hit rects recorded during paint

@@ -24,9 +24,11 @@ use igui_render::{DrawCommand, PaintContext, RenderBackend};
 
 use crate::app::EditorApp;
 use crate::dialogs::{Call, ScriptedDialogs};
+use crate::keymap::KeymapId;
 use crate::kit::RectExt;
 use crate::model::recovery::RecoveryStore;
 use crate::model::session::WindowGeometry;
+use crate::settings::Row;
 use crate::state::{Action, Focus, Menu, ModalButton, ViewMode};
 use crate::theme::Mode;
 
@@ -43,10 +45,11 @@ pub fn run() -> Result<(), String> {
     let dir = fixture()?;
     let result = check(&dir)
         .and_then(|()| check_workspace_and_recovery(&dir))
-        .and_then(|()| check_lsp(&dir));
+        .and_then(|()| check_lsp(&dir))
+        .and_then(|()| check_keymaps(&dir));
     let _ = fs::remove_dir_all(&dir);
     if result.is_ok() {
-        println!("selfcheck ok: main flow + workspace/recovery + LSP checks");
+        println!("selfcheck ok: main flow + workspace/recovery + LSP + keymap checks");
     }
     result
 }
@@ -3286,6 +3289,213 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
     harness.frame()?;
     if harness.app.state().terminal.open {
         return Err("Ctrl+` did not close the terminal".into());
+    }
+    Ok(())
+}
+
+fn check_keymaps(dir: &Path) -> Result<(), String> {
+    let path = dir.join("keymap.txt");
+    fs::write(&path, "one\ntwo\nthree\n").map_err(|error| format!("keymap fixture: {error}"))?;
+    let config = dir.join("keymap-session.conf");
+    let mut harness = Harness::new(Some(path), config, ScriptedDialogs::new(vec![]));
+
+    let set_keymap = |harness: &mut Harness, id: KeymapId| {
+        let mut state = harness.app.state_mut();
+        state.settings.keymap = id;
+        state.keymap = crate::keymap::Keymap::for_id(id);
+        state.vim.reset_for_keymap(id == KeymapId::Vim);
+    };
+    let primary = if cfg!(target_os = "macos") {
+        Modifiers {
+            meta: true,
+            ..Modifiers::NONE
+        }
+    } else {
+        Modifiers {
+            ctrl: true,
+            ..Modifiers::NONE
+        }
+    };
+    let set_caret = |harness: &mut Harness, line: usize, column: usize| {
+        if let Some(doc) = harness.app.state_mut().ws.active_doc_mut() {
+            doc.set_caret(doc.byte_at(line, column));
+        }
+    };
+
+    // VS Code: Ctrl/Cmd+Shift+K deletes the current line.
+    set_keymap(&mut harness, KeymapId::VsCode);
+    set_caret(&mut harness, 1, 1);
+    harness.shortcut(
+        Key::Character('k'),
+        Modifiers {
+            shift: true,
+            ..primary
+        },
+    );
+    harness.frame()?;
+    if harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .is_none_or(|doc| doc.text().contains("two"))
+    {
+        return Err("VS Code Cmd+Shift+K did not delete the line".into());
+    }
+    if let Some(doc) = harness.app.state_mut().ws.active_doc_mut() {
+        doc.undo();
+        doc.set_caret(0);
+    }
+
+    // JetBrains: Cmd+D duplicates the line, Cmd+Backspace deletes it.
+    set_keymap(&mut harness, KeymapId::JetBrains);
+    set_caret(&mut harness, 0, 1);
+    harness.shortcut(Key::Character('d'), primary);
+    harness.frame()?;
+    if harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .is_none_or(|doc| doc.text() != "one\none\ntwo\nthree\n")
+    {
+        return Err("JetBrains Cmd+D did not duplicate the line".into());
+    }
+    harness.shortcut(Key::Backspace, primary);
+    harness.frame()?;
+    if harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .is_none_or(|doc| doc.text() != "one\ntwo\nthree\n")
+    {
+        return Err("JetBrains Cmd+Backspace did not delete the line".into());
+    }
+    if let Some(doc) = harness.app.state_mut().ws.active_doc_mut() {
+        doc.undo();
+        doc.set_caret(0);
+    }
+
+    // Vim: Normal is the initial mode; `i` enters Insert, Esc returns, `dd`
+    // removes a line, `u` restores it, and plain text is ignored in Normal.
+    set_keymap(&mut harness, KeymapId::Vim);
+    set_caret(&mut harness, 0, 0);
+    harness.key(Key::Character('i'));
+    harness.type_text("i"); // the host's committed text for the command key
+    harness.type_text("X");
+    harness.key(Key::Escape);
+    harness.frame()?;
+    if harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .is_none_or(|doc| !doc.text().starts_with("Xone"))
+    {
+        return Err("Vim i/Insert did not insert text".into());
+    }
+    let before = harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .map(|doc| doc.text().to_string())
+        .unwrap_or_default();
+    harness.type_text("Z");
+    harness.frame()?;
+    if harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .is_none_or(|doc| doc.text() != before)
+    {
+        return Err("Vim Normal mode let text through".into());
+    }
+    set_caret(&mut harness, 0, 0);
+    harness.key(Key::Character('d'));
+    harness.key(Key::Character('d'));
+    harness.frame()?;
+    if harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .is_none_or(|doc| doc.text().starts_with("Xone"))
+    {
+        return Err("Vim dd did not delete the line".into());
+    }
+    harness.key(Key::Character('u'));
+    harness.frame()?;
+    if harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .is_none_or(|doc| doc.text() != before)
+    {
+        return Err("Vim u did not undo the line delete".into());
+    }
+
+    // Vim motions and VisualLine delete.
+    harness.key(Key::Character('G'));
+    harness.frame()?;
+    if harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .is_none_or(|doc| doc.line_col().0 + 1 != doc.line_count())
+    {
+        return Err("Vim G did not move to the last line".into());
+    }
+    harness.key(Key::Character('g'));
+    harness.key(Key::Character('g'));
+    harness.frame()?;
+    if harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .is_none_or(|doc| doc.line_col().0 != 0)
+    {
+        return Err("Vim gg did not move to the first line".into());
+    }
+    harness.key(Key::Character('V'));
+    harness.frame()?;
+    if harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .is_none_or(|doc| doc.selected_text() != Some("Xone\n"))
+    {
+        return Err("Vim V did not select the line".into());
+    }
+    harness.key(Key::Character('d'));
+    harness.frame()?;
+    if harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .is_none_or(|doc| doc.text().starts_with("Xone"))
+    {
+        return Err("Vim VisualLine d did not delete the line".into());
+    }
+    if let Some(doc) = harness.app.state_mut().ws.active_doc_mut() {
+        doc.undo();
+    }
+
+    // Settings row cycles to the next profile and persists its session value.
+    let mut state = harness.app.state_mut();
+    let before = state.settings.keymap;
+    state.adjust_setting(Row::Keymap, 1);
+    if state.settings.keymap == before
+        || state.session.keymap != state.settings.keymap.session_value()
+    {
+        return Err("Keymap setting did not cycle/persist".into());
     }
     Ok(())
 }

@@ -1,0 +1,605 @@
+//! Keymap profiles and pure chord resolution.
+//!
+//! Bindings live here; `AppState` owns the pending-sequence state and executes
+//! the returned [`Action`]. Overlay keys stay in their own modules and run
+//! before this layer, so a completion popup or find field always wins.
+//!
+//! The profile format is platform-neutral at the `primary` level: `primary` is
+//! Meta on macOS and Ctrl elsewhere. `ctrl`/`meta` remain available for literal
+//! platform chords.
+
+use igui_core::{Key, Modifiers};
+
+use crate::state::Action;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum KeymapId {
+    #[default]
+    VsCode,
+    JetBrains,
+    Vim,
+}
+
+impl KeymapId {
+    pub const ALL: [KeymapId; 3] = [KeymapId::VsCode, KeymapId::JetBrains, KeymapId::Vim];
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            KeymapId::VsCode => "VS Code",
+            KeymapId::JetBrains => "JetBrains",
+            KeymapId::Vim => "Vim",
+        }
+    }
+
+    pub const fn session_value(self) -> &'static str {
+        match self {
+            KeymapId::VsCode => "vscode",
+            KeymapId::JetBrains => "idea",
+            KeymapId::Vim => "vim",
+        }
+    }
+
+    pub fn from_session(value: &str) -> Self {
+        match value.to_ascii_lowercase().as_str() {
+            "idea" | "jetbrains" | "intellij" => KeymapId::JetBrains,
+            "vim" => KeymapId::Vim,
+            _ => KeymapId::VsCode,
+        }
+    }
+
+    pub fn next(self) -> Self {
+        let index = Self::ALL
+            .iter()
+            .position(|candidate| *candidate == self)
+            .unwrap_or(0);
+        Self::ALL[(index + 1) % Self::ALL.len()]
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub struct KeyChord {
+    pub key: Key,
+    pub primary: bool,
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+    pub meta: bool,
+}
+
+impl KeyChord {
+    /// Normalizes a host event. The primary modifier is Cmd on macOS and Ctrl
+    /// elsewhere; literal Ctrl/Meta remain distinct on macOS.
+    pub fn from_event(key: Key, modifiers: Modifiers, macos: bool) -> Self {
+        let (primary, ctrl, meta) = if macos {
+            (modifiers.meta, modifiers.ctrl, false)
+        } else {
+            (modifiers.ctrl, false, modifiers.meta)
+        };
+        Self {
+            key: normalize_key(key),
+            primary,
+            ctrl,
+            alt: modifiers.alt,
+            shift: modifiers.shift,
+            meta,
+        }
+    }
+
+    /// Parses one `primary+shift+p` style token. Used by the built-in profiles
+    /// and the user keymap file.
+    pub fn parse(value: &str) -> Option<Self> {
+        let mut primary = false;
+        let mut ctrl = false;
+        let mut alt = false;
+        let mut shift = false;
+        let mut meta = false;
+        let mut key = None;
+        for part in value
+            .split('+')
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+        {
+            match part.to_ascii_lowercase().as_str() {
+                "primary" | "cmd" | "command" => primary = true,
+                "ctrl" | "control" => ctrl = true,
+                "alt" | "option" | "opt" => alt = true,
+                "shift" => shift = true,
+                "meta" | "super" | "win" => meta = true,
+                other => {
+                    key = Some(parse_key(other)?);
+                }
+            }
+        }
+        let mut key = key?;
+        // A literal uppercase token means Shift+key; the host reports shifted
+        // characters that way too.
+        if let Key::Character(ch) = key {
+            if ch.is_ascii_uppercase() {
+                shift = true;
+                key = Key::Character(ch.to_ascii_lowercase());
+            }
+        }
+        Some(Self {
+            key,
+            primary,
+            ctrl,
+            alt,
+            shift,
+            meta,
+        })
+    }
+
+    pub fn label(self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        if self.primary {
+            parts.push(
+                (if cfg!(target_os = "macos") {
+                    "⌘"
+                } else {
+                    "Ctrl"
+                })
+                .to_string(),
+            );
+        }
+        if self.meta {
+            parts.push("Meta".into());
+        }
+        if self.ctrl {
+            parts.push(
+                (if cfg!(target_os = "macos") {
+                    "⌃"
+                } else {
+                    "Ctrl"
+                })
+                .to_string(),
+            );
+        }
+        if self.alt {
+            parts.push(
+                (if cfg!(target_os = "macos") {
+                    "⌥"
+                } else {
+                    "Alt"
+                })
+                .to_string(),
+            );
+        }
+        if self.shift {
+            parts.push(
+                (if cfg!(target_os = "macos") {
+                    "⇧"
+                } else {
+                    "Shift"
+                })
+                .to_string(),
+            );
+        }
+        parts.push(key_label(self.key));
+        parts.join("+")
+    }
+}
+
+fn normalize_key(key: Key) -> Key {
+    match key {
+        Key::Character(ch) => Key::Character(ch.to_ascii_lowercase()),
+        other => other,
+    }
+}
+
+fn key_label(key: Key) -> String {
+    match key {
+        Key::Character(ch) => match ch {
+            ' ' => "Space".into(),
+            '\t' => "Tab".into(),
+            _ => ch.to_string(),
+        },
+        Key::Enter => "Enter".into(),
+        Key::Escape => "Esc".into(),
+        Key::Backspace => "Backspace".into(),
+        Key::Delete => "Delete".into(),
+        Key::Tab => "Tab".into(),
+        Key::Space => "Space".into(),
+        Key::Home => "Home".into(),
+        Key::End => "End".into(),
+        Key::ArrowUp => "↑".into(),
+        Key::ArrowDown => "↓".into(),
+        Key::ArrowLeft => "←".into(),
+        Key::ArrowRight => "→".into(),
+        Key::F1 => "F1".into(),
+        Key::F2 => "F2".into(),
+        Key::F3 => "F3".into(),
+        Key::F4 => "F4".into(),
+        Key::F5 => "F5".into(),
+        Key::F6 => "F6".into(),
+        Key::F7 => "F7".into(),
+        Key::F8 => "F8".into(),
+        Key::F9 => "F9".into(),
+        Key::F10 => "F10".into(),
+        Key::F11 => "F11".into(),
+        Key::F12 => "F12".into(),
+    }
+}
+
+fn parse_key(value: &str) -> Option<Key> {
+    let value = value.to_ascii_lowercase();
+    let key = match value.as_str() {
+        "enter" | "return" => Key::Enter,
+        "escape" | "esc" => Key::Escape,
+        "backspace" | "back" => Key::Backspace,
+        "delete" | "del" => Key::Delete,
+        "tab" => Key::Tab,
+        "space" => Key::Space,
+        "home" => Key::Home,
+        "end" => Key::End,
+        "up" | "arrowup" => Key::ArrowUp,
+        "down" | "arrowdown" => Key::ArrowDown,
+        "left" | "arrowleft" => Key::ArrowLeft,
+        "right" | "arrowright" => Key::ArrowRight,
+        "f1" => Key::F1,
+        "f2" => Key::F2,
+        "f3" => Key::F3,
+        "f4" => Key::F4,
+        "f5" => Key::F5,
+        "f6" => Key::F6,
+        "f7" => Key::F7,
+        "f8" => Key::F8,
+        "f9" => Key::F9,
+        "f10" => Key::F10,
+        "f11" => Key::F11,
+        "f12" => Key::F12,
+        other => {
+            let mut chars = other.chars();
+            let ch = chars.next()?;
+            if chars.next().is_some() {
+                return None;
+            }
+            Key::Character(ch)
+        }
+    };
+    Some(key)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Scope {
+    Global,
+    Editor,
+    Terminal,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Resolution {
+    Command(Action),
+    Prefix,
+    None,
+}
+
+#[derive(Clone, Debug)]
+struct Binding {
+    scope: Scope,
+    sequence: Vec<KeyChord>,
+    action: Action,
+}
+
+pub struct Keymap {
+    pub id: KeymapId,
+    bindings: Vec<Binding>,
+}
+
+impl Keymap {
+    pub fn for_id(id: KeymapId) -> Self {
+        let mut keymap = Self {
+            id,
+            bindings: Vec::new(),
+        };
+        keymap.add_global();
+        match id {
+            KeymapId::VsCode => keymap.add_vscode(),
+            KeymapId::JetBrains => keymap.add_ide(),
+            KeymapId::Vim => {}
+        }
+        keymap
+    }
+
+    fn bind(&mut self, scope: Scope, sequence: &str, action: Action) {
+        let Some(sequence) = parse_sequence(sequence) else {
+            return;
+        };
+        self.bindings
+            .retain(|binding| !(binding.scope == scope && binding.sequence == sequence));
+        self.bindings.push(Binding {
+            scope,
+            sequence,
+            action,
+        });
+    }
+
+    fn add_global(&mut self) {
+        let global = [
+            ("primary+n", Action::New),
+            ("primary+shift+n", Action::NewFile),
+            ("primary+o", Action::Open),
+            ("primary+shift+o", Action::OpenFolder),
+            ("primary+s", Action::Save),
+            ("primary+shift+s", Action::SaveAs),
+            ("primary+w", Action::CloseTab),
+            ("primary+z", Action::Undo),
+            ("primary+shift+z", Action::Redo),
+            ("primary+x", Action::Cut),
+            ("primary+c", Action::Copy),
+            ("primary+v", Action::Paste),
+            ("primary+a", Action::SelectAll),
+            ("primary+f", Action::Find),
+            ("primary+alt+f", Action::FindReplace),
+            ("primary+shift+f", Action::ProjectSearch),
+            ("primary+g", Action::FindNext),
+            ("primary+shift+g", Action::FindPrevious),
+            ("primary+p", Action::QuickOpen),
+            ("primary+,", Action::Settings),
+            ("primary+b", Action::ToggleSidebar),
+            ("primary+shift+l", Action::ToggleTheme),
+            ("primary+shift+m", Action::CycleView),
+            ("primary+shift+y", Action::ToggleScrollSync),
+            ("primary+i", Action::LspCompletion),
+            ("ctrl+space", Action::LspCompletion),
+            ("f1", Action::LspHover),
+            ("f12", Action::LspDefinition),
+            ("alt+z", Action::ToggleSoftWrap),
+            ("ctrl+`", Action::ToggleTerminal),
+        ];
+        for (sequence, action) in global {
+            self.bind(Scope::Global, sequence, action);
+        }
+    }
+
+    fn add_vscode(&mut self) {
+        self.bind(Scope::Editor, "primary+shift+k", Action::DeleteLine);
+        self.bind(Scope::Editor, "primary+/", Action::ToggleComment);
+        self.bind(Scope::Editor, "alt+up", Action::MoveLineUp);
+        self.bind(Scope::Editor, "alt+down", Action::MoveLineDown);
+        self.bind(Scope::Editor, "shift+alt+down", Action::DuplicateLine);
+        if cfg!(target_os = "macos") {
+            self.bind(Scope::Editor, "alt+backspace", Action::DeleteWordBackward);
+            self.bind(Scope::Editor, "alt+delete", Action::DeleteWordForward);
+        } else {
+            self.bind(
+                Scope::Editor,
+                "primary+backspace",
+                Action::DeleteWordBackward,
+            );
+            self.bind(Scope::Editor, "primary+delete", Action::DeleteWordForward);
+        }
+    }
+
+    fn add_ide(&mut self) {
+        self.bind(Scope::Editor, "primary+d", Action::DuplicateLine);
+        self.bind(Scope::Editor, "primary+/", Action::ToggleComment);
+        if cfg!(target_os = "macos") {
+            self.bind(Scope::Editor, "primary+backspace", Action::DeleteLine);
+            self.bind(Scope::Editor, "alt+backspace", Action::DeleteWordBackward);
+            self.bind(Scope::Editor, "alt+delete", Action::DeleteWordForward);
+        } else {
+            self.bind(Scope::Editor, "primary+y", Action::DeleteLine);
+            self.bind(
+                Scope::Editor,
+                "primary+backspace",
+                Action::DeleteWordBackward,
+            );
+            self.bind(Scope::Editor, "primary+delete", Action::DeleteWordForward);
+        }
+        self.bind(Scope::Editor, "primary+shift+up", Action::MoveLineUp);
+        self.bind(Scope::Editor, "primary+shift+down", Action::MoveLineDown);
+    }
+
+    /// Applies data-only overrides (`<config>/keymaps.json`). Unknown command
+    /// ids and malformed chords are ignored so a broken file cannot brick input.
+    pub fn apply_overrides(&mut self, value: &serde_json::Value) {
+        let Some(bindings) = value.get("bindings").and_then(serde_json::Value::as_object) else {
+            return;
+        };
+        for (scope_name, entries) in bindings {
+            let scope = match scope_name.to_ascii_lowercase().as_str() {
+                "global" | "app" => Scope::Global,
+                "editor" => Scope::Editor,
+                "terminal" => Scope::Terminal,
+                _ => continue,
+            };
+            let Some(entries) = entries.as_object() else {
+                continue;
+            };
+            for (sequence, action) in entries {
+                let Some(sequence) = parse_sequence(sequence) else {
+                    continue;
+                };
+                self.bindings
+                    .retain(|binding| !(binding.scope == scope && binding.sequence == sequence));
+                if action.is_null() {
+                    continue;
+                }
+                let Some(id) = action.as_str() else {
+                    continue;
+                };
+                if let Some(action) = action_from_id(id) {
+                    self.bindings.push(Binding {
+                        scope,
+                        sequence,
+                        action,
+                    });
+                }
+            }
+        }
+    }
+
+    pub fn resolve(&self, scope: Scope, sequence: &[KeyChord]) -> Resolution {
+        let mut prefix = false;
+        let mut global_exact = None;
+        for binding in &self.bindings {
+            if !applies(binding.scope, scope) {
+                continue;
+            }
+            if binding.sequence.len() < sequence.len()
+                || binding.sequence[..sequence.len()] != *sequence
+            {
+                continue;
+            }
+            if binding.sequence.len() == sequence.len() {
+                if binding.scope == scope {
+                    return Resolution::Command(binding.action.clone());
+                }
+                global_exact.get_or_insert_with(|| binding.action.clone());
+            } else {
+                prefix = true;
+            }
+        }
+        if let Some(action) = global_exact {
+            return Resolution::Command(action);
+        }
+        if prefix {
+            Resolution::Prefix
+        } else {
+            Resolution::None
+        }
+    }
+}
+
+/// Stable ids accepted by `keymaps.json`; they mirror the command names used in
+/// `DESIGN-keymaps.md`. A user only needs the subset they override.
+fn action_from_id(id: &str) -> Option<Action> {
+    Some(match id {
+        "file.new" | "new" => Action::New,
+        "file.newFile" => Action::NewFile,
+        "file.open" | "open" => Action::Open,
+        "file.openFolder" => Action::OpenFolder,
+        "file.save" | "save" => Action::Save,
+        "file.saveAs" => Action::SaveAs,
+        "file.closeTab" => Action::CloseTab,
+        "edit.undo" | "undo" => Action::Undo,
+        "edit.redo" | "redo" => Action::Redo,
+        "edit.cut" | "cut" => Action::Cut,
+        "edit.copy" | "copy" => Action::Copy,
+        "edit.paste" | "paste" => Action::Paste,
+        "edit.selectAll" | "selectAll" => Action::SelectAll,
+        "edit.deleteLine" | "deleteLine" => Action::DeleteLine,
+        "edit.duplicateLine" | "duplicateLine" => Action::DuplicateLine,
+        "edit.moveLineUp" | "moveLineUp" => Action::MoveLineUp,
+        "edit.moveLineDown" | "moveLineDown" => Action::MoveLineDown,
+        "edit.deleteWordBackward" | "deleteWordBackward" => Action::DeleteWordBackward,
+        "edit.deleteWordForward" | "deleteWordForward" => Action::DeleteWordForward,
+        "edit.toggleComment" | "toggleComment" => Action::ToggleComment,
+        "find.find" => Action::Find,
+        "find.replace" => Action::FindReplace,
+        "find.next" => Action::FindNext,
+        "find.previous" => Action::FindPrevious,
+        "quickOpen" => Action::QuickOpen,
+        "projectSearch" => Action::ProjectSearch,
+        "view.cycle" => Action::CycleView,
+        "view.sidebar" => Action::ToggleSidebar,
+        "view.theme" => Action::ToggleTheme,
+        "view.scrollSync" => Action::ToggleScrollSync,
+        "view.softWrap" => Action::ToggleSoftWrap,
+        "view.terminal" => Action::ToggleTerminal,
+        "settings" => Action::Settings,
+        "lsp.hover" => Action::LspHover,
+        "lsp.completion" => Action::LspCompletion,
+        "lsp.definition" => Action::LspDefinition,
+        _ => return None,
+    })
+}
+
+fn applies(binding: Scope, requested: Scope) -> bool {
+    binding == Scope::Global || binding == requested
+}
+
+fn parse_sequence(value: &str) -> Option<Vec<KeyChord>> {
+    let chords: Vec<KeyChord> = value
+        .split_whitespace()
+        .map(KeyChord::parse)
+        .collect::<Option<_>>()?;
+    (!chords.is_empty()).then_some(chords)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chord(value: &str) -> KeyChord {
+        KeyChord::parse(value).expect("valid chord")
+    }
+
+    #[test]
+    fn primary_is_platform_aware() {
+        let mac = KeyChord::from_event(
+            Key::Character('p'),
+            Modifiers {
+                meta: true,
+                ..Modifiers::NONE
+            },
+            true,
+        );
+        let other = KeyChord::from_event(
+            Key::Character('p'),
+            Modifiers {
+                ctrl: true,
+                ..Modifiers::NONE
+            },
+            false,
+        );
+        assert_eq!(mac, other);
+        assert!(mac.primary);
+    }
+
+    #[test]
+    fn profiles_resolve_global_and_editor_bindings() {
+        let keymap = Keymap::for_id(KeymapId::VsCode);
+        assert_eq!(
+            keymap.resolve(Scope::Editor, &[chord("primary+s")]),
+            Resolution::Command(Action::Save)
+        );
+        assert_eq!(
+            keymap.resolve(Scope::Editor, &[chord("primary+shift+k")]),
+            Resolution::Command(Action::DeleteLine)
+        );
+        assert_eq!(
+            keymap.resolve(Scope::Terminal, &[chord("primary+shift+k")]),
+            Resolution::None
+        );
+    }
+
+    #[test]
+    fn user_overrides_replace_and_unbind_bindings() {
+        let mut keymap = Keymap::for_id(KeymapId::VsCode);
+        keymap.apply_overrides(&serde_json::json!({
+            "bindings": {
+                "editor": {
+                    "primary+shift+k": "edit.duplicateLine",
+                    "alt+up": null
+                }
+            }
+        }));
+        assert_eq!(
+            keymap.resolve(Scope::Editor, &[chord("primary+shift+k")]),
+            Resolution::Command(Action::DuplicateLine)
+        );
+        assert_eq!(
+            keymap.resolve(Scope::Editor, &[chord("alt+up")]),
+            Resolution::None
+        );
+    }
+
+    #[test]
+    fn editor_binding_wins_over_global_and_prefixes_are_reported() {
+        let keymap = Keymap::for_id(KeymapId::VsCode);
+        assert_eq!(
+            keymap.resolve(Scope::Editor, &[chord("alt+up")]),
+            Resolution::Command(Action::MoveLineUp)
+        );
+        let keymap = Keymap::for_id(KeymapId::Vim);
+        assert_eq!(
+            keymap.resolve(Scope::Editor, &[chord("primary+s")]),
+            Resolution::Command(Action::Save)
+        );
+        assert_eq!(
+            keymap.resolve(Scope::Editor, &[chord("g")]),
+            Resolution::None
+        );
+    }
+}

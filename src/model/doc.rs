@@ -327,7 +327,7 @@ impl Document {
 
     /// Replaces `[start, end)` with `text` as one undo step (find/replace).
     pub fn replace_range(&mut self, start: usize, end: usize, text: &str) -> bool {
-        if start > end || end > self.text.len() {
+        if self.read_only || start > end || end > self.text.len() {
             return false;
         }
         self.replace(start, end, text, Kind::Other);
@@ -495,6 +495,209 @@ impl Document {
         self.caret = end.max(start);
     }
 
+    /// Duplicates the caret line below and keeps the caret on the original.
+    pub fn duplicate_line(&mut self) {
+        if self.read_only || self.text.is_empty() {
+            return;
+        }
+        let line = self.line_of(self.caret);
+        let start = self.line_start(line);
+        let end = if line + 1 < self.line_count() {
+            self.line_start(line + 1)
+        } else {
+            self.text.len()
+        };
+        let block = self.text[start..end].to_string();
+        let insertion = if block.ends_with('\n') {
+            block
+        } else {
+            format!("\n{block}")
+        };
+        let caret = self.caret;
+        if self.replace_range(end, end, &insertion) {
+            self.set_caret(caret);
+        }
+    }
+
+    /// Swaps the caret line with the previous line (Alt+Up).
+    pub fn move_line_up(&mut self) {
+        if self.read_only {
+            return;
+        }
+        let line = self.line_of(self.caret);
+        if line == 0 {
+            return;
+        }
+        let start = self.line_start(line);
+        let end = if line + 1 < self.line_count() {
+            self.line_start(line + 1)
+        } else {
+            self.text.len()
+        };
+        let previous = self.line_start(line - 1);
+        let current = self.text[start..end].to_string();
+        let above = self.text[previous..start].to_string();
+        let replacement = if current.ends_with('\n') {
+            format!("{current}{above}")
+        } else {
+            format!("{current}\n{}", above.trim_end_matches('\n'))
+        };
+        let column = self.caret.saturating_sub(start);
+        if self.replace_range(previous, end, &replacement) {
+            self.set_caret(previous + column.min(self.text.len().saturating_sub(previous)));
+        }
+    }
+
+    /// Swaps the caret line with the next line (Alt+Down).
+    pub fn move_line_down(&mut self) {
+        if self.read_only {
+            return;
+        }
+        let line = self.line_of(self.caret);
+        if line + 1 >= self.line_count() {
+            return;
+        }
+        let start = self.line_start(line);
+        let middle = self.line_start(line + 1);
+        let end = if line + 2 < self.line_count() {
+            self.line_start(line + 2)
+        } else {
+            self.text.len()
+        };
+        let current = self.text[start..middle].to_string();
+        let below = self.text[middle..end].to_string();
+        let replacement = if below.ends_with('\n') {
+            format!("{below}{current}")
+        } else {
+            format!("{below}\n{}", current.trim_end_matches('\n'))
+        };
+        let column = self.caret.saturating_sub(start);
+        let new_start = start + below.len();
+        if self.replace_range(start, end, &replacement) {
+            self.set_caret(new_start + column.min(self.text.len().saturating_sub(new_start)));
+        }
+    }
+
+    /// Deletes the word before the caret (Ctrl/Alt+Backspace).
+    pub fn delete_word_backward(&mut self) {
+        if self.read_only {
+            return;
+        }
+        if self.delete_selection() {
+            return;
+        }
+        let mut start = self.caret;
+        while start > 0 {
+            let previous = prev_boundary(&self.text, start);
+            let ch = self.text[previous..start].chars().next().unwrap_or(' ');
+            if ch.is_whitespace() {
+                start = previous;
+            } else {
+                break;
+            }
+        }
+        let word_start = start;
+        while start > 0 {
+            let previous = prev_boundary(&self.text, start);
+            let ch = self.text[previous..start].chars().next().unwrap_or(' ');
+            if !ch.is_whitespace() {
+                start = previous;
+            } else {
+                break;
+            }
+        }
+        if start == self.caret {
+            start = word_start.min(self.caret);
+            if start == self.caret && start > 0 {
+                start = prev_boundary(&self.text, start);
+            }
+        }
+        if start < self.caret && self.replace_range(start, self.caret, "") {
+            self.set_caret(start);
+        }
+    }
+
+    /// Deletes the word after the caret (Ctrl/Alt+Delete).
+    pub fn delete_word_forward(&mut self) {
+        if self.read_only {
+            return;
+        }
+        if self.delete_selection() {
+            return;
+        }
+        let mut end = self.caret;
+        while end < self.text.len() {
+            let ch = self.text[end..].chars().next().unwrap_or(' ');
+            if ch.is_whitespace() {
+                end = next_boundary(&self.text, end);
+            } else {
+                break;
+            }
+        }
+        while end < self.text.len() {
+            let ch = self.text[end..].chars().next().unwrap_or(' ');
+            if !ch.is_whitespace() {
+                end = next_boundary(&self.text, end);
+            } else {
+                break;
+            }
+        }
+        if end == self.caret && end < self.text.len() {
+            end = next_boundary(&self.text, end);
+        }
+        if end > self.caret && self.replace_range(self.caret, end, "") {
+            self.set_caret(self.caret);
+        }
+    }
+
+    /// Toggles `marker` on every line touched by the selection (or the caret
+    /// line). Indentation is preserved; the command is a no-op in read-only
+    /// views or when the block is empty.
+    pub fn toggle_line_comment(&mut self, marker: &str) {
+        if self.read_only || self.text.is_empty() || marker.is_empty() {
+            return;
+        }
+        let (start, end) = self.selection().unwrap_or((self.caret, self.caret));
+        let first = self.line_of(start);
+        let last = self.selection_last_line(start, end);
+        let block_start = self.line_start(first);
+        let block_end = self.line_end(last);
+        let block = self.text[block_start..block_end].to_string();
+        let lines: Vec<&str> = block.split('\n').collect();
+        let commented = lines.iter().all(|line| {
+            let trimmed = line.trim_start();
+            trimmed.is_empty() || trimmed.starts_with(marker)
+        });
+        let mut out = String::with_capacity(block.len() + marker.len() * lines.len() + 2);
+        for (index, line) in lines.iter().enumerate() {
+            if index > 0 {
+                out.push('\n');
+            }
+            let indent = line.len() - line.trim_start().len();
+            if commented {
+                let trimmed = line.trim_start();
+                if let Some(rest) = trimmed.strip_prefix(marker) {
+                    out.push_str(&line[..indent]);
+                    out.push_str(rest.strip_prefix(' ').unwrap_or(rest));
+                } else {
+                    out.push_str(line);
+                }
+            } else if line.trim().is_empty() {
+                out.push_str(line);
+            } else {
+                out.push_str(&line[..indent]);
+                out.push_str(marker);
+                out.push(' ');
+                out.push_str(&line[indent..]);
+            }
+        }
+        let caret = self.caret;
+        let column = caret.saturating_sub(block_start);
+        if self.replace_range(block_start, block_end, &out) {
+            self.set_caret((block_start + column).min(self.text.len()));
+        }
+    }
+
     /// The current line including its trailing newline, for copy/cut with no
     /// selection. The last line has no trailing newline.
     pub fn current_line_text(&self) -> Option<String> {
@@ -552,6 +755,9 @@ impl Document {
     // -- edits ---------------------------------------------------------------
 
     pub fn insert_text(&mut self, insert: &str) {
+        if self.read_only {
+            return;
+        }
         let insert = sanitize(insert);
         if insert.is_empty() {
             return;
@@ -564,6 +770,9 @@ impl Document {
 
     /// Enter: insert a newline plus the current line's leading whitespace.
     pub fn insert_newline(&mut self) {
+        if self.read_only {
+            return;
+        }
         let (start, end) = self.selection().unwrap_or((self.caret, self.caret));
         let line = self.line_of(start);
         let indent: String = self
@@ -576,6 +785,9 @@ impl Document {
     }
 
     pub fn backspace(&mut self) {
+        if self.read_only {
+            return;
+        }
         if let Some((start, end)) = self.selection() {
             self.replace(start, end, "", Kind::Other);
             return;
@@ -588,6 +800,9 @@ impl Document {
     }
 
     pub fn delete_forward(&mut self) {
+        if self.read_only {
+            return;
+        }
         if let Some((start, end)) = self.selection() {
             self.replace(start, end, "", Kind::Other);
             return;
@@ -601,6 +816,9 @@ impl Document {
 
     /// Deletes the selection (no-op without one).
     pub fn delete_selection(&mut self) -> bool {
+        if self.read_only {
+            return false;
+        }
         let Some((start, end)) = self.selection() else {
             return false;
         };
@@ -610,6 +828,9 @@ impl Document {
 
     /// Tab: indent every selected line by [`INDENT`], or insert one unit.
     pub fn indent(&mut self) {
+        if self.read_only {
+            return;
+        }
         let Some((start, end)) = self.selection() else {
             let (start, end) = (self.caret, self.caret);
             self.replace(start, end, INDENT, Kind::Other);
@@ -643,6 +864,9 @@ impl Document {
 
     /// Shift+Tab: remove one indentation unit from every selected line.
     pub fn outdent(&mut self) {
+        if self.read_only {
+            return;
+        }
         let (start, end) = self.selection().unwrap_or((self.caret, self.caret));
         let first = self.line_of(start);
         let last = self.selection_last_line(start, end);
@@ -1183,6 +1407,58 @@ mod tests {
         empty_last.set_caret(empty_last.text().len());
         assert_eq!(empty_last.cut_current_line().as_deref(), Some(""));
         assert_eq!(empty_last.text(), "one");
+    }
+
+    #[test]
+    fn duplicate_and_move_line_keep_the_caret_on_the_line() {
+        let mut first = doc("one\ntwo\nthree");
+        first.set_caret(first.byte_at(1, 1));
+        first.duplicate_line();
+        assert_eq!(first.text(), "one\ntwo\ntwo\nthree");
+        assert_eq!(first.line_col(), (1, 1));
+        first.move_line_down();
+        assert_eq!(first.text(), "one\ntwo\ntwo\nthree");
+        first.move_line_up();
+        assert_eq!(first.text(), "one\ntwo\ntwo\nthree");
+
+        let mut doc = doc("one\ntwo\nthree");
+        doc.set_caret(doc.byte_at(1, 1));
+        doc.move_line_down();
+        assert_eq!(doc.text(), "one\nthree\ntwo");
+        assert_eq!(doc.line_col().0, 2);
+        doc.move_line_up();
+        assert_eq!(doc.text(), "one\ntwo\nthree");
+        doc.move_line_up();
+        assert_eq!(doc.text(), "two\none\nthree");
+        assert_eq!(doc.line_col().0, 0);
+    }
+
+    #[test]
+    fn toggle_line_comment_preserves_indent_and_uncomments() {
+        let mut doc = doc("one\n    two\nthree");
+        doc.select_line_at(doc.byte_at(1, 0));
+        doc.toggle_line_comment("//");
+        assert_eq!(doc.text(), "one\n    // two\nthree");
+        doc.select_line_at(doc.byte_at(1, 4));
+        doc.toggle_line_comment("//");
+        assert_eq!(doc.text(), "one\n    two\nthree");
+    }
+
+    #[test]
+    fn word_delete_handles_spaces_and_punctuation() {
+        let mut doc = doc("hello, world");
+        doc.set_caret(doc.text().len());
+        doc.delete_word_backward();
+        assert_eq!(doc.text(), "hello, ");
+        doc.delete_word_backward();
+        assert_eq!(doc.text(), "");
+        doc.set_caret(0);
+        doc.insert_text("hello, world");
+        doc.set_caret(0);
+        doc.delete_word_forward();
+        assert_eq!(doc.text(), " world");
+        doc.delete_word_forward();
+        assert_eq!(doc.text(), "");
     }
 
     #[test]

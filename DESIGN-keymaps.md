@@ -1,8 +1,9 @@
 # Keymap design and editor audit
 
-Status: audit complete; implementation not started. This document exists so the
-next milestone can move shortcuts out of `input.rs` / `ui/editor.rs` without
-changing behavior by accident.
+Status: first implementation landed. Command routing now goes through a pure
+`keymap` resolver; VS Code and JetBrains profiles are wired, and Vim has a
+Normal/Visual/Insert subset. This document records the design and the remaining
+scope.
 
 ## Current editor audit
 
@@ -194,19 +195,39 @@ schema:
   later.
 - Do not persist transient chord prefixes or Vim mode across restarts.
 
-## Migration plan
+## Implementation status
 
-1. **Inventory + command ids** — map every current hard-coded key to an id;
-   extract command execution from `input.rs` without behavior change.
-2. **Resolver + VS Code profile** — pure `keymap` module, unit tests for
-   primary/Cmd/Ctrl, chords, scope precedence; route global and editor keys
-   through it.
-3. **Settings/session** — Keymap row, persistence, user override loader.
-4. **JetBrains profile** — add duplicate/delete/word-delete commands, platform
-   mappings, selfcheck.
-5. **Vim modal layer** — Normal/Insert first, then Visual/operators; separate
-   mode state, no plain-letter bindings in Insert.
+1. **Inventory + command ids** — done in `keymap.rs` and the expanded `Action`
+   set; global and editor keys route through it.
+2. **Resolver + VS Code profile** — done; tests cover primary/Cmd/Ctrl,
+   profile bindings and user overrides.
+3. **Settings/session** — done: Keymap row, session `keymap=`, and
+   `<config>/keymaps.json` overrides.
+4. **JetBrains profile** — done for duplicate/delete/move line and word delete.
+5. **Vim modal layer** — first slice done: Normal/Insert and basic Visual,
+   motions/operators listed above; Ex commands, text objects and registers are
+   explicitly not done.
 6. Optional: Emacs profile, command palette, custom per-language overrides.
+
+### User override example
+
+```json
+{
+  "bindings": {
+    "editor": {
+      "primary+shift+k": "edit.deleteLine",
+      "alt+up": "edit.moveLineUp"
+    },
+    "global": {
+      "primary+shift+p": "quickOpen"
+    }
+  }
+}
+```
+
+Null unbinds a chord. Known command ids are listed in `action_from_id` in
+`src/keymap.rs`; unknown ids are ignored. The file is read once at startup;
+changing the profile re-applies it synchronously.
 
 ## Test plan
 
@@ -214,7 +235,7 @@ schema:
   primary, user override precedence, conflict detection.
 - Headless selfcheck per profile: drive `KeyDown`/`TextInput` through the real
   app and assert model state; no OS screenshots.
-- Regression: existing 124 + 2 tests and the LSP/Git/terminal selfchecks must
+- Regression: existing 131 + 2 tests and the LSP/Git/terminal/keymap selfchecks must
   stay green after each routing change.
 
 ## Non-goals for the first keymap slice

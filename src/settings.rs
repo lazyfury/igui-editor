@@ -7,6 +7,8 @@
 //! Values are clamped by [`Settings::font`] / [`Settings::sidebar`] so a hand
 //! edited session cannot put the editor into an unusable state.
 
+use crate::keymap::KeymapId;
+
 /// Font size bounds (logical pixels).
 pub const FONT_MIN: f32 = 11.0;
 pub const FONT_MAX: f32 = 18.0;
@@ -33,6 +35,8 @@ pub struct Settings {
     pub autosave: bool,
     /// Sidebar width in logical pixels.
     pub sidebar_width: f32,
+    /// Selectable keyboard profile.
+    pub keymap: KeymapId,
 }
 
 impl Default for Settings {
@@ -45,6 +49,7 @@ impl Default for Settings {
             syntax: true,
             autosave: true,
             sidebar_width: 232.0,
+            keymap: KeymapId::VsCode,
         }
     }
 }
@@ -60,6 +65,7 @@ impl Settings {
             syntax: self.syntax,
             autosave: self.autosave,
             sidebar_width: clamp_sidebar(self.sidebar_width),
+            keymap: self.keymap,
         }
     }
 
@@ -138,10 +144,11 @@ pub enum Row {
     Syntax,
     Autosave,
     SidebarWidth,
+    Keymap,
     Reset,
 }
 
-pub const ROWS: [Row; 9] = [
+pub const ROWS: [Row; 10] = [
     Row::Theme,
     Row::FontSize,
     Row::TabWidth,
@@ -150,6 +157,7 @@ pub const ROWS: [Row; 9] = [
     Row::Syntax,
     Row::Autosave,
     Row::SidebarWidth,
+    Row::Keymap,
     Row::Reset,
 ];
 
@@ -164,6 +172,7 @@ impl Row {
             Row::Syntax => "Syntax Highlight",
             Row::Autosave => "Autosave",
             Row::SidebarWidth => "Sidebar Width",
+            Row::Keymap => "Keymap",
             Row::Reset => "Reset to Defaults",
         }
     }

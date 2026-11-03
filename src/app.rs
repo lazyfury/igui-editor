@@ -129,6 +129,7 @@ impl EditorApp {
             .active_doc()
             .and_then(|doc| doc.path().map(Path::to_path_buf));
         state.request_git_refresh();
+        state.load_keymap_overrides();
         state.restore_terminal();
         let state = Rc::new(RefCell::new(state));
         let mut tree = SceneTree::new();
@@ -644,6 +645,16 @@ impl EditorApp {
                     state.lsp.dismiss_transient();
                     state.dirty = true;
                 }
+                if state.vim.suppress_text {
+                    state.vim.suppress_text = false;
+                    return EventResult::Handled;
+                }
+                if state.focus == Focus::Editor
+                    && state.settings.keymap == crate::keymap::KeymapId::Vim
+                    && !state.vim.mode.is_insert()
+                {
+                    return EventResult::Handled;
+                }
                 if state.focus == Focus::Terminal {
                     state.terminal_write(text.as_bytes());
                     return EventResult::Handled;
@@ -683,6 +694,13 @@ impl EditorApp {
                 if state.lsp.hover.is_some() || state.lsp.completion.is_some() {
                     state.lsp.dismiss_transient();
                     state.dirty = true;
+                }
+                if state.focus == Focus::Editor
+                    && state.settings.keymap == crate::keymap::KeymapId::Vim
+                    && !state.vim.mode.is_insert()
+                {
+                    state.vim.mode = crate::vim::VimMode::Normal;
+                    return EventResult::Handled;
                 }
                 if state.focus == Focus::Terminal {
                     if let igui_core::ImeEvent::Commit(text) = ime {
