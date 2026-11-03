@@ -121,7 +121,12 @@ PluginHost
   gutter severity rail. The footer LSP chip is severity-colored and opens a
   compact PROBLEMS popup (message, line:column, click to jump). Hovering a
   diagnostic shows its message immediately; normal code falls back to the
-  server hover. Semantic tokens
+  server hover. Godot native hovers expose an **OPEN GODOT DOCS** action built
+  from the LSP declaration (`<Native> class ...` / `func Class.member`); the
+  `gdscript/capabilities` notification supplies native class names for
+  Ctrl/Cmd-click documentation. Completion is prefix-filtered before the UI
+  cap so global methods such as `print` are not lost in Godot's ~2000-item
+  result. Semantic tokens
   are requested on open/change and painted over the syntax pass with
   server-aware variable/parameter/field/type colors. Document symbols feed the
   right outline panel. Hover and completion are transient overlays. Nothing is

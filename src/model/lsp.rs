@@ -26,6 +26,8 @@ const CHANGE_DEBOUNCE: Duration = Duration::from_millis(140);
 const RETRY_AFTER: Duration = Duration::from_secs(5);
 const MAX_COMPLETIONS: usize = 200;
 const MAX_DIAGNOSTICS: usize = 500;
+/// Public Godot class reference. The stable branch tracks the current release.
+const GODOT_DOCS: &str = "https://docs.godotengine.org/en/stable/classes";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LspStatus {
@@ -64,9 +66,58 @@ pub struct OutlineSymbol {
     pub character: u32,
 }
 
+/// A Godot native symbol surfaced by the LSP hover declaration.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativeTarget {
+    pub class: String,
+    pub symbol: String,
+    pub kind: NativeDocKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeDocKind {
+    Class,
+    Method,
+    Property,
+    Signal,
+    Constant,
+    Constructor,
+    Operator,
+}
+
+impl NativeTarget {
+    /// Official Godot online reference URL for this declaration.
+    pub fn docs_url(&self) -> String {
+        let class = self.class.trim_start_matches('@').to_ascii_lowercase();
+        let file = self.class.to_ascii_lowercase();
+        let mut url = format!("{GODOT_DOCS}/class_{file}.html");
+        let section = match self.kind {
+            NativeDocKind::Class => None,
+            NativeDocKind::Method => Some("method"),
+            NativeDocKind::Property => Some("property"),
+            NativeDocKind::Signal => Some("signal"),
+            NativeDocKind::Constant => Some("constant"),
+            NativeDocKind::Constructor => Some("constructor"),
+            NativeDocKind::Operator => Some("operator"),
+        };
+        if let Some(section) = section {
+            url.push_str(&format!(
+                "#class-{}-{}-{}",
+                class,
+                section,
+                self.symbol.to_ascii_lowercase()
+            ));
+        }
+        url
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct HoverUi {
     pub text: String,
+    /// Present when the hover is a Godot native class/member; lets the UI offer
+    /// an official documentation link.
+    pub native: Option<NativeTarget>,
 }
 
 #[derive(Clone, Debug)]
@@ -553,7 +604,11 @@ pub struct LspController {
     pub hover_anchor: Option<igui_core::Vec2>,
     /// Last painted hover card, used to keep it alive while the pointer enters it.
     pub hover_rect: igui_core::Rect,
+    /// Hit rectangle for the hover card's "Open Docs" action.
+    pub hover_doc_hit: igui_core::Rect,
     pub completion: Option<CompletionUi>,
+    completion_prefix: String,
+    native_classes: HashSet<String>,
     location: Option<Location>,
     changed: bool,
 }
@@ -580,7 +635,10 @@ impl Default for LspController {
             hover: None,
             hover_anchor: None,
             hover_rect: igui_core::Rect::ZERO,
+            hover_doc_hit: igui_core::Rect::ZERO,
             completion: None,
+            completion_prefix: String::new(),
+            native_classes: HashSet::new(),
             location: None,
             changed: false,
         }
@@ -715,7 +773,10 @@ impl LspController {
         self.hover = None;
         self.hover_anchor = None;
         self.hover_rect = igui_core::Rect::ZERO;
+        self.hover_doc_hit = igui_core::Rect::ZERO;
         self.completion = None;
+        self.completion_prefix.clear();
+        self.native_classes.clear();
         self.location = None;
     }
 
@@ -757,6 +818,8 @@ impl LspController {
                 self.respond_to_server(id, &method, &message["params"]);
             } else if method == "textDocument/publishDiagnostics" {
                 self.publish_diagnostics(&message["params"]);
+            } else if method == "gdscript/capabilities" {
+                self.cache_native_classes(&message["params"]);
             }
             return;
         }
@@ -787,11 +850,11 @@ impl LspController {
                 self.changed = true;
             }
             PendingKind::Hover => {
-                self.hover = hover_text(result).map(|text| HoverUi { text });
+                self.hover = hover_ui(result);
                 self.changed = true;
             }
             PendingKind::Completion => {
-                let items = parse_completions(result);
+                let items = parse_completions(result, &self.completion_prefix);
                 self.completion =
                     (!items.is_empty()).then_some(CompletionUi { items, selected: 0 });
                 self.changed = true;
@@ -1074,6 +1137,7 @@ impl LspController {
         self.completion = None;
         self.hover = None;
         self.cancel_popup_requests();
+        self.completion_prefix = completion_prefix(doc);
         self.send_position("textDocument/completion", PendingKind::Completion, doc)
     }
 
@@ -1211,8 +1275,26 @@ impl LspController {
         self.hover = None;
         self.hover_anchor = None;
         self.hover_rect = igui_core::Rect::ZERO;
+        self.hover_doc_hit = igui_core::Rect::ZERO;
         self.completion = None;
         self.cancel_popup_requests();
+    }
+
+    /// Whether `name` is one of Godot's native classes (e.g. `Node`).
+    pub fn is_native_class(&self, name: &str) -> bool {
+        self.native_classes.contains(name)
+    }
+
+    fn cache_native_classes(&mut self, params: &Value) {
+        let Some(items) = params.get("native_classes").and_then(Value::as_array) else {
+            return;
+        };
+        self.native_classes.clear();
+        for item in items {
+            if let Some(name) = item.get("name").and_then(Value::as_str) {
+                self.native_classes.insert(name.to_string());
+            }
+        }
     }
 
     pub fn diagnostics_for(&self, path: &Path) -> &[Diagnostic] {
@@ -1432,6 +1514,12 @@ fn initialize_params(root: &Path, spec: &LanguageServerSpec) -> Value {
     })
 }
 
+fn hover_ui(result: &Value) -> Option<HoverUi> {
+    let text = hover_text(result)?;
+    let native = native_target_from_hover(&text);
+    Some(HoverUi { text, native })
+}
+
 fn hover_text(result: &Value) -> Option<String> {
     if result.is_null() {
         return None;
@@ -1458,6 +1546,64 @@ fn hover_text(result: &Value) -> Option<String> {
     (!text.trim().is_empty()).then_some(text)
 }
 
+fn native_target_from_hover(text: &str) -> Option<NativeTarget> {
+    let first = text.lines().next()?.trim();
+    if let Some(rest) = first.strip_prefix("<Native> class ") {
+        let class = rest.split_whitespace().next()?;
+        return Some(NativeTarget {
+            class: class.to_string(),
+            symbol: class.to_string(),
+            kind: NativeDocKind::Class,
+        });
+    }
+    let (kind, rest) = first
+        .strip_prefix("func ")
+        .map(|rest| (NativeDocKind::Method, rest))
+        .or_else(|| {
+            first
+                .strip_prefix("const ")
+                .map(|rest| (NativeDocKind::Constant, rest))
+        })
+        .or_else(|| {
+            first
+                .strip_prefix("var ")
+                .map(|rest| (NativeDocKind::Property, rest))
+        })
+        .or_else(|| {
+            first
+                .strip_prefix("signal ")
+                .map(|rest| (NativeDocKind::Signal, rest))
+        })?;
+    let token = rest.split_whitespace().next()?;
+    let (class, raw_symbol) = token.split_once('.')?;
+    let symbol = raw_symbol
+        .split(['(', ':', '=', ' '])
+        .next()
+        .unwrap_or(raw_symbol);
+    if class.is_empty() || symbol.is_empty() {
+        return None;
+    }
+    Some(NativeTarget {
+        class: class.to_string(),
+        symbol: symbol.to_string(),
+        kind,
+    })
+}
+
+fn completion_prefix(doc: &Document) -> String {
+    let caret = doc.caret().min(doc.text().len());
+    let line = doc.line_of(caret);
+    let start = doc.line_start(line);
+    let before = &doc.line(line)[..caret.saturating_sub(start).min(doc.line(line).len())];
+    before
+        .rsplit(|ch: char| !(ch.is_alphanumeric() || ch == '_'))
+        .next()
+        .unwrap_or("")
+        .chars()
+        .take(64)
+        .collect()
+}
+
 fn markdown_value(value: &Value) -> Option<String> {
     if let Some(text) = value.as_str() {
         return Some(text.to_string());
@@ -1468,32 +1614,60 @@ fn markdown_value(value: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
-fn parse_completions(result: &Value) -> Vec<CompletionItem> {
+fn parse_completions(result: &Value, prefix: &str) -> Vec<CompletionItem> {
     let items = result
         .as_array()
         .or_else(|| result.get("items").and_then(Value::as_array));
     let Some(items) = items else {
         return Vec::new();
     };
-    items
+    let prefix_lower = prefix.to_ascii_lowercase();
+    let mut parsed: Vec<CompletionItem> = items
         .iter()
-        .take(MAX_COMPLETIONS)
-        .map(|item| {
+        .filter_map(|item| {
             let label = item["label"].as_str().unwrap_or("").to_string();
+            if label.is_empty() {
+                return None;
+            }
             let insert = item["textEdit"]["newText"]
                 .as_str()
                 .or_else(|| item["insertText"].as_str())
                 .unwrap_or(&label)
                 .to_string();
+            if !prefix.is_empty()
+                && !insert.to_ascii_lowercase().starts_with(&prefix_lower)
+                && !label.to_ascii_lowercase().starts_with(&prefix_lower)
+            {
+                return None;
+            }
             let detail = item["detail"].as_str().unwrap_or("").to_string();
-            CompletionItem {
+            Some(CompletionItem {
                 label,
                 insert,
                 detail,
-            }
+            })
         })
-        .filter(|item| !item.label.is_empty())
-        .collect()
+        .collect();
+    // Godot returns a large, unsorted list (locals, members, globals, types).
+    // Filter by the prefix first, then put an exact insert before longer names.
+    if !prefix.is_empty() {
+        parsed.sort_by_key(|item| {
+            let exact = item.insert.eq_ignore_ascii_case(prefix);
+            let label_exact = item
+                .label
+                .trim_end_matches(['…', '(', ')'])
+                .eq_ignore_ascii_case(prefix);
+            (
+                !(exact || label_exact),
+                item.insert.len(),
+                item.label.clone(),
+            )
+        });
+    }
+    let mut seen = HashSet::new();
+    parsed.retain(|item| seen.insert((item.insert.clone(), item.label.clone())));
+    parsed.truncate(MAX_COMPLETIONS);
+    parsed
 }
 
 fn parse_location(result: &Value) -> Option<Location> {
@@ -1609,6 +1783,54 @@ mod tests {
     }
 
     #[test]
+    fn completion_filters_all_results_before_capping() {
+        let mut items = (0..300)
+            .map(|index| json!({"label": format!("filler_{index}"), "insertText": format!("filler_{index}")}))
+            .collect::<Vec<_>>();
+        items.push(json!({"label": "print_orphan_nodes()", "insertText": "print_orphan_nodes"}));
+        items.push(json!({"label": "print(…)", "insertText": "print"}));
+        let items = parse_completions(&json!({"items": items}), "pri");
+        assert_eq!(
+            items.first().map(|item| item.insert.as_str()),
+            Some("print")
+        );
+        assert!(items.iter().all(|item| item.insert.starts_with("pri")));
+    }
+
+    #[test]
+    fn native_capabilities_populate_the_class_index() {
+        let mut lsp = LspController::default();
+        lsp.cache_native_classes(&json!({
+            "native_classes": [
+                {"name": "Node", "inherits": "Object"},
+                {"name": "Sprite2D", "inherits": "Node2D"}
+            ]
+        }));
+        assert!(lsp.is_native_class("Node"));
+        assert!(lsp.is_native_class("Sprite2D"));
+        assert!(!lsp.is_native_class("print"));
+    }
+
+    #[test]
+    fn native_hover_parses_class_and_global_function() {
+        let node = native_target_from_hover("<Native> class Node extends Object\n\n...").unwrap();
+        assert_eq!(node.class, "Node");
+        assert_eq!(node.kind, NativeDocKind::Class);
+        assert_eq!(
+            node.docs_url(),
+            "https://docs.godotengine.org/en/stable/classes/class_node.html"
+        );
+        let print =
+            native_target_from_hover("func @GlobalScope.print(...) -> void\n\n...").unwrap();
+        assert_eq!(print.class, "@GlobalScope");
+        assert_eq!(print.symbol, "print");
+        assert_eq!(
+            print.docs_url(),
+            "https://docs.godotengine.org/en/stable/classes/class_@globalscope.html#class-globalscope-method-print"
+        );
+    }
+
+    #[test]
     fn positions_use_utf16_columns() {
         let mut doc = Document::untitled(1, 1);
         doc.insert_text("a😀b");
@@ -1625,12 +1847,16 @@ mod tests {
             hover_text(&json!({"contents": {"kind": "markdown", "value": "`fn` main"}})),
             Some("`fn` main".into())
         );
-        let items = parse_completions(&json!({"items": [
-            {"label": "println!", "insertText": "println!", "detail": "macro"},
-            {"label": "print", "textEdit": {"newText": "print"}}
-        ]}));
+        let items = parse_completions(
+            &json!({"items": [
+                {"label": "println!", "insertText": "println!", "detail": "macro"},
+                {"label": "print", "textEdit": {"newText": "print"}}
+            ]}),
+            "pri",
+        );
         assert_eq!(items.len(), 2);
-        assert_eq!(items[0].insert, "println!");
+        assert_eq!(items[0].insert, "print");
+        assert_eq!(items[1].insert, "println!");
         let location = parse_location(&json!([{
             "uri": "file:///tmp/main.rs",
             "range": {"start": {"line": 4, "character": 2}, "end": {"line": 4, "character": 5}}

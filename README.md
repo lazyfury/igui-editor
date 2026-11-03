@@ -141,7 +141,12 @@ non-project buffers.
   the error detail.
 - `F1` shows server hover, `F12` jumps to definition (macOS top-row media keys
   may need `Fn`; `⌘⇧I` / `⌘⇧D` are also available), and `⌘I` (`Ctrl+I` on
-  Linux/Windows) opens completion.
+  Linux/Windows) opens completion. Completion results are filtered by the
+  identifier prefix before the UI cap, so Godot global methods such as `print`
+  are found even though the server returns thousands of candidates.
+- When a hover is a Godot native class or member, the card shows **OPEN GODOT
+  DOCS**; clicking it opens the official class/member reference. Ctrl/Cmd-click
+  a native class name also opens its reference.
 - Moving the mouse over code for about 350 ms opens the same hover card. The
   card stays while the pointer is over it, and gets a short grace period when
   the pointer leaves the editor.

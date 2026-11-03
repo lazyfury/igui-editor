@@ -1856,6 +1856,7 @@ impl AppState {
                         diagnostic.start_char + 1,
                         diagnostic.message
                     ),
+                    native: None,
                 });
                 self.lsp.hover_anchor = Some(anchor);
             }
@@ -1940,6 +1941,63 @@ impl AppState {
         } else {
             self.status(self.lsp_unavailable());
             false
+        }
+    }
+
+    /// Native class at a byte, used by Ctrl/Cmd-click documentation.
+    pub fn native_class_at(&self, byte: usize) -> Option<String> {
+        let doc = self.ws.active_doc()?;
+        let text = doc.text();
+        let mut start = byte.min(text.len());
+        while start > 0 {
+            let len = text[..start].chars().next_back()?.len_utf8();
+            let ch = text[start - len..start].chars().next()?;
+            if !(ch.is_alphanumeric() || ch == '_') {
+                break;
+            }
+            start -= len;
+        }
+        let mut end = byte.min(text.len());
+        while end < text.len() {
+            let ch = text[end..].chars().next()?;
+            if !(ch.is_alphanumeric() || ch == '_') {
+                break;
+            }
+            end += ch.len_utf8();
+        }
+        let word = &text[start..end];
+        self.lsp.is_native_class(word).then(|| word.to_string())
+    }
+
+    /// Opens the official Godot class/member reference for `target`.
+    pub fn open_native_docs(&mut self, target: &lsp::NativeTarget) {
+        let url = target.docs_url();
+        let result = {
+            #[cfg(target_os = "macos")]
+            {
+                std::process::Command::new("open").arg(&url).spawn()
+            }
+            #[cfg(target_os = "linux")]
+            {
+                std::process::Command::new("xdg-open").arg(&url).spawn()
+            }
+            #[cfg(target_os = "windows")]
+            {
+                std::process::Command::new("cmd")
+                    .args(["/C", "start", "", &url])
+                    .spawn()
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+            {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "opening URLs is not supported on this platform",
+                ))
+            }
+        };
+        match result {
+            Ok(_) => self.status(format!("opened Godot docs for {}", target.symbol)),
+            Err(error) => self.error(format!("could not open Godot docs: {error}")),
         }
     }
 

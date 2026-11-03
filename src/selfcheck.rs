@@ -3606,7 +3606,10 @@ while True:
     elif method == "textDocument/hover":
         send({"jsonrpc": "2.0", "id": request_id, "result": {"contents": {"kind": "markdown", "value": "lsp hover card"}}})
     elif method == "textDocument/completion":
-        send({"jsonrpc": "2.0", "id": request_id, "result": {"items": [{"label": "completion_item", "detail": "fake"}]}})
+        items = [{"label": "completion_item", "detail": "fake"}]
+        items += [{"label": "filler_%d" % i, "insertText": "filler_%d" % i} for i in range(300)]
+        items += [{"label": "print(…)", "insertText": "print", "detail": "fake global"}]
+        send({"jsonrpc": "2.0", "id": request_id, "result": {"items": items}})
     elif method == "textDocument/definition":
         uri = params["textDocument"]["uri"]
         send({"jsonrpc": "2.0", "id": request_id, "result": [{
@@ -3916,6 +3919,58 @@ fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
     {
         return Err("LSP completion was not inserted".into());
     }
+
+    // A global completion beyond the old 200-item cap is filtered before the
+    // cap. Godot returns thousands of items and `print` is not near the front.
+    if let Some(doc) = harness.app.state_mut().ws.active_doc_mut() {
+        let end = doc.text().len();
+        doc.set_caret(end);
+        doc.insert_text("\npri");
+    }
+    harness.shortcut(Key::Character('i'), completion_modifier);
+    for _ in 0..100 {
+        harness.frame()?;
+        if harness.app.state().lsp.completion.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    {
+        let state = harness.app.state();
+        let completion = state.lsp.completion.as_ref();
+        if completion.is_none_or(|completion| {
+            completion.items.first().map(|item| item.insert.as_str()) != Some("print")
+        }) {
+            return Err(format!(
+                "completion did not surface global `print` (items: {:?})",
+                completion.map(|completion| {
+                    completion
+                        .items
+                        .iter()
+                        .take(8)
+                        .map(|item| item.label.clone())
+                        .collect::<Vec<_>>()
+                })
+            ));
+        }
+    }
+    harness.app.state_mut().lsp.dismiss_transient();
+    harness.frame()?;
+
+    // Native hover declarations expose the documentation action.
+    harness.app.state_mut().lsp.hover = Some(crate::model::lsp::HoverUi {
+        text: "<Native> class Node extends Object\n\nNode docs".into(),
+        native: Some(crate::model::lsp::NativeTarget {
+            class: "Node".into(),
+            symbol: "Node".into(),
+            kind: crate::model::lsp::NativeDocKind::Class,
+        }),
+    });
+    let frame = harness.frame()?;
+    if !texts(&frame).iter().any(|text| text == "OPEN GODOT DOCS") {
+        return Err("native hover did not paint the docs action".into());
+    }
+    harness.app.state_mut().lsp.dismiss_transient();
 
     // Definition: F12 returns a location in the same file.
     harness.key(Key::F12);

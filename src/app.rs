@@ -327,6 +327,18 @@ impl EditorApp {
                         ui::problems::Click::Outside => {}
                     }
                 }
+                if state.lsp.hover_doc_hit.contains(*position) {
+                    if let Some(target) = state
+                        .lsp
+                        .hover
+                        .as_ref()
+                        .and_then(|hover| hover.native.clone())
+                    {
+                        state.lsp.dismiss_transient();
+                        state.open_native_docs(&target);
+                        return EventResult::Handled;
+                    }
+                }
                 let definition_click = state.focus == Focus::Editor
                     && (igui_ui::modifiers(&self.tree).ctrl || igui_ui::modifiers(&self.tree).meta)
                     && state.editor.text_rect.contains(*position);
@@ -450,6 +462,15 @@ impl EditorApp {
                     && state.editor.text_rect.contains(*position)
                 {
                     if let Some(byte) = ui::editor::byte_at(&state, *position, measurer.as_ref()) {
+                        if let Some(class) = state.native_class_at(byte) {
+                            let target = crate::model::lsp::NativeTarget {
+                                class: class.clone(),
+                                symbol: class,
+                                kind: crate::model::lsp::NativeDocKind::Class,
+                            };
+                            state.open_native_docs(&target);
+                            return EventResult::Handled;
+                        }
                         if state.request_lsp_definition_at(byte) {
                             return EventResult::Handled;
                         }

@@ -11,13 +11,14 @@ use crate::kit::{self, RectExt};
 use crate::state::AppState;
 
 const HOVER_W: f32 = 460.0;
-const HOVER_MAX_H: f32 = 260.0;
+const HOVER_MAX_H: f32 = 300.0;
 const COMPLETION_W: f32 = 380.0;
 const COMPLETION_ROW_H: f32 = 22.0;
 const COMPLETION_MAX_ROWS: usize = 10;
 
 pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintContext) {
     state.lsp.hover_rect = Rect::ZERO;
+    state.lsp.hover_doc_hit = Rect::ZERO;
     if state.lsp.completion.is_some() {
         paint_completion(state, measurer, ctx);
     } else if state.lsp.hover.is_some() {
@@ -53,14 +54,17 @@ fn paint_hover(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut Pain
             wrap_line(cleaned, max_width - 20.0, measurer, font, &mut lines);
         }
     }
-    if lines.len() > 13 {
-        lines.truncate(13);
+    let has_docs = hover.native.is_some();
+    let max_lines = if has_docs { 12 } else { 13 };
+    if lines.len() > max_lines {
+        lines.truncate(max_lines);
         lines.push("…".into());
     }
     if lines.is_empty() {
         return;
     }
-    let height = (lines.len() as f32 * line_h + 16.0).min(HOVER_MAX_H);
+    let docs_h = if has_docs { 24.0 } else { 0.0 };
+    let height = (lines.len() as f32 * line_h + 16.0 + docs_h).min(HOVER_MAX_H);
     let caret = state.editor.caret_rect;
     let anchor = state
         .lsp
@@ -95,6 +99,22 @@ fn paint_hover(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut Pain
             if line.is_empty() { p.faint } else { p.text },
         );
         y += line_h;
+    }
+    if has_docs {
+        let docs = Rect::from_min_size(
+            Vec2::new(panel.left() + 10.0, panel.bottom() - 22.0),
+            Size::new(panel.width() - 20.0, 18.0),
+        );
+        state.lsp.hover_doc_hit = docs;
+        kit::hline(ctx, panel.left(), panel.right(), docs.top() - 3.0, p.border);
+        kit::text(
+            ctx,
+            "OPEN GODOT DOCS",
+            docs.left(),
+            kit::baseline(measurer, docs, m.font_small),
+            m.font_small,
+            p.accent,
+        );
     }
 }
 
