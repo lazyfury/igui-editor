@@ -5,8 +5,9 @@ A compact, square-cornered **text / Markdown editor** built on the
 through `igui_ui` / `igui_render` only.
 
 Tabs · undo/redo · find & replace · syntax highlighting (JSON language packs) ·
-Markdown split preview (tables included) · Quick Open (`⌘P`) · project search +
-replace (`⇧⌘F`) · local Git status/diff/stage/commit · built-in terminal · scroll sync · tab drag/context menu ·
+native LSP (Rust / `rust-analyzer` first) · Markdown split preview (tables included) ·
+Quick Open (`⌘P`) · project search + replace (`⇧⌘F`) · local Git
+status/diff/stage/commit · built-in terminal · scroll sync · tab drag/context menu ·
 soft wrap · external-change detection · Finder/Dock file opening · Dock Recent ·
 quick file creation · drag & drop · settings panel · native file dialogs ·
 recent files · session + window restore · autosave & crash recovery ·
@@ -70,6 +71,44 @@ Git is a **built-in plugin** (`services/git.rs`) over a native worker
 (`model/git.rs`), not a JS or dynamic-library extension. See
 [`DESIGN-services.md`](DESIGN-services.md).
 
+## Language intelligence (LSP, Rust first)
+
+The editor talks to language servers over native stdio JSON-RPC — no WebView,
+no JS bridge. The first built-in server is Rust: opening a `.rs` file inside a
+directory with a `Cargo.toml` lazily starts `rust-analyzer` from `PATH` (or the
+path in `IGUI_EDITOR_RUST_ANALYZER`). Install `rust-analyzer` separately; there
+is no server for loose files or non-project buffers.
+
+- Diagnostics are painted as severity-colored underlines and square gutter
+  markers; the footer shows `LSP 1E 2W` (or `LSP ERR` if the server cannot
+  start).
+- `F1` shows server hover, `F12` jumps to definition, and `Ctrl+Space` opens
+  completion. Completion uses `↑`/`↓`, `Enter`/`Tab` and `Esc`; the same
+  commands are in **Edit**.
+- Buffers are synchronized full-text (debounced after edits); positions use
+  LSP UTF-16 columns. Diagnostics/hover/completion are transient UI state and
+  are not persisted.
+
+Rust is just the first [`LanguageServerSpec`](src/services/lsp.rs). Data-only
+language packs under `<config>/languages/*.json` can contribute one too; the
+generic client, owned spec shape and capability ids are ready for a future
+external extension host. Native plugins are still compile-time (no dylib ABI).
+
+```json
+{
+  "name": "lua",
+  "extensions": ["lua"],
+  "lsp": {
+    "id": "lua-ls",
+    "language": "lua",
+    "extensions": ["lua"],
+    "project_markers": ["stylua.toml"],
+    "command": "lua-language-server",
+    "args": ["--stdio"]
+  }
+}
+```
+
 ## Terminal (`⌃\``, View → Terminal)
 
 Native PTY (`portable-pty`) + `vt100` screen, no WebView or JS. The panel sits
@@ -115,6 +154,8 @@ contents do not. Multiple sessions are a follow-up.
 | `⌘A` | select all |
 | `⌘P` | Quick Open (fuzzy file picker) |
 | `⇧⌘F` | search in folder |
+| `F1` / `F12` | LSP hover / go to definition |
+| `Ctrl+Space` | LSP completion |
 | `⌘,` | settings panel |
 | `⌘F` / `⌥⌘F` | find / jump to the replace field |
 | `⌘G` / `⇧⌘G` | next / previous match |
@@ -221,8 +262,9 @@ Drop a JSON file like this into the config's `languages/` directory and restart:
 
 The optional fields mirror the C-family tokenizer: `types`, `constants`,
 `strings`, `nested_block`, `triple`, `template`, `template_escapes`,
-`preprocessor`, `annotations`, `toml_tables`, `case_types`. Limits: 64 packs,
-64 KB each; invalid packs are skipped (reported on stderr + status).
+`preprocessor`, `annotations`, `toml_tables`, `case_types`. An optional `lsp`
+object contributes a language server (see **Language intelligence**). Limits:
+64 packs, 64 KB each; invalid packs are skipped (reported on stderr + status).
 
 Per-document override: click the language type in the **bottom-right footer**
 (`LUA`, `RUST`, `TEXT`, …) → Auto (by extension) or any registered provider.
@@ -421,6 +463,11 @@ creates a real file and refuses to overwrite; `application:openURLs:` is verifie
 against cold and running `open -a` launches; Dock menu/quit methods are installed
 on the existing winit delegate.
 
+LSP checks: a scripted stdio language server is launched through the real
+client; diagnostics appear under the changed line and in the footer, `F1` paints
+a hover card, `Ctrl+Space` opens a completion list and inserts the selected
+item, and `F12` jumps to the returned definition.
+
 M6 checks: tab drag-reorder and the right-click Close menu, soft-wrap layout
 (long-line split, wrapped click / Up / Down, `⌥Z`), clean/dirty external reload
 with the Keep/Reload modal, and the session soft-wrap setting persisted.
@@ -446,6 +493,8 @@ src/
   model/workspace_index.rs  ignored-dir file index (Quick Open)
   model/search.rs     background project search (worker + caps)
   syntax/pack.rs      declarative JSON language packs
+  model/lsp.rs        stdio JSON-RPC client, diagnostics, hover/completion
+  services/lsp.rs     built-in Rust language-server spec (rust-analyzer)
   model/recovery.rs   crash snapshots (txt + metadata)
   model/replace.rs    replace-in-files planning/apply (conflict + open skip)
   model/fs_tree.rs    lazy sidebar tree (dirs first, hidden entries skipped)
@@ -459,6 +508,7 @@ src/
   macos/              Apple Event open, Dock menu, recent + quit guard
   services/           native service registry + built-in plugin descriptors
   ui/git.rs           GIT sidebar tab + diff overlay + commit prompt
+  ui/lsp.rs           hover card + completion list overlays
   ui/terminal.rs      vt100 cell renderer + terminal key encoding
   input.rs            keyboard dispatch: modal -> find -> shortcuts -> tree
   state.rs            shared state, actions, hit rects recorded during paint
@@ -520,6 +570,10 @@ file-change detection (clean auto-reload, dirty Keep/Reload), session v4.
 
 Delivered (M7): macOS Finder/`open -a` file opening, Dock Recent/New File/Clear,
 quick file creation (`⇧⌘N`), system recent items, and a native dirty-quit guard.
+
+Delivered (M12): generic LSP stdio client + Rust `rust-analyzer` plugin,
+diagnostics, hover, completion and definition, plus data-only language-pack
+language-server specs.
 
 Next candidates: native macOS top menu bar (Window/Services/Help), window-close
 guard + Dock reopen, code-plugin loading (dylib/wasm), per-hit replace and

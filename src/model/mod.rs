@@ -10,6 +10,7 @@ pub mod fs_tree;
 pub mod fuzzy;
 pub mod git;
 pub mod highlight;
+pub mod lsp;
 pub mod markdown;
 pub mod pty;
 pub mod recovery;

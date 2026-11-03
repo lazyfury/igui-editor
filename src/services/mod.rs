@@ -7,6 +7,7 @@
 //! terminal.
 
 pub mod git;
+pub mod lsp;
 pub mod terminal;
 
 use std::collections::BTreeMap;
@@ -25,6 +26,10 @@ pub enum Capability {
     TerminalWrite,
     TerminalResize,
     TerminalClose,
+    LspDiagnostics,
+    LspHover,
+    LspCompletion,
+    LspDefinition,
 }
 
 impl Capability {
@@ -40,6 +45,10 @@ impl Capability {
             Capability::TerminalWrite => "terminal.write",
             Capability::TerminalResize => "terminal.resize",
             Capability::TerminalClose => "terminal.close",
+            Capability::LspDiagnostics => "lsp.diagnostics",
+            Capability::LspHover => "lsp.hover",
+            Capability::LspCompletion => "lsp.completion",
+            Capability::LspDefinition => "lsp.definition",
         }
     }
 }
@@ -65,6 +74,43 @@ pub struct SidebarContribution {
     pub label: &'static str,
 }
 
+/// Declarative language-server contribution. The command is resolved from
+/// `PATH`, or from `command_env` when that variable is set. `project_markers`
+/// keeps a server idle until a real project root exists (e.g. `Cargo.toml`).
+///
+/// Owned strings (rather than `&'static str`) are deliberate: the same shape
+/// can be deserialized by a future extension host or a data-only language pack
+/// without changing the LSP client.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct LanguageServerSpec {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub language: String,
+    #[serde(default)]
+    pub extensions: Vec<String>,
+    #[serde(default)]
+    pub project_markers: Vec<String>,
+    #[serde(default)]
+    pub command: String,
+    #[serde(default)]
+    pub command_env: Option<String>,
+    #[serde(default)]
+    pub args: Vec<String>,
+}
+
+impl LanguageServerSpec {
+    pub fn matches_path(&self, path: &std::path::Path) -> bool {
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| {
+                self.extensions
+                    .iter()
+                    .any(|candidate| candidate.eq_ignore_ascii_case(ext))
+            })
+    }
+}
+
 /// A compile-time plugin. No dynamic loading and no Rust dylib ABI.
 pub trait BuiltinPlugin {
     fn id(&self) -> &'static str;
@@ -78,6 +124,7 @@ pub struct ServiceRegistry {
     pub services: BTreeMap<&'static str, ServiceManifest>,
     pub commands: BTreeMap<&'static str, CommandSpec>,
     pub sidebar_tabs: Vec<SidebarContribution>,
+    pub language_servers: Vec<LanguageServerSpec>,
 }
 
 pub struct PluginHost<'a> {
@@ -89,6 +136,17 @@ impl PluginHost<'_> {
         self.registry.services.insert(manifest.id, manifest);
         for command in commands {
             self.registry.commands.insert(command.id, *command);
+        }
+    }
+
+    pub fn language_server(&mut self, server: LanguageServerSpec) {
+        if !self
+            .registry
+            .language_servers
+            .iter()
+            .any(|entry| entry.id == server.id)
+        {
+            self.registry.language_servers.push(server);
         }
     }
 
@@ -114,12 +172,15 @@ pub fn install_builtins() -> ServiceRegistry {
     });
     let plugin = git::GitPlugin;
     let terminal = terminal::TerminalPlugin;
+    let rust_lsp = lsp::RustLspPlugin;
     registry.plugins.push(plugin.id());
     registry.plugins.push(terminal.id());
+    registry.plugins.push(rust_lsp.id());
     let mut host = PluginHost {
         registry: &mut registry,
     };
     plugin.register(&mut host);
     terminal.register(&mut host);
+    rust_lsp.register(&mut host);
     registry
 }

@@ -142,12 +142,18 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         })
         .unwrap_or_default();
     let read_only = state.ws.active_doc().is_some_and(|doc| doc.is_read_only());
+    let lsp = state
+        .lsp
+        .summary(state.ws.active_doc().and_then(|doc| doc.path()));
     let mut facts = vec![theme.name(), mode.as_str(), focus];
     if !branch.is_empty() {
         facts.push(branch.as_str());
     }
     if read_only {
         facts.push("READ-ONLY");
+    }
+    if let Some(lsp) = lsp.as_deref() {
+        facts.push(lsp);
     }
     facts.extend([size.as_str(), "UTF-8", spaces.as_str()]);
     let wrap_effective = state.session.soft_wrap

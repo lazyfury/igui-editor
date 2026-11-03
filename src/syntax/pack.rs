@@ -13,7 +13,15 @@
 //!   "block_comment": ["--[[", "]]"],
 //!   "keywords": ["function", "local", "end"],
 //!   "constants": ["true", "false", "nil"],
-//!   "strings": [{ "quote": "\"", "escapes": true }]
+//!   "strings": [{ "quote": "\"", "escapes": true }],
+//!   "lsp": {
+//!     "id": "lua-ls",
+//!     "language": "lua",
+//!     "extensions": ["lua"],
+//!     "project_markers": ["stylua.toml"],
+//!     "command": "lua-language-server",
+//!     "args": ["--stdio"]
+//!   }
 //! }
 //! ```
 
@@ -25,6 +33,7 @@ use serde::Deserialize;
 
 use super::cstyle::{self, LangSpec, StringSpec};
 use super::SyntaxProvider;
+use crate::services::LanguageServerSpec;
 
 /// Packs loaded per launch.
 pub const MAX_PACKS: usize = 64;
@@ -64,6 +73,9 @@ pub struct LanguagePack {
     pub toml_tables: bool,
     #[serde(default)]
     pub case_types: bool,
+    /// Optional language-server contribution for this data-only pack.
+    #[serde(default)]
+    pub lsp: Option<LanguageServerSpec>,
 }
 
 /// One quote style.
@@ -139,6 +151,30 @@ impl LanguagePack {
                 return Err("string quote must be one ASCII character".into());
             }
         }
+        if let Some(server) = &self.lsp {
+            Self::validate_server(server)?;
+        }
+        Ok(())
+    }
+
+    /// Validation shared by data-only packs and future dynamic plugin manifests.
+    fn validate_server(server: &LanguageServerSpec) -> Result<(), String> {
+        let short = |value: &str| !value.is_empty() && value.len() <= 64 && !value.contains('\n');
+        if !short(&server.id) || !short(&server.language) || !short(&server.command) {
+            return Err("lsp id/language/command must be 1..64 characters".into());
+        }
+        if server.command.len() > 512 {
+            return Err("lsp command is too long".into());
+        }
+        if server.extensions.is_empty() || server.extensions.len() > 16 {
+            return Err("lsp extensions must contain 1..16 entries".into());
+        }
+        if server.project_markers.len() > 8 {
+            return Err("too many lsp project markers".into());
+        }
+        if server.args.len() > 32 || server.args.iter().any(|arg| arg.len() > 512) {
+            return Err("invalid lsp args".into());
+        }
         Ok(())
     }
 
@@ -196,11 +232,18 @@ impl LanguagePack {
 /// Loads every `*.json` under `dir` (sorted, capped). Returns providers plus
 /// human-readable errors for skipped files; a missing directory is not an
 /// error.
-pub fn load_language_packs(dir: &Path) -> (Vec<Arc<dyn SyntaxProvider>>, Vec<String>) {
+pub fn load_language_packs(
+    dir: &Path,
+) -> (
+    Vec<Arc<dyn SyntaxProvider>>,
+    Vec<LanguageServerSpec>,
+    Vec<String>,
+) {
     let mut providers = Vec::new();
+    let mut servers = Vec::new();
     let mut errors = Vec::new();
     let Ok(entries) = fs::read_dir(dir) else {
-        return (providers, errors);
+        return (providers, servers, errors);
     };
     let mut paths: Vec<PathBuf> = entries
         .flatten()
@@ -229,12 +272,23 @@ pub fn load_language_packs(dir: &Path) -> (Vec<Arc<dyn SyntaxProvider>>, Vec<Str
                 continue;
             }
         };
-        match LanguagePack::parse(&text).and_then(|pack| pack.into_provider()) {
-            Ok(provider) => providers.push(provider),
+        match LanguagePack::parse(&text) {
+            Ok(pack) => {
+                let server = pack.lsp.clone();
+                match pack.into_provider() {
+                    Ok(provider) => {
+                        providers.push(provider);
+                        if let Some(server) = server {
+                            servers.push(server);
+                        }
+                    }
+                    Err(error) => errors.push(format!("{name}: {error}")),
+                }
+            }
             Err(error) => errors.push(format!("{name}: {error}")),
         }
     }
-    (providers, errors)
+    (providers, servers, errors)
 }
 
 fn leak(value: &str) -> &'static str {
@@ -288,6 +342,36 @@ mod tests {
     }
 
     #[test]
+    fn pack_can_contribute_a_language_server() {
+        let pack = LanguagePack::parse(
+            r#"{
+                "name": "lua",
+                "extensions": ["lua"],
+                "lsp": {
+                    "id": "lua-ls",
+                    "language": "lua",
+                    "extensions": ["lua"],
+                    "project_markers": ["stylua.toml"],
+                    "command": "lua-language-server",
+                    "args": ["--stdio"]
+                }
+            }"#,
+        )
+        .expect("valid server pack");
+        let server = pack.lsp.expect("server spec");
+        assert_eq!(server.id, "lua-ls");
+        assert_eq!(server.args, ["--stdio"]);
+    }
+
+    #[test]
+    fn pack_rejects_incomplete_language_server() {
+        assert!(LanguagePack::parse(
+            r#"{"name":"x","extensions":["x"],"lsp":{"id":"x","command":"x"}}"#
+        )
+        .is_err());
+    }
+
+    #[test]
     fn rejects_bad_packs() {
         assert!(LanguagePack::parse(r#"{"name":"","extensions":["x"]}"#).is_err());
         assert!(LanguagePack::parse(r#"{"name":"x","extensions":[]}"#).is_err());
@@ -307,9 +391,10 @@ mod tests {
         fs::write(dir.join("lua.json"), lua_pack()).unwrap();
         fs::write(dir.join("broken.json"), "{ not json").unwrap();
         fs::write(dir.join("notes.txt"), "ignored").unwrap();
-        let (providers, errors) = load_language_packs(&dir);
+        let (providers, servers, errors) = load_language_packs(&dir);
         assert_eq!(providers.len(), 1);
         assert_eq!(providers[0].name(), "lua");
+        assert!(servers.is_empty());
         assert_eq!(errors.len(), 1);
         let _ = fs::remove_dir_all(dir);
     }

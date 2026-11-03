@@ -88,7 +88,7 @@ impl EditorApp {
         );
         // Data-only language packs (`<config>/languages/*.json`) join the
         // registry after the built-ins, so a pack can never override one.
-        let (providers, errors) = crate::syntax::load_language_packs(
+        let (providers, servers, errors) = crate::syntax::load_language_packs(
             &config_path
                 .parent()
                 .unwrap_or_else(|| Path::new("."))
@@ -96,6 +96,16 @@ impl EditorApp {
         );
         for provider in providers {
             state.syntax.register(provider);
+        }
+        for server in servers {
+            if !state
+                .services
+                .language_servers
+                .iter()
+                .any(|known| known.id == server.id)
+            {
+                state.services.language_servers.push(server);
+            }
         }
         if !errors.is_empty() {
             for error in &errors {
@@ -210,6 +220,7 @@ impl EditorApp {
         self.analysis_behind = self.state.borrow_mut().tick_analysis();
         self.state.borrow_mut().tick_external_changes();
         self.state.borrow_mut().tick_git();
+        self.state.borrow_mut().tick_lsp();
         self.state.borrow_mut().tick_terminal();
         self.state.borrow_mut().tick_reliability();
         self.state.borrow_mut().sync_scroll_positions();
@@ -274,6 +285,7 @@ impl EditorApp {
         ui::quick_open::paint(&mut state, measurer.as_ref(), ctx);
         ui::new_file::paint(&mut state, measurer.as_ref(), ctx);
         ui::project_search::paint(&mut state, measurer.as_ref(), ctx);
+        ui::lsp::paint(&mut state, measurer.as_ref(), ctx);
         ui::drop::paint(&state, measurer.as_ref(), ctx);
         ui::modal::paint(&mut state, measurer.as_ref(), ctx);
         ui::recovery::paint(&state, measurer.as_ref(), ctx);
@@ -302,6 +314,11 @@ impl EditorApp {
                             }
                         }
                     }
+                    return EventResult::Handled;
+                }
+                if state.lsp.hover.is_some() || state.lsp.completion.is_some() {
+                    state.lsp.dismiss_transient();
+                    state.dirty = true;
                     return EventResult::Handled;
                 }
                 // The bar sits above the drop-down: a press on a bar item
@@ -502,6 +519,39 @@ impl EditorApp {
                 if state.search.open && ui::project_search::on_key(&mut state, *key, modifiers) {
                     return EventResult::Handled;
                 }
+                if state.lsp_completion_key(*key) {
+                    return EventResult::Handled;
+                }
+                if state.lsp.hover.is_some() && *key == Key::Escape {
+                    state.lsp.dismiss_transient();
+                    state.dirty = true;
+                    return EventResult::Handled;
+                }
+                if state.focus == Focus::Editor
+                    && !modifiers.meta
+                    && !modifiers.ctrl
+                    && !modifiers.alt
+                {
+                    match key {
+                        Key::F1 => {
+                            state.request_lsp_hover();
+                            return EventResult::Handled;
+                        }
+                        Key::F12 => {
+                            state.request_lsp_definition();
+                            return EventResult::Handled;
+                        }
+                        _ => {}
+                    }
+                }
+                if state.focus == Focus::Editor
+                    && modifiers.ctrl
+                    && !modifiers.meta
+                    && *key == Key::Space
+                {
+                    state.request_lsp_completion();
+                    return EventResult::Handled;
+                }
                 if state.git.detail_visible && *key == Key::Escape {
                     state.close_git_commit_detail();
                     return EventResult::Handled;
@@ -590,6 +640,10 @@ impl EditorApp {
                 if state.settings_open || state.recovery_prompt.is_some() {
                     return EventResult::Handled;
                 }
+                if state.lsp.hover.is_some() || state.lsp.completion.is_some() {
+                    state.lsp.dismiss_transient();
+                    state.dirty = true;
+                }
                 if state.focus == Focus::Terminal {
                     state.terminal_write(text.as_bytes());
                     return EventResult::Handled;
@@ -625,6 +679,10 @@ impl EditorApp {
                 let mut state = self.state.borrow_mut();
                 if state.settings_open || state.recovery_prompt.is_some() {
                     return EventResult::Handled;
+                }
+                if state.lsp.hover.is_some() || state.lsp.completion.is_some() {
+                    state.lsp.dismiss_transient();
+                    state.dirty = true;
                 }
                 if state.focus == Focus::Terminal {
                     if let igui_core::ImeEvent::Commit(text) = ime {
@@ -679,6 +737,7 @@ impl EditorApp {
             || self.analysis_behind
             || self.state.borrow().search_busy()
             || self.state.borrow().terminal.open
+            || self.state.borrow().lsp.is_busy()
             || self.state.borrow().message.is_some()
     }
 

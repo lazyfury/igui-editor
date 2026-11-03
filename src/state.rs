@@ -12,7 +12,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
-use igui_core::{NodeId, Rect, Vec2, ViewportSize};
+use igui_core::{Key, NodeId, Rect, Vec2, ViewportSize};
 use igui_ui::{Clipboard, TextEdit};
 
 use crate::model::brackets::match_bracket;
@@ -22,6 +22,7 @@ use crate::model::git::{
     GitCommit, GitCommitDetail, GitDiff, GitEvent, GitRequest, GitWorker, RepoStatus,
 };
 use crate::model::highlight::HighlightCache;
+use crate::model::lsp::{self, LspController};
 use crate::model::pty::PtySession;
 use crate::model::recovery::{RecoveryEntry, RecoveryStore};
 use crate::model::replace::{self, PlannedFile};
@@ -136,6 +137,9 @@ pub enum Action {
     Find,
     QuickOpen,
     ProjectSearch,
+    LspHover,
+    LspCompletion,
+    LspDefinition,
     ToggleTerminal,
     Settings,
     ToggleSidebar,
@@ -175,6 +179,9 @@ impl Action {
             Action::Find => "Find…".into(),
             Action::QuickOpen => "Quick Open…".into(),
             Action::ProjectSearch => "Search in Folder…".into(),
+            Action::LspHover => "Show Hover".into(),
+            Action::LspCompletion => "Complete".into(),
+            Action::LspDefinition => "Go to Definition".into(),
             Action::ToggleTerminal => "Terminal".into(),
             Action::Settings => "Settings…".into(),
             Action::ToggleSidebar => "Toggle Sidebar".into(),
@@ -262,6 +269,12 @@ impl Action {
                 "⌘" => "⇧⌘F",
                 _ => "Ctrl+Shift+F",
             },
+            Action::LspHover => "F1",
+            Action::LspCompletion => match ACCEL {
+                "⌘" => "⌃Space",
+                _ => "Ctrl+Space",
+            },
+            Action::LspDefinition => "F12",
             Action::ToggleTerminal => match ACCEL {
                 "⌘" => "⌃`",
                 _ => "Ctrl+`",
@@ -321,6 +334,9 @@ impl Action {
                 doc.is_some_and(|doc| !doc.is_read_only()) && state.clipboard.is_some()
             }
             Action::SelectAll => doc.is_some(),
+            Action::LspHover | Action::LspCompletion | Action::LspDefinition => doc
+                .and_then(|doc| doc.path())
+                .is_some_and(|path| state.lsp.supports(path)),
             Action::SetView(_) => doc.is_some(),
             Action::ToggleSoftWrap => doc.is_some(),
             Action::SetLanguage(_) => doc.is_some(),
@@ -929,6 +945,7 @@ pub struct AppState {
     pub sidebar_tab: String,
     pub git: GitState,
     pub terminal: TerminalState,
+    pub lsp: LspController,
     pub syntax: SyntaxRegistry,
     pub highlight: HighlightCache,
     /// Matched bracket byte positions for the caret (`open`, `close`).
@@ -1054,6 +1071,7 @@ impl AppState {
                 height: terminal_height,
                 ..TerminalState::default()
             },
+            lsp: LspController::default(),
             syntax: SyntaxRegistry::with_builtins(),
             highlight: HighlightCache::new(),
             bracket: None,
@@ -1530,6 +1548,126 @@ impl AppState {
     }
 
     /// Drains Git worker events and issues a pending status request.
+    /// Pumps the language server and applies a pending go-to-definition.
+    pub fn tick_lsp(&mut self) {
+        self.lsp.tick(&self.ws, &self.services.language_servers);
+        if self.lsp.take_changed() {
+            self.dirty = true;
+        }
+        if let Some(location) = self.lsp.take_location() {
+            self.open_lsp_location(location);
+        }
+    }
+
+    fn open_lsp_location(&mut self, location: lsp::Location) {
+        if !location.path.is_file() {
+            return;
+        }
+        let display = location.path.display().to_string();
+        self.open_path(location.path);
+        if let Some(doc) = self.ws.active_doc_mut() {
+            let byte = lsp::byte_for_position(doc, location.line, location.character);
+            doc.set_caret(byte);
+            self.editor.reveal = true;
+            self.status(format!("definition: {display}"));
+            self.dirty = true;
+        }
+    }
+
+    pub fn request_lsp_hover(&mut self) {
+        let Some(doc) = self.ws.active_doc() else {
+            return;
+        };
+        if self.lsp.request_hover(doc) {
+            self.dirty = true;
+        } else {
+            self.status(self.lsp_unavailable());
+        }
+    }
+
+    pub fn request_lsp_completion(&mut self) {
+        let Some(doc) = self.ws.active_doc() else {
+            return;
+        };
+        if self.lsp.request_completion(doc) {
+            self.dirty = true;
+        } else {
+            self.status(self.lsp_unavailable());
+        }
+    }
+
+    pub fn request_lsp_definition(&mut self) {
+        let Some(doc) = self.ws.active_doc() else {
+            return;
+        };
+        if self.lsp.request_definition(doc) {
+            self.dirty = true;
+        } else {
+            self.status(self.lsp_unavailable());
+        }
+    }
+
+    fn lsp_unavailable(&self) -> String {
+        match self.lsp.status() {
+            lsp::LspStatus::Error(error) => format!("LSP: {error}"),
+            lsp::LspStatus::Starting => "LSP starting…".into(),
+            _ => "no language server for this file".into(),
+        }
+    }
+
+    /// Applies the selected completion item, replacing the identifier prefix
+    /// under the caret. Returns whether a completion was consumed.
+    pub fn apply_lsp_completion(&mut self) -> bool {
+        let Some(item) = self.lsp.take_completion() else {
+            return false;
+        };
+        let Some(doc) = self.ws.active_doc_mut() else {
+            return false;
+        };
+        let caret = doc.caret();
+        let mut start = caret;
+        while start > 0 {
+            let previous = doc.text()[..start]
+                .chars()
+                .next_back()
+                .map(|ch| ch.len_utf8())
+                .unwrap_or(0);
+            let ch = doc.text()[start - previous..start]
+                .chars()
+                .next()
+                .unwrap_or(' ');
+            if !(ch.is_alphanumeric() || ch == '_') {
+                break;
+            }
+            start -= previous;
+        }
+        if doc.replace_range(start, caret, &item.insert) {
+            self.editor.reveal = true;
+            self.status(format!("completed {}", item.label));
+            self.dirty = true;
+        }
+        true
+    }
+
+    /// Keys owned by the completion popup. Returns false for keys the editor
+    /// should still handle.
+    pub fn lsp_completion_key(&mut self, key: Key) -> bool {
+        if self.lsp.completion.is_none() {
+            return false;
+        }
+        match key {
+            Key::Escape => self.lsp.completion = None,
+            Key::ArrowUp => self.lsp.move_completion(-1),
+            Key::ArrowDown => self.lsp.move_completion(1),
+            Key::Enter | Key::Tab => {
+                self.apply_lsp_completion();
+            }
+            _ => return false,
+        }
+        self.dirty = true;
+        true
+    }
+
     pub fn tick_git(&mut self) {
         let events = if let Some(worker) = &self.git.worker {
             let mut events = Vec::new();
@@ -1664,6 +1802,7 @@ impl AppState {
         }
         self.settings_open = false;
         self.quick_open.open = false;
+        self.lsp.dismiss_transient();
         if self.search.open {
             self.close_project_search();
         }
@@ -1762,6 +1901,7 @@ impl AppState {
         }
         self.settings_open = false;
         self.menu_open = None;
+        self.lsp.dismiss_transient();
         if self.search.open {
             self.close_project_search();
         }
@@ -1848,6 +1988,7 @@ impl AppState {
         self.settings_open = false;
         self.quick_open.open = false;
         self.menu_open = None;
+        self.lsp.dismiss_transient();
         self.search.open = true;
         self.search.query.select_all();
         self.search.focus = SearchFocus::Query;
@@ -2867,6 +3008,7 @@ impl AppState {
     pub fn open_find(&mut self, replace: bool) {
         self.settings_open = false;
         self.quick_open.open = false;
+        self.lsp.dismiss_transient();
         if self.search.open {
             self.close_project_search();
         }
@@ -3451,6 +3593,9 @@ impl AppState {
             Action::Find => self.open_find(false),
             Action::QuickOpen => self.open_quick_open(),
             Action::ProjectSearch => self.open_project_search(),
+            Action::LspHover => self.request_lsp_hover(),
+            Action::LspCompletion => self.request_lsp_completion(),
+            Action::LspDefinition => self.request_lsp_definition(),
             Action::Settings => self.toggle_settings(),
             Action::ToggleSidebar => {
                 self.show_sidebar = !self.show_sidebar;

@@ -913,6 +913,79 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     }
     env.ctx.restore();
 
+    // Language-server diagnostics: a thin severity-colored underline on the
+    // affected range, plus a gutter marker on the first line.
+    {
+        let doc = state.ws.active_doc().expect("checked above");
+        let diagnostics: Vec<crate::model::lsp::Diagnostic> = doc
+            .path()
+            .map(|path| state.lsp.diagnostics_for(path).to_vec())
+            .unwrap_or_default();
+        if !diagnostics.is_empty() {
+            env.ctx.save();
+            env.ctx.clip_rect(text_rect);
+            for vis in &vis {
+                let y = row_y(vis.row);
+                for diagnostic in &diagnostics {
+                    if diagnostic.start_line != vis.line {
+                        continue;
+                    }
+                    let line_text = doc.line(vis.line);
+                    let line_start = doc.line_start(vis.line);
+                    let start = crate::model::lsp::byte_for_position(
+                        doc,
+                        diagnostic.start_line as u32,
+                        diagnostic.start_char as u32,
+                    )
+                    .saturating_sub(line_start);
+                    let end = if diagnostic.end_line == diagnostic.start_line {
+                        crate::model::lsp::byte_for_position(
+                            doc,
+                            diagnostic.end_line as u32,
+                            diagnostic.end_char as u32,
+                        )
+                        .saturating_sub(line_start)
+                    } else {
+                        line_text.len()
+                    };
+                    let start = start.min(line_text.len());
+                    let end = end.min(line_text.len()).max(start);
+                    // Only the visual row that owns the diagnostic start paints
+                    // it, and the underline never spills into the next row.
+                    let start_column = line_text[..start].chars().count();
+                    let row = if wrap_on {
+                        state
+                            .editor
+                            .wrap
+                            .row_of(vis.line, start_column)
+                            .unwrap_or(vis.row)
+                    } else {
+                        vis.line
+                    };
+                    if vis.row != row {
+                        continue;
+                    }
+                    let row_start_x = if wrap_on {
+                        x_in_line(measurer, line_text, vis.start_byte, font, tab)
+                    } else {
+                        0.0
+                    };
+                    let end = end.min(vis.end_byte).max(start);
+                    let x0 = x_in_line(measurer, line_text, start, font, tab) - row_start_x;
+                    let x1 = x_in_line(measurer, line_text, end, font, tab) - row_start_x;
+                    env.ctx.fill_rect(
+                        Rect::from_min_size(
+                            Vec2::new(text_rect.left() + pad + x0 - scroll_x, y + line_h - 2.0),
+                            Size::new((x1 - x0).max(3.0), 1.5),
+                        ),
+                        state.lsp.diagnostic_color(diagnostic.severity, &p),
+                    );
+                }
+            }
+            env.ctx.restore();
+        }
+    }
+
     // IME preedit at the caret (composition text is not committed yet).
     if let Some((text, _cursor)) = preedit {
         let doc = state.ws.active_doc().expect("checked above");
@@ -1066,6 +1139,27 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                     p.faint
                 },
             );
+            let severity = state
+                .ws
+                .active_doc()
+                .and_then(|doc| doc.path())
+                .and_then(|path| {
+                    state
+                        .lsp
+                        .diagnostics_for(path)
+                        .iter()
+                        .find(|diagnostic| diagnostic.start_line == vis.line)
+                        .map(|diagnostic| diagnostic.severity)
+                });
+            if let Some(severity) = severity {
+                env.ctx.fill_rect(
+                    Rect::from_min_size(
+                        Vec2::new(gutter_rect.left() + 3.0, y + line_h * 0.5 - 2.0),
+                        Size::new(4.0, 4.0),
+                    ),
+                    state.lsp.diagnostic_color(severity, &p),
+                );
+            }
         }
     }
 

@@ -5,6 +5,7 @@ pub mod editor;
 pub mod find_bar;
 pub mod git;
 pub mod handle;
+pub mod lsp;
 pub mod menu;
 pub mod modal;
 pub mod new_file;

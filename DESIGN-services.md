@@ -1,6 +1,6 @@
 # Native services and built-in plugins
 
-Status: Git status/diff/stage/unstage/commit and the first native PTY terminal slice are implemented. Extension host remains deferred.
+Status: Git status/diff/stage/unstage/commit, the first native PTY terminal slice, and Rust LSP (rust-analyzer) are implemented. Extension host remains deferred.
 
 ## Intent
 
@@ -37,12 +37,18 @@ BuiltinPlugin (compile time)
 ```text
 git.read.status
 git.read.diff
+git.read.log
+git.read.commit
 git.write.stage
 git.write.commit
 terminal.create
 terminal.write
 terminal.resize
 terminal.close
+lsp.diagnostics
+lsp.hover
+lsp.completion
+lsp.definition
 ```
 
 Git read + stage/unstage/commit are wired. Terminal capabilities are declared;
@@ -83,3 +89,62 @@ same service.
 1. Git M8.2: stage/unstage/commit/discard, status-bar branch chip.
 2. Terminal service + panel.
 3. Extension host (deferred): JSON-RPC/WASM mapping of the same capabilities.
+
+## LSP service (Rust first)
+
+Status: Rust (`rust-analyzer`) diagnostics, hover, completion and definition are
+implemented. The client is language-agnostic; the built-in Rust plugin registers
+one declarative `LanguageServerSpec`.
+
+```text
+PluginHost
+ └─ language_server(LanguageServerSpec)
+       id, language, extensions, project_markers,
+       command / command_env, args
+```
+
+- **Process**: one stdio JSON-RPC child per project root, lazily started when an
+  owned file is active and a `project_markers` file exists (`Cargo.toml` for
+  Rust). stdout framing is read on a thread; writes are serialized on a writer
+  thread. `stderr` is discarded.
+- **Sync**: full-text `didOpen` / `didChange` / `didClose`; edits are debounced
+  (140 ms) and use LSP UTF-16 positions.
+- **Server requests**: `workspace/configuration`, `workspace/workspaceFolders`,
+  `client/registerCapability` and progress requests are answered defensively so
+  a server cannot stall the UI.
+- **UI state**: diagnostics are keyed by path and painted as underlines + gutter
+  markers; hover and completion are transient overlays. Nothing is persisted.
+- **Rust spec**: command `rust-analyzer`, overridable with
+  `IGUI_EDITOR_RUST_ANALYZER` (tests use a scripted server); arguments are
+  passed directly, never through a shell.
+
+Capabilities:
+
+```text
+lsp.diagnostics
+lsp.hover
+lsp.completion
+lsp.definition
+```
+
+### Dynamic/data-only contributions
+
+`LanguageServerSpec` uses owned strings, and `LanguagePack` accepts an optional
+`lsp` object. A language pack can therefore add a server without a rebuild:
+
+```json
+"lsp": {
+  "id": "lua-ls",
+  "language": "lua",
+  "extensions": ["lua"],
+  "project_markers": ["stylua.toml"],
+  "command": "lua-language-server",
+  "args": ["--stdio"]
+}
+```
+
+Built-in server ids win collisions. A future external extension host can
+deserialize the same spec and expose the same capabilities; native code still
+ships only as compile-time built-in plugins (no Rust dylib ABI). Running a
+server command executes a local process, so future UI should add an explicit
+trust/permission prompt for third-party packs.

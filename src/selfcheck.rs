@@ -41,10 +41,12 @@ const NOTES_MD: &str = "# Notes\n\n## Notes\n\n- square corners\n- compact rows\
 
 pub fn run() -> Result<(), String> {
     let dir = fixture()?;
-    let result = check(&dir).and_then(|()| check_workspace_and_recovery(&dir));
+    let result = check(&dir)
+        .and_then(|()| check_workspace_and_recovery(&dir))
+        .and_then(|()| check_lsp(&dir));
     let _ = fs::remove_dir_all(&dir);
     if result.is_ok() {
-        println!("selfcheck ok: main flow + workspace/recovery checks");
+        println!("selfcheck ok: main flow + workspace/recovery + LSP checks");
     }
     result
 }
@@ -3182,6 +3184,206 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
     if harness.app.state().terminal.open {
         return Err("Ctrl+` did not close the terminal".into());
     }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn check_lsp(dir: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let project = dir.join("lsp-project");
+    fs::create_dir_all(project.join("src")).map_err(|error| format!("lsp fixture: {error}"))?;
+    fs::write(
+        project.join("Cargo.toml"),
+        "[package]\nname = \"lsp-fixture\"\nversion = \"0.1.0\"\n",
+    )
+    .map_err(|error| format!("lsp fixture: {error}"))?;
+    let main = project.join("src").join("main.rs");
+    fs::write(
+        &main,
+        "fn main() {\n    let diagnostic = 1;\n    println!(\"hello\");\n}\n",
+    )
+    .map_err(|error| format!("lsp fixture: {error}"))?;
+    let server = project.join("fake-lsp.py");
+    fs::write(
+        &server,
+        r#"#!/usr/bin/env python3
+import sys, json
+
+def read():
+    headers = {}
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line:
+            return None
+        line = line.decode("ascii", "replace").strip()
+        if not line:
+            break
+        key, value = line.split(":", 1)
+        headers[key.strip().lower()] = value.strip()
+    return json.loads(sys.stdin.buffer.read(int(headers["content-length"])))
+
+def send(message):
+    body = json.dumps(message).encode()
+    sys.stdout.buffer.write(("Content-Length: %d\r\n\r\n" % len(body)).encode())
+    sys.stdout.buffer.write(body)
+    sys.stdout.buffer.flush()
+
+while True:
+    message = read()
+    if message is None:
+        break
+    method = message.get("method")
+    request_id = message.get("id")
+    params = message.get("params", {})
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": request_id, "result": {"capabilities": {}}})
+    elif method == "textDocument/didOpen":
+        uri = params["textDocument"]["uri"]
+        send({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": {
+            "uri": uri,
+            "diagnostics": [{
+                "range": {"start": {"line": 1, "character": 8}, "end": {"line": 1, "character": 18}},
+                "severity": 1,
+                "message": "fake diagnostic",
+            }],
+        }})
+    elif method == "textDocument/hover":
+        send({"jsonrpc": "2.0", "id": request_id, "result": {"contents": {"kind": "markdown", "value": "lsp hover card"}}})
+    elif method == "textDocument/completion":
+        send({"jsonrpc": "2.0", "id": request_id, "result": {"items": [{"label": "completion_item", "detail": "fake"}]}})
+    elif method == "textDocument/definition":
+        uri = params["textDocument"]["uri"]
+        send({"jsonrpc": "2.0", "id": request_id, "result": [{
+            "uri": uri,
+            "range": {"start": {"line": 2, "character": 4}, "end": {"line": 2, "character": 9}},
+        }]})
+"#,
+    )
+    .map_err(|error| format!("lsp fixture: {error}"))?;
+    let mut permissions = fs::metadata(&server)
+        .map_err(|error| format!("lsp fixture: {error}"))?
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&server, permissions).map_err(|error| format!("lsp fixture: {error}"))?;
+
+    let previous = std::env::var_os("IGUI_EDITOR_RUST_ANALYZER");
+    std::env::set_var("IGUI_EDITOR_RUST_ANALYZER", &server);
+    let result = check_lsp_flow(dir, &main);
+    match previous {
+        Some(value) => std::env::set_var("IGUI_EDITOR_RUST_ANALYZER", value),
+        None => std::env::remove_var("IGUI_EDITOR_RUST_ANALYZER"),
+    }
+    result
+}
+
+fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
+    let config = dir.join("lsp-session.conf");
+    let mut harness = Harness::new(
+        Some(main.to_path_buf()),
+        config,
+        ScriptedDialogs::new(vec![]),
+    );
+    let path = canonical_target(main.to_path_buf());
+
+    for _ in 0..150 {
+        harness.frame()?;
+        if !harness.app.state().lsp.diagnostics_for(&path).is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    {
+        let state = harness.app.state();
+        let diagnostics = state.lsp.diagnostics_for(&path);
+        if diagnostics.len() != 1 || diagnostics[0].message != "fake diagnostic" {
+            return Err(format!(
+                "LSP diagnostics missing: {:?} status {:?}",
+                diagnostics.len(),
+                state.lsp.status()
+            ));
+        }
+        if state.lsp.summary(Some(&path)).as_deref() != Some("LSP 1E 0W") {
+            return Err("LSP footer summary is wrong".into());
+        }
+    }
+
+    let frame = harness.frame()?;
+    let error = crate::theme::Theme::new(Mode::Dark).p.error.to_rgba8();
+    if !frame.commands().iter().any(|command| {
+        matches!(
+            command,
+            DrawCommand::FillRect { rect, paint }
+                if paint.color.to_rgba8() == error && rect.size.height <= 2.0
+        )
+    }) {
+        return Err("LSP diagnostic underline was not painted".into());
+    }
+
+    // Hover: F1, wait for the response, and assert the overlay is painted.
+    harness.key(Key::F1);
+    for _ in 0..100 {
+        harness.frame()?;
+        if harness.app.state().lsp.hover.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let frame = harness.frame()?;
+    if !texts(&frame).iter().any(|text| text == "lsp hover card") {
+        return Err("LSP hover overlay was not painted".into());
+    }
+
+    // Completion: Ctrl+Space, navigate, insert.
+    harness.shortcut(
+        Key::Space,
+        Modifiers {
+            ctrl: true,
+            ..Modifiers::NONE
+        },
+    );
+    for _ in 0..100 {
+        harness.frame()?;
+        if harness.app.state().lsp.completion.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let frame = harness.frame()?;
+    if !texts(&frame).iter().any(|text| text == "completion_item") {
+        return Err("LSP completion overlay was not painted".into());
+    }
+    harness.key(Key::Enter);
+    harness.frame()?;
+    if !harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .is_some_and(|doc| doc.text().starts_with("completion_item"))
+    {
+        return Err("LSP completion was not inserted".into());
+    }
+
+    // Definition: F12 returns a location in the same file.
+    harness.key(Key::F12);
+    for _ in 0..100 {
+        harness.frame()?;
+        let state = harness.app.state();
+        if state
+            .ws
+            .active_doc()
+            .is_some_and(|doc| doc.line_col().0 == 2)
+        {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    Err("LSP definition did not move the caret".into())
+}
+
+#[cfg(not(unix))]
+fn check_lsp(_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
