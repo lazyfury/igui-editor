@@ -2813,10 +2813,14 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
     git(&["config", "user.email", "selfcheck@example.com"])?;
     git(&["config", "user.name", "selfcheck"])?;
     let tracked = repo.join("tracked.txt");
-    fs::write(&tracked, "one\n").map_err(|error| format!("fixture: {error}"))?;
+    let original: String = (0..80).map(|index| format!("line {index}\n")).collect();
+    fs::write(&tracked, original).map_err(|error| format!("fixture: {error}"))?;
     git(&["add", "tracked.txt"])?;
     git(&["commit", "-qm", "initial"])?;
-    fs::write(&tracked, "two\n").map_err(|error| format!("fixture: {error}"))?;
+    let changed: String = (0..80)
+        .map(|index| format!("changed line {index}\n"))
+        .collect();
+    fs::write(&tracked, changed).map_err(|error| format!("fixture: {error}"))?;
     fs::write(repo.join("new.txt"), "new\n").map_err(|error| format!("fixture: {error}"))?;
     let mut harness = Harness::new(
         Some(tracked.clone()),
@@ -2893,9 +2897,21 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
             return Err("clicking a Git file did not open the diff".into());
         }
         let diff = state.git.diff.as_ref().ok_or("Git diff did not load")?;
-        if !diff.text.contains("+two") {
+        if !diff.text.contains("+changed line 0") {
             return Err(format!("Git diff is missing the change: {:?}", diff.text));
         }
+    }
+    let diff_panel = crate::ui::git::diff_layout(&harness.app.state()).0;
+    let before = harness.app.state().git.diff_scroll;
+    harness.event(InputEvent::Wheel {
+        position: diff_panel.center(),
+        delta: Vec2::new(0.0, 40.0),
+        phase: igui_core::TouchPhase::Moved,
+        device: igui_core::ScrollDevice::Wheel,
+    });
+    harness.frame()?;
+    if harness.app.state().git.diff_scroll <= before {
+        return Err("Git diff wheel direction is reversed".into());
     }
     harness.key(Key::Escape);
     if harness.app.state().git.diff_visible {

@@ -116,7 +116,8 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
         let state = state.clone();
         move |tree, _id, delta| {
             let mut state = state.borrow_mut();
-            state.preview.scroll += delta.y;
+            let max = (state.preview.total_h - state.preview.rect.height()).max(0.0);
+            crate::ui::scroll::apply(&mut state.preview.scroll, delta.y, max);
             state.dirty = true;
             igui_ui::request_paint(tree);
         }

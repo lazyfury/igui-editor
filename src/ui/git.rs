@@ -508,7 +508,7 @@ pub fn paint_diff(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut P
     let line_h = (m.font_ui + 4.0).max(16.0);
     let lines: Vec<&str> = diff.text.lines().collect();
     let max_scroll = (lines.len() as f32 * line_h - body.height()).max(0.0);
-    state.git.diff_scroll = state.git.diff_scroll.clamp(0.0, max_scroll);
+    crate::ui::scroll::clamp(&mut state.git.diff_scroll, max_scroll);
     ctx.save();
     ctx.clip_rect(body);
     let first = (state.git.diff_scroll / line_h).floor() as usize;
@@ -628,7 +628,7 @@ pub fn paint_commit_detail(
     let line_h = (m.font_small + 4.0).max(15.0);
     let lines: Vec<&str> = detail.diff.lines().collect();
     let max_scroll = (lines.len() as f32 * line_h - body.height()).max(0.0);
-    state.git.detail_scroll = state.git.detail_scroll.clamp(0.0, max_scroll);
+    crate::ui::scroll::clamp(&mut state.git.detail_scroll, max_scroll);
     ctx.save();
     ctx.clip_rect(body);
     let first = (state.git.detail_scroll / line_h).floor() as usize;
@@ -678,7 +678,7 @@ pub fn wheel_commit_detail(state: &mut AppState, delta: Vec2) -> bool {
         .map_or(0, |detail| detail.diff.lines().count());
     let (panel, _) = detail_layout(state);
     let max = (lines as f32 * line_h - (panel.height() - 60.0)).max(0.0);
-    state.git.detail_scroll = (state.git.detail_scroll - delta.y).clamp(0.0, max);
+    crate::ui::scroll::apply(&mut state.git.detail_scroll, delta.y, max);
     state.dirty = true;
     true
 }
@@ -866,7 +866,7 @@ pub fn wheel_diff(state: &mut AppState, delta: Vec2) -> bool {
         .map_or(0, |diff| diff.text.lines().count());
     let (panel, _) = diff_layout(state);
     let max = (lines as f32 * line_h - (panel.height() - 58.0)).max(0.0);
-    state.git.diff_scroll = (state.git.diff_scroll - delta.y).clamp(0.0, max);
+    crate::ui::scroll::apply(&mut state.git.diff_scroll, delta.y, max);
     state.dirty = true;
     true
 }

@@ -102,7 +102,7 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
             let content = state.ws.tree.rows().len() as f32 * row_h;
             let view = (state.sidebar.rect.height() - HEADER_H).max(0.0);
             let max = (content - view).max(0.0);
-            state.sidebar.scroll = (state.sidebar.scroll - delta.y).clamp(0.0, max);
+            crate::ui::scroll::apply(&mut state.sidebar.scroll, delta.y, max);
             state.dirty = true;
             igui_ui::request_paint(tree);
         }
