@@ -17,6 +17,7 @@ const COMPLETION_ROW_H: f32 = 22.0;
 const COMPLETION_MAX_ROWS: usize = 10;
 
 pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintContext) {
+    state.lsp.hover_rect = Rect::ZERO;
     if state.lsp.completion.is_some() {
         paint_completion(state, measurer, ctx);
     } else if state.lsp.hover.is_some() {
@@ -79,6 +80,7 @@ fn paint_hover(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut Pain
         origin.y = (viewport.bottom() - height - 8.0).max(viewport.top() + 8.0);
     }
     let panel = Rect::from_min_size(origin, Size::new(max_width, height));
+    state.lsp.hover_rect = panel;
     kit::fill(ctx, panel, p.raised);
     ctx.stroke_rect(panel, 1.0, p.border);
     kit::hline(ctx, panel.left(), panel.right(), panel.top(), p.accent);

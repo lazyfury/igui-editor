@@ -330,6 +330,7 @@ impl EditorApp {
                     }
                 }
                 state.clear_hover_target();
+                state.hover_leave_at = None;
                 // The bar sits above the drop-down: a press on a bar item
                 // toggles that menu (including closing the open one).
                 if state.git.detail_visible {
@@ -527,10 +528,16 @@ impl EditorApp {
                 if tab_menu_changed || tree_menu_changed {
                     state.dirty = true;
                 }
-                if state.focus == Focus::Editor
+                let over_hover =
+                    state.lsp.hover.is_some() && state.lsp.hover_rect.contains(*position);
+                if over_hover {
+                    state.hover_leave_at = None;
+                    state.clear_hover_target();
+                } else if state.focus == Focus::Editor
                     && state.editor.text_rect.contains(*position)
                     && state.editor.drag == crate::state::Drag::None
                 {
+                    state.hover_leave_at = None;
                     if let Some(byte) = ui::editor::byte_at(&state, *position, measurer.as_ref()) {
                         if let Some(doc) = state.ws.active_doc() {
                             let doc_id = doc.id();
@@ -541,8 +548,9 @@ impl EditorApp {
                     }
                 } else {
                     state.clear_hover_target();
-                    state.lsp.hover = None;
-                    state.lsp.hover_anchor = None;
+                    if state.lsp.hover.is_some() && state.hover_leave_at.is_none() {
+                        state.hover_leave_at = Some(std::time::Instant::now());
+                    }
                 }
                 ui::outline::hover_at(&mut state, *position);
                 drop(state);
@@ -769,8 +777,10 @@ impl EditorApp {
                 {
                     let mut state = self.state.borrow_mut();
                     state.clear_hover_target();
+                    state.hover_leave_at = None;
                     state.lsp.hover = None;
                     state.lsp.hover_anchor = None;
+                    state.lsp.hover_rect = igui_core::Rect::ZERO;
                 }
                 igui_ui::route_input(&mut self.tree, event)
             }
@@ -849,6 +859,7 @@ impl EditorApp {
             || self.state.borrow().terminal.open
             || self.state.borrow().lsp.is_busy()
             || self.state.borrow().hover_waiting()
+            || self.state.borrow().hover_dismissing()
             || self.state.borrow().message.is_some()
     }
 

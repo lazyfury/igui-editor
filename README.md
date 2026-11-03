@@ -124,7 +124,9 @@ is no server for loose files or non-project buffers.
 - `F1` shows server hover, `F12` jumps to definition (macOS top-row media keys
   may need `Fn`; `⌘⇧I` / `⌘⇧D` are also available), and `⌘I` (`Ctrl+I` on
   Linux/Windows) opens completion.
-- Moving the mouse over code for about 350 ms opens the same hover card.
+- Moving the mouse over code for about 350 ms opens the same hover card. The
+  card stays while the pointer is over it, and gets a short grace period when
+  the pointer leaves the editor.
   Holding Control and clicking an identifier asks LSP for its definition; Cmd
   +click does the same on macOS. `Ctrl+Space` also works where the OS does
   not reserve it for input-method switching. Completion uses `↑`/`↓`,

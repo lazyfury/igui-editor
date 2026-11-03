@@ -1024,6 +1024,7 @@ pub struct AppState {
     pub outline_node: Option<NodeId>,
     pub outline_drag: Option<(f32, f32)>,
     pub hover_target: Option<HoverTarget>,
+    pub hover_leave_at: Option<Instant>,
     pub editor: EditorUi,
     pub tabs: TabsUi,
     pub tab_drag: Option<TabDrag>,
@@ -1160,6 +1161,7 @@ impl AppState {
             outline_node: None,
             outline_drag: None,
             hover_target: None,
+            hover_leave_at: None,
             editor: EditorUi {
                 reveal: true,
                 wrap: crate::model::wrap::WrapLayout::default(),
@@ -1794,6 +1796,7 @@ impl AppState {
 
     pub fn request_lsp_hover(&mut self) {
         self.hover_target = None;
+        self.hover_leave_at = None;
         let Some(doc) = self.ws.active_doc() else {
             return;
         };
@@ -1811,8 +1814,7 @@ impl AppState {
             .hover_target
             .is_none_or(|target| target.doc != doc || target.byte != byte);
         if changed {
-            self.lsp.hover = None;
-            self.lsp.hover_anchor = None;
+            self.hover_leave_at = None;
             self.hover_target = Some(HoverTarget {
                 doc,
                 byte,
@@ -1828,6 +1830,13 @@ impl AppState {
         self.hover_target = None;
     }
 
+    /// Keeps a hover card alive while the pointer is over it or in a short
+    /// leave grace period.
+    pub fn hover_dismissing(&self) -> bool {
+        self.hover_leave_at
+            .is_some_and(|at| at.elapsed() < Duration::from_millis(1_500))
+    }
+
     /// Whether a delayed hover still needs frames before it requests.
     pub fn hover_waiting(&self) -> bool {
         self.hover_target
@@ -1836,6 +1845,15 @@ impl AppState {
 
     /// Fires the pending hover request once the dwell time has passed.
     pub fn tick_hover(&mut self) {
+        if let Some(at) = self.hover_leave_at {
+            if at.elapsed() >= Duration::from_millis(1_500) {
+                self.hover_leave_at = None;
+                self.lsp.hover = None;
+                self.lsp.hover_anchor = None;
+                self.lsp.hover_rect = igui_core::Rect::ZERO;
+                self.dirty = true;
+            }
+        }
         let Some(target) = self.hover_target else {
             return;
         };
@@ -1866,6 +1884,7 @@ impl AppState {
 
     pub fn request_lsp_definition_at(&mut self, byte: usize) -> bool {
         self.hover_target = None;
+        self.hover_leave_at = None;
         self.lsp.hover = None;
         self.lsp.hover_anchor = None;
         let Some(doc) = self.ws.active_doc() else {

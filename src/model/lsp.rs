@@ -434,6 +434,8 @@ pub struct LspController {
     failed: Option<(PathBuf, Instant)>,
     pub hover: Option<HoverUi>,
     pub hover_anchor: Option<igui_core::Vec2>,
+    /// Last painted hover card, used to keep it alive while the pointer enters it.
+    pub hover_rect: igui_core::Rect,
     pub completion: Option<CompletionUi>,
     location: Option<Location>,
     changed: bool,
@@ -460,6 +462,7 @@ impl Default for LspController {
             failed: None,
             hover: None,
             hover_anchor: None,
+            hover_rect: igui_core::Rect::ZERO,
             completion: None,
             location: None,
             changed: false,
@@ -594,6 +597,7 @@ impl LspController {
         self.pending.clear();
         self.hover = None;
         self.hover_anchor = None;
+        self.hover_rect = igui_core::Rect::ZERO;
         self.completion = None;
         self.location = None;
     }
@@ -941,7 +945,8 @@ impl LspController {
         byte: usize,
         anchor: igui_core::Vec2,
     ) -> bool {
-        self.hover = None;
+        // Keep the previous card until the new response arrives; this avoids a
+        // flicker while the pointer moves between identifiers.
         self.hover_anchor = Some(anchor);
         self.completion = None;
         self.cancel_popup_requests();
@@ -1088,6 +1093,7 @@ impl LspController {
     pub fn dismiss_transient(&mut self) {
         self.hover = None;
         self.hover_anchor = None;
+        self.hover_rect = igui_core::Rect::ZERO;
         self.completion = None;
         self.cancel_popup_requests();
     }
