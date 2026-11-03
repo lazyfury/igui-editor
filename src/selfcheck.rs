@@ -3048,6 +3048,16 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
     if !draw_text_has_color(&frame, "TERMINAL", accent) {
         return Err("focused terminal header was not accented".into());
     }
+    if let Some(caret) = harness.app.caret() {
+        if !harness.app.state().terminal.rect.contains(caret.center()) {
+            return Err(format!(
+                "terminal IME caret is not at the terminal cursor: caret={caret:?} body={:?}",
+                harness.app.state().terminal.rect
+            ));
+        }
+    } else {
+        return Err("terminal has no IME caret rect".into());
+    }
     let editor_center = harness.app.state().editor.text_rect.center();
     harness.click(editor_center);
     let frame = harness.frame()?;

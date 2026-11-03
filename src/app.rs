@@ -515,7 +515,14 @@ impl EditorApp {
                     return EventResult::Handled;
                 }
                 if state.focus == Focus::Terminal && !modifiers.meta {
-                    if let Some(bytes) = ui::terminal::encode_key(*key, modifiers) {
+                    let application_cursor = state
+                        .terminal
+                        .parser
+                        .as_ref()
+                        .is_some_and(|parser| parser.screen().application_cursor());
+                    if let Some(bytes) =
+                        ui::terminal::encode_key(*key, modifiers, application_cursor)
+                    {
                         state.terminal_write(&bytes);
                     }
                     return EventResult::Handled;
@@ -649,6 +656,11 @@ impl EditorApp {
     }
 
     pub fn caret(&self) -> Option<Rect> {
+        let state = self.state.borrow();
+        if state.terminal.open && state.focus == Focus::Terminal {
+            return Some(state.terminal.caret_rect);
+        }
+        drop(state);
         igui_ui::focused_caret(&self.tree)
     }
 
@@ -660,6 +672,7 @@ impl EditorApp {
         self.pending.is_some()
             || self.analysis_behind
             || self.state.borrow().search_busy()
+            || self.state.borrow().terminal.open
             || self.state.borrow().message.is_some()
     }
 

@@ -162,24 +162,26 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         }
     }
     let (crow, ccol) = screen.cursor_position();
-    if crow < rows && ccol < cols {
-        env.ctx.fill_rect(
-            Rect::from_min_size(
-                Vec2::new(
-                    body.left() + ccol as f32 * cell_w,
-                    body.top() + crow as f32 * line_h,
-                ),
-                Size::new(2.0, line_h),
-            ),
-            if focused { p.accent } else { p.faint },
-        );
-    }
+    let crow = crow.min(rows.saturating_sub(1));
+    let ccol = ccol.min(cols.saturating_sub(1));
+    let caret = Rect::from_min_size(
+        Vec2::new(
+            body.left() + ccol as f32 * cell_w,
+            body.top() + crow as f32 * line_h,
+        ),
+        Size::new(cell_w.max(2.0), line_h),
+    );
+    state.terminal.caret_rect = caret;
+    env.ctx.fill_rect(
+        Rect::from_min_size(caret.origin, Size::new(2.0, line_h)),
+        if focused { p.accent } else { p.faint },
+    );
     env.ctx.restore();
 }
 
 /// Encode a key for the PTY. Plain text is handled by TextInput; this covers
 /// named keys and control combinations.
-pub fn encode_key(key: Key, modifiers: Modifiers) -> Option<Vec<u8>> {
+pub fn encode_key(key: Key, modifiers: Modifiers, application_cursor: bool) -> Option<Vec<u8>> {
     let ctrl = modifiers.ctrl && !modifiers.meta;
     let alt = modifiers.alt;
     let mut bytes = Vec::new();
@@ -193,6 +195,10 @@ pub fn encode_key(key: Key, modifiers: Modifiers) -> Option<Vec<u8>> {
         Key::Delete => b"\x1b[3~".to_vec(),
         Key::Escape => vec![0x1b],
         Key::Space => b" ".to_vec(),
+        Key::ArrowUp if application_cursor => b"\x1bOA".to_vec(),
+        Key::ArrowDown if application_cursor => b"\x1bOB".to_vec(),
+        Key::ArrowRight if application_cursor => b"\x1bOC".to_vec(),
+        Key::ArrowLeft if application_cursor => b"\x1bOD".to_vec(),
         Key::ArrowUp => b"\x1b[A".to_vec(),
         Key::ArrowDown => b"\x1b[B".to_vec(),
         Key::ArrowRight => b"\x1b[C".to_vec(),
@@ -222,5 +228,33 @@ pub fn encode_key(key: Key, modifiers: Modifiers) -> Option<Vec<u8>> {
         Some(prefixed)
     } else {
         Some(bytes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn application_cursor_sequences_follow_vim_mode() {
+        assert_eq!(
+            encode_key(Key::ArrowUp, Modifiers::NONE, true),
+            Some(b"\x1bOA".to_vec())
+        );
+        assert_eq!(
+            encode_key(Key::ArrowUp, Modifiers::NONE, false),
+            Some(b"\x1b[A".to_vec())
+        );
+        assert_eq!(
+            encode_key(
+                Key::Character('c'),
+                Modifiers {
+                    ctrl: true,
+                    ..Modifiers::NONE
+                },
+                false
+            ),
+            Some(vec![3])
+        );
     }
 }

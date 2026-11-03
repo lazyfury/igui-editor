@@ -69,8 +69,10 @@ Git is a **built-in plugin** (`services/git.rs`) over a native worker
 Native PTY (`portable-pty`) + `vt100` screen, no WebView or JS. The panel sits
 below the editor with a 220 px fixed height for this first slice. It starts
 `$SHELL`, supports ANSI/256-color cells, cursor, resize, plain text, arrows,
-Ctrl letters and Alt prefixes. `Ctrl+\`` closes it and kills the child. Focus is
-visible: the active editor gets an accent top line and caret, the inactive caret
+Ctrl letters, Alt prefixes, application cursor mode (vim/less) and IME candidate
+placement at the terminal cursor. The terminal requests frames while a PTY is
+alive, so full-screen programs repaint without extra input. `Ctrl+\`` closes it
+and kills the child. Focus is visible: the active editor gets an accent top line and caret, the inactive caret
 dims, and the terminal header/cursor accent only while it owns keyboard focus.
 Terminal layout/state is not persisted yet; multiple sessions and a draggable
 top handle are follow-ups.

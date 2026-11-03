@@ -583,6 +583,7 @@ pub struct TerminalState {
     pub rows: u16,
     pub cols: u16,
     pub cwd: PathBuf,
+    pub caret_rect: Rect,
 }
 
 impl Default for TerminalState {
@@ -596,6 +597,7 @@ impl Default for TerminalState {
             rows: 24,
             cols: 80,
             cwd: PathBuf::from("."),
+            caret_rect: Rect::ZERO,
         }
     }
 }
