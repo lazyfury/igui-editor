@@ -3610,6 +3610,14 @@ while True:
         items += [{"label": "filler_%d" % i, "insertText": "filler_%d" % i} for i in range(300)]
         items += [{"label": "print(…)", "insertText": "print", "detail": "fake global"}]
         send({"jsonrpc": "2.0", "id": request_id, "result": {"items": items}})
+    elif method == "completionItem/resolve":
+        label = params.get("label", "")
+        send({"jsonrpc": "2.0", "id": request_id, "result": {
+            "label": label,
+            "detail": "resolved",
+            "documentation": {"kind": "markdown", "value":
+                "func @GlobalScope.print(...) -> void\n\nResolved completion docs."},
+        }})
     elif method == "textDocument/nativeSymbol":
         send({"jsonrpc": "2.0", "id": request_id, "result": {
             "name": "Node", "native_class": "Node",
@@ -3983,6 +3991,67 @@ fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
         return Err("native hover did not paint the docs action".into());
     }
     harness.app.state_mut().lsp.dismiss_transient();
+
+    // Typing an identifier schedules completion with a short debounce; the
+    // selected item gets a resolved hover-style preview.
+    if let Some(doc) = harness.app.state_mut().ws.active_doc_mut() {
+        let end = doc.text().len();
+        doc.set_caret(end);
+        doc.insert_text("\n");
+        let end = doc.text().len();
+        doc.set_caret(end);
+    }
+    harness.type_text("pri");
+    for _ in 0..100 {
+        harness.frame()?;
+        if harness.app.state().lsp.completion.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    for _ in 0..100 {
+        harness.frame()?;
+        let state = harness.app.state();
+        if state
+            .lsp
+            .completion
+            .as_ref()
+            .is_some_and(|c| c.preview.is_some() || c.preview_pending)
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    {
+        let state = harness.app.state();
+        let completion = state.lsp.completion.as_ref();
+        if completion.is_none_or(|c| c.items.first().map(|i| i.insert.as_str()) != Some("print")) {
+            let doc = harness
+                .app
+                .state()
+                .ws
+                .active_doc()
+                .map(|d| (d.text().to_string(), d.caret()));
+            return Err(format!(
+                "automatic completion did not select global `print` (doc={doc:?}, items={:?})",
+                completion.map(|c| c
+                    .items
+                    .iter()
+                    .take(12)
+                    .map(|i| i.label.clone())
+                    .collect::<Vec<_>>())
+            ));
+        }
+        if !completion.is_some_and(|c| {
+            c.preview
+                .as_deref()
+                .is_some_and(|preview| preview.contains("Resolved completion docs"))
+        }) {
+            return Err("completion preview was not resolved".into());
+        }
+    }
+    harness.app.state_mut().lsp.dismiss_transient();
+    harness.frame()?;
 
     // Embedded Godot docs use the nativeSymbol response and BBCode links.
     {

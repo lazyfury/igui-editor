@@ -15,10 +15,13 @@ const HOVER_MAX_H: f32 = 300.0;
 const COMPLETION_W: f32 = 380.0;
 const COMPLETION_ROW_H: f32 = 22.0;
 const COMPLETION_MAX_ROWS: usize = 10;
+const COMPLETION_PREVIEW_W: f32 = 360.0;
+const COMPLETION_PREVIEW_MAX_H: f32 = 230.0;
 
 pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintContext) {
     state.lsp.hover_rect = Rect::ZERO;
     state.lsp.hover_doc_hit = Rect::ZERO;
+    state.lsp.completion_doc_hit = Rect::ZERO;
     if state.lsp.completion.is_some() {
         paint_completion(state, measurer, ctx);
     } else if state.lsp.hover.is_some() {
@@ -222,6 +225,106 @@ fn paint_completion(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut
         m.font_small,
         p.faint,
     );
+    paint_completion_preview(state, measurer, ctx, panel, viewport);
+}
+
+fn paint_completion_preview(
+    state: &mut AppState,
+    measurer: &dyn TextMeasurer,
+    ctx: &mut igui_render::PaintContext,
+    completion_panel: Rect,
+    viewport: Rect,
+) {
+    let Some(completion) = state.lsp.completion.as_ref() else {
+        return;
+    };
+    let text = match &completion.preview {
+        Some(text) => text.clone(),
+        None if completion.preview_pending => "Resolving documentation…".to_string(),
+        None => return,
+    };
+    let theme = state.theme;
+    let m = theme.m;
+    let p = theme.p;
+    let font = m.font_small;
+    let line_h = font + 5.0;
+    let width = COMPLETION_PREVIEW_W.min(viewport.width() - 24.0);
+    let mut lines = Vec::new();
+    for raw in text.lines() {
+        let trimmed = raw.trim_end();
+        if trimmed.trim_start().starts_with("```") {
+            continue;
+        }
+        let cleaned = trimmed
+            .strip_prefix("# ")
+            .or_else(|| trimmed.strip_prefix("## "))
+            .or_else(|| trimmed.strip_prefix("### "))
+            .unwrap_or(trimmed);
+        if cleaned.is_empty() {
+            lines.push(String::new());
+        } else {
+            wrap_line(cleaned, width - 20.0, measurer, font, &mut lines);
+        }
+    }
+    if lines.len() > 9 {
+        lines.truncate(9);
+        lines.push("…".into());
+    }
+    if lines.is_empty() {
+        lines.push(text.lines().next().unwrap_or("").to_string());
+    }
+    let has_docs = completion.preview.is_some();
+    let docs_h = if has_docs { 24.0 } else { 0.0 };
+    let height =
+        (lines.len() as f32 * line_h + 16.0 + docs_h).clamp(34.0, COMPLETION_PREVIEW_MAX_H);
+    let mut x = completion_panel.right() + 8.0;
+    if x + width > viewport.right() - 8.0 {
+        x = completion_panel.left() - width - 8.0;
+    }
+    x = x.clamp(
+        viewport.left() + 8.0,
+        (viewport.right() - width - 8.0).max(0.0),
+    );
+    let mut y = completion_panel.top();
+    if y + height > viewport.bottom() - 8.0 {
+        y = (viewport.bottom() - height - 8.0).max(viewport.top() + 8.0);
+    }
+    let panel = Rect::from_min_size(Vec2::new(x, y), Size::new(width, height));
+    kit::fill(ctx, panel, p.raised);
+    ctx.stroke_rect(panel, 1.0, p.border);
+    kit::hline(ctx, panel.left(), panel.right(), panel.top(), p.accent);
+    let mut row = panel.top() + 8.0;
+    for line in &lines {
+        kit::text(
+            ctx,
+            line,
+            panel.left() + 10.0,
+            row + measurer.ascent(font),
+            font,
+            if line.is_empty() { p.faint } else { p.text },
+        );
+        row += line_h;
+    }
+    if has_docs {
+        let docs = Rect::from_min_size(
+            Vec2::new(panel.left() + 10.0, panel.bottom() - 22.0),
+            Size::new(panel.width() - 20.0, 18.0),
+        );
+        state.lsp.completion_doc_hit = docs;
+        kit::hline(ctx, panel.left(), panel.right(), docs.top() - 3.0, p.border);
+        kit::text(
+            ctx,
+            if completion.native.is_some() {
+                "OPEN GODOT DOCS"
+            } else {
+                "OPEN DOCS"
+            },
+            docs.left(),
+            kit::baseline(measurer, docs, m.font_small),
+            m.font_small,
+            p.accent,
+        );
+    }
 }
 
 fn wrap_line(

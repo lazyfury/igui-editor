@@ -141,14 +141,19 @@ non-project buffers.
   the error detail.
 - `F1` shows server hover, `F12` jumps to definition (macOS top-row media keys
   may need `Fn`; `⌘⇧I` / `⌘⇧D` are also available), and `⌘I` (`Ctrl+I` on
-  Linux/Windows) opens completion. Completion results are filtered by the
+  Linux/Windows) opens completion. Typing an identifier also activates
+  completion after a 140 ms debounce. Completion results are filtered by the
   identifier prefix before the UI cap, so Godot global methods such as `print`
-  are found even though the server returns thousands of candidates.
+  are found even though the server returns thousands of candidates. The
+  selected item is resolved with `completionItem/resolve` and shows a
+  hover-style documentation preview; `OPEN GODOT DOCS` (or `OPEN DOCS` for
+  local methods) opens the embedded documentation panel.
 - When a hover is a Godot native class or member, the card shows **OPEN GODOT
   DOCS**; clicking it opens an embedded documentation panel backed by Godot's
   `textDocument/nativeSymbol` response. The panel renders BBCode references as
   clickable class/member links, supports Back and scrolling, and Ctrl/Cmd-click
-  a native class name opens the same panel.
+  a native class name opens the same panel. `_ready` and other local completion
+  items can open their resolved documentation as a plain embedded document.
 - Moving the mouse over code for about 350 ms opens the same hover card. The
   card stays while the pointer is over it, and gets a short grace period when
   the pointer leaves the editor.

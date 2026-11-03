@@ -222,6 +222,7 @@ impl EditorApp {
         self.state.borrow_mut().tick_external_changes();
         self.state.borrow_mut().tick_git();
         self.state.borrow_mut().tick_lsp();
+        self.state.borrow_mut().tick_auto_completion();
         self.state.borrow_mut().tick_hover();
         self.state.borrow_mut().tick_terminal();
         self.state.borrow_mut().tick_reliability();
@@ -350,6 +351,12 @@ impl EditorApp {
                 let definition_click = state.focus == Focus::Editor
                     && (igui_ui::modifiers(&self.tree).ctrl || igui_ui::modifiers(&self.tree).meta)
                     && state.editor.text_rect.contains(*position);
+                if state.lsp.completion_doc_hit.contains(*position)
+                    && state.lsp.completion.is_some()
+                {
+                    state.open_completion_docs();
+                    return EventResult::Handled;
+                }
                 let lsp_chip = state.lsp_hit.contains(*position);
                 if !lsp_chip && (state.lsp.hover.is_some() || state.lsp.completion.is_some()) {
                     state.lsp.dismiss_transient();
@@ -838,6 +845,7 @@ impl EditorApp {
                     input::find_text(&mut state, text);
                     return EventResult::Handled;
                 }
+                state.schedule_auto_completion(text);
                 drop(state);
                 igui_ui::route_input(&mut self.tree, event)
             }
@@ -926,6 +934,7 @@ impl EditorApp {
             || self.state.borrow().search_busy()
             || self.state.borrow().terminal.open
             || self.state.borrow().lsp.is_busy()
+            || self.state.borrow().auto_completion_pending()
             || self.state.borrow().hover_waiting()
             || self.state.borrow().hover_dismissing()
             || self.state.borrow().message.is_some()

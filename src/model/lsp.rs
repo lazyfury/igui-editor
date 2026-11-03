@@ -136,12 +136,19 @@ pub struct CompletionItem {
     pub label: String,
     pub insert: String,
     pub detail: String,
+    /// Original LSP item, sent back to `completionItem/resolve`.
+    pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
 pub struct CompletionUi {
     pub items: Vec<CompletionItem>,
     pub selected: usize,
+    /// Markdown/hover-like documentation for the selected item.
+    pub preview: Option<String>,
+    pub preview_pending: bool,
+    /// Set when the resolved declaration names a native Godot symbol.
+    pub native: Option<NativeTarget>,
 }
 
 #[derive(Clone, Debug)]
@@ -156,6 +163,7 @@ enum PendingKind {
     Initialize,
     Hover,
     Completion,
+    CompletionResolve { index: usize },
     Definition,
     NativeSymbol { class: String, symbol: String },
     Semantic(PathBuf),
@@ -618,6 +626,8 @@ pub struct LspController {
     pub hover_rect: igui_core::Rect,
     /// Hit rectangle for the hover card's "Open Docs" action.
     pub hover_doc_hit: igui_core::Rect,
+    /// Hit rectangle for the completion preview's docs action.
+    pub completion_doc_hit: igui_core::Rect,
     pub completion: Option<CompletionUi>,
     completion_prefix: String,
     native_classes: HashSet<String>,
@@ -650,6 +660,7 @@ impl Default for LspController {
             hover_anchor: None,
             hover_rect: igui_core::Rect::ZERO,
             hover_doc_hit: igui_core::Rect::ZERO,
+            completion_doc_hit: igui_core::Rect::ZERO,
             completion: None,
             completion_prefix: String::new(),
             native_classes: HashSet::new(),
@@ -762,6 +773,29 @@ impl LspController {
                 Some(PendingKind::Symbols(path)) => {
                     self.symbols_in_flight.remove(&path);
                 }
+                Some(PendingKind::CompletionResolve { index }) => {
+                    if let Some(completion) = self.completion.as_mut() {
+                        if completion.selected == index {
+                            completion.preview_pending = false;
+                            completion.preview = Some("Documentation request timed out.".into());
+                        }
+                    }
+                }
+                Some(PendingKind::NativeSymbol { class, symbol }) => {
+                    self.native_result = Some((
+                        class.clone(),
+                        symbol.clone(),
+                        NativeSymbol {
+                            name: symbol,
+                            native_class: class,
+                            detail: "Documentation unavailable".into(),
+                            documentation:
+                                "Godot LSP did not return documentation for this symbol.".into(),
+                            kind: 0,
+                            children: Vec::new(),
+                        },
+                    ));
+                }
                 Some(_) | None => {}
             }
         }
@@ -790,6 +824,7 @@ impl LspController {
         self.hover_anchor = None;
         self.hover_rect = igui_core::Rect::ZERO;
         self.hover_doc_hit = igui_core::Rect::ZERO;
+        self.completion_doc_hit = igui_core::Rect::ZERO;
         self.completion = None;
         self.completion_prefix.clear();
         self.native_classes.clear();
@@ -873,9 +908,33 @@ impl LspController {
             }
             PendingKind::Completion => {
                 let items = parse_completions(result, &self.completion_prefix);
-                self.completion =
-                    (!items.is_empty()).then_some(CompletionUi { items, selected: 0 });
+                self.completion = (!items.is_empty()).then_some(CompletionUi {
+                    items,
+                    selected: 0,
+                    preview: None,
+                    preview_pending: false,
+                    native: None,
+                });
+                if self.completion.is_some() {
+                    self.request_completion_resolve(0);
+                }
                 self.changed = true;
+            }
+            PendingKind::CompletionResolve { index } => {
+                if let Some(completion) = self.completion.as_mut() {
+                    if completion.selected == index {
+                        let text = completion_documentation(result).or_else(|| {
+                            completion.items.get(index).map(|item| item.detail.clone())
+                        });
+                        completion.preview = text;
+                        completion.preview_pending = false;
+                        completion.native = completion
+                            .preview
+                            .as_deref()
+                            .and_then(native_target_from_hover);
+                        self.changed = true;
+                    }
+                }
             }
             PendingKind::Definition => {
                 self.location = parse_location(result);
@@ -1132,8 +1191,14 @@ impl LspController {
     }
 
     fn cancel_popup_requests(&mut self) {
-        self.pending
-            .retain(|_, (kind, _)| !matches!(kind, PendingKind::Hover | PendingKind::Completion));
+        self.pending.retain(|_, (kind, _)| {
+            !matches!(
+                kind,
+                PendingKind::Hover
+                    | PendingKind::Completion
+                    | PendingKind::CompletionResolve { .. }
+            )
+        });
     }
 
     pub fn request_hover(&mut self, doc: &Document) -> bool {
@@ -1281,6 +1346,31 @@ impl LspController {
         self.location.take()
     }
 
+    fn request_completion_resolve(&mut self, index: usize) {
+        let Some(item) = self
+            .completion
+            .as_ref()
+            .and_then(|completion| completion.items.get(index))
+            .cloned()
+        else {
+            return;
+        };
+        let Some(client) = self.client.as_mut() else {
+            return;
+        };
+        if let Some(id) = client.request("completionItem/resolve", item.raw) {
+            if let Some(completion) = self.completion.as_mut() {
+                completion.preview_pending = true;
+                completion.preview = None;
+                completion.native = None;
+            }
+            self.pending.insert(
+                id,
+                (PendingKind::CompletionResolve { index }, Instant::now()),
+            );
+        }
+    }
+
     pub fn move_completion(&mut self, delta: isize) {
         let Some(completion) = self.completion.as_mut() else {
             return;
@@ -1290,6 +1380,8 @@ impl LspController {
         }
         let len = completion.items.len() as isize;
         completion.selected = (completion.selected as isize + delta).rem_euclid(len) as usize;
+        let selected = completion.selected;
+        self.request_completion_resolve(selected);
     }
 
     pub fn take_completion(&mut self) -> Option<CompletionItem> {
@@ -1302,6 +1394,7 @@ impl LspController {
         self.hover_anchor = None;
         self.hover_rect = igui_core::Rect::ZERO;
         self.hover_doc_hit = igui_core::Rect::ZERO;
+        self.completion_doc_hit = igui_core::Rect::ZERO;
         self.completion = None;
         self.cancel_popup_requests();
     }
@@ -1725,6 +1818,20 @@ fn markdown_value(value: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
+fn completion_documentation(result: &Value) -> Option<String> {
+    let documentation = result.get("documentation")?;
+    let text = match documentation {
+        Value::String(text) => text.clone(),
+        Value::Array(items) => items
+            .iter()
+            .filter_map(markdown_value)
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+        _ => markdown_value(documentation)?,
+    };
+    (!text.trim().is_empty()).then_some(text)
+}
+
 fn parse_completions(result: &Value, prefix: &str) -> Vec<CompletionItem> {
     let items = result
         .as_array()
@@ -1756,6 +1863,7 @@ fn parse_completions(result: &Value, prefix: &str) -> Vec<CompletionItem> {
                 label,
                 insert,
                 detail,
+                raw: item.clone(),
             })
         })
         .collect();

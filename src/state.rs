@@ -684,6 +684,8 @@ pub struct DocsUi {
     pub class: String,
     pub symbol: String,
     pub data: Option<crate::model::lsp::NativeSymbol>,
+    /// Resolved completion documentation when there is no native symbol.
+    pub plain: Option<String>,
     pub loading: bool,
     pub error: Option<String>,
     pub scroll: f32,
@@ -1061,6 +1063,8 @@ pub struct AppState {
     pub outline_drag: Option<(f32, f32)>,
     pub hover_target: Option<HoverTarget>,
     pub hover_leave_at: Option<Instant>,
+    /// Debounced auto-completion activation while typing.
+    pub auto_completion_at: Option<Instant>,
     pub editor: EditorUi,
     pub tabs: TabsUi,
     pub tab_drag: Option<TabDrag>,
@@ -1203,6 +1207,7 @@ impl AppState {
             outline_drag: None,
             hover_target: None,
             hover_leave_at: None,
+            auto_completion_at: None,
             editor: EditorUi {
                 reveal: true,
                 wrap: crate::model::wrap::WrapLayout::default(),
@@ -2017,6 +2022,7 @@ impl AppState {
         self.docs.class = class.clone();
         self.docs.symbol = symbol.clone();
         self.docs.data = cached;
+        self.docs.plain = None;
         self.docs.loading = self.docs.data.is_none();
         self.docs.error = None;
         self.docs.scroll = 0.0;
@@ -2033,6 +2039,7 @@ impl AppState {
         if self.docs.open {
             self.docs.open = false;
             self.docs.data = None;
+            self.docs.plain = None;
             self.docs.history.clear();
             self.docs.links.clear();
             self.dirty = true;
@@ -2043,6 +2050,44 @@ impl AppState {
         if let Some((class, symbol)) = self.docs.history.pop() {
             self.open_native_docs_at(class, symbol, false);
         }
+    }
+
+    /// Opens the resolved documentation for the selected completion item.
+    /// Native targets go through the native panel; local methods (for example
+    /// `_ready`) use a plain embedded document.
+    pub fn open_completion_docs(&mut self) {
+        let Some(completion) = self.lsp.completion.as_ref() else {
+            return;
+        };
+        let Some(item) = completion.items.get(completion.selected) else {
+            return;
+        };
+        let text = completion
+            .preview
+            .clone()
+            .unwrap_or_else(|| item.detail.clone());
+        let target = completion.native.clone();
+        let label = item.label.clone();
+        if let Some(target) = target {
+            self.open_native_docs(&target);
+            return;
+        }
+        if self.docs.open && (self.docs.class != "completion" || self.docs.symbol != label) {
+            self.docs
+                .history
+                .push((self.docs.class.clone(), self.docs.symbol.clone()));
+        }
+        self.docs.open = true;
+        self.docs.class = "completion".into();
+        self.docs.symbol = label;
+        self.docs.data = None;
+        self.docs.plain = Some(text);
+        self.docs.loading = false;
+        self.docs.error = None;
+        self.docs.scroll = 0.0;
+        self.docs.scroll_max = 0.0;
+        self.lsp.dismiss_transient();
+        self.dirty = true;
     }
 
     /// Opens a URL from a BBCode `[url]` span in the platform browser.
@@ -2076,7 +2121,56 @@ impl AppState {
         }
     }
 
+    /// Schedules completion after a short typing pause. Repeated characters
+    /// replace the deadline, so this is a debounce rather than a request per
+    /// keystroke.
+    pub fn schedule_auto_completion(&mut self, text: &str) {
+        if self.focus != Focus::Editor || self.docs.open || self.modal.is_some() {
+            return;
+        }
+        let Some(last) = text.chars().last() else {
+            return;
+        };
+        if self.ws.active_doc().is_some_and(|doc| doc.is_read_only()) {
+            return;
+        }
+        if last.is_ascii_alphanumeric() || matches!(last, '_' | '.') {
+            self.auto_completion_at = Some(Instant::now() + Duration::from_millis(140));
+        }
+    }
+
+    pub fn auto_completion_pending(&self) -> bool {
+        self.auto_completion_at.is_some()
+    }
+
+    /// Fires the debounced completion request without surfacing "no LSP"
+    /// errors while the user is merely typing.
+    pub fn tick_auto_completion(&mut self) {
+        let Some(at) = self.auto_completion_at else {
+            return;
+        };
+        if Instant::now() < at {
+            return;
+        }
+        self.auto_completion_at = None;
+        if self.focus != Focus::Editor
+            || self.docs.open
+            || self.modal.is_some()
+            || self.lsp.completion.is_some()
+            || self.lsp.hover.is_some()
+        {
+            return;
+        }
+        let Some(doc) = self.ws.active_doc() else {
+            return;
+        };
+        if self.lsp.request_completion(doc) {
+            self.dirty = true;
+        }
+    }
+
     pub fn request_lsp_completion(&mut self) {
+        self.auto_completion_at = None;
         let Some(doc) = self.ws.active_doc() else {
             return;
         };
@@ -2132,6 +2226,7 @@ impl AppState {
             }
             start -= previous;
         }
+        self.auto_completion_at = None;
         if doc.replace_range(start, caret, &item.insert) {
             self.editor.reveal = true;
             self.status(format!("completed {}", item.label));

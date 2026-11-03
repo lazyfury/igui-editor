@@ -230,6 +230,26 @@ fn build_lines(
             });
             add_children(&mut spans, data);
         }
+    } else if let Some(plain) = &docs.plain {
+        spans.push(DocSpan {
+            text: if docs.symbol.is_empty() {
+                "Documentation".into()
+            } else {
+                docs.symbol.clone()
+            },
+            style: DocStyle::Heading,
+            link: None,
+        });
+        spans.push(DocSpan {
+            text: "\n\n".into(),
+            style: DocStyle::Normal,
+            link: None,
+        });
+        spans.push(DocSpan {
+            text: plain.clone(),
+            style: DocStyle::Normal,
+            link: None,
+        });
     }
     wrap_spans(spans, measurer, font, max_width.max(80.0))
 }
