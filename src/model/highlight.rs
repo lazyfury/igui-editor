@@ -5,7 +5,9 @@
 //! stops as soon as the outgoing state matches the cached one **and** the edit
 //! range is behind it — that is the classic "state converged, the rest is
 //! unchanged" shortcut, so typing in a large file does not rehighlight
-//! everything.
+//! everything. The shortcut is only allowed when the cache was complete before
+//! the edit; while the initial budgeted pass is still behind, every remaining
+//! line must be tokenized because there is no cached suffix to reuse.
 //!
 //! Work is budgeted per frame; an unfinished pass resumes next frame
 //! (`AppState` reports `needs_frame` while the cache is behind).
@@ -122,10 +124,12 @@ impl HighlightCache {
             return true;
         };
 
+        let mut was_complete = self.complete;
         if self.doc != doc.id()
             || self.provider_name != Some(provider.name())
             || self.lines.len() != line_count
         {
+            was_complete = false;
             self.doc = doc.id();
             self.rev = doc.rev();
             self.provider_name = Some(provider.name());
@@ -139,10 +143,19 @@ impl HighlightCache {
             self.rev = doc.rev();
             self.complete = false;
             self.disabled = false;
-            self.resume = doc
+            // If the initial pass has not reached the edit yet, resume from
+            // the oldest unprocessed line. Jumping straight to the edit would
+            // leave every line before it with no tokens, which looks like the
+            // following code turning white.
+            let first = doc
                 .edit_span()
                 .map_or(0, |(first, _)| first)
                 .min(line_count);
+            self.resume = if was_complete {
+                first
+            } else {
+                self.resume.min(first)
+            };
         } else if self.complete {
             return true;
         }
@@ -167,7 +180,12 @@ impl HighlightCache {
             self.resume += 1;
             processed += 1;
 
-            let converged = doc.edit_span().is_some_and(|(_, last)| index >= last)
+            // The convergence shortcut is only safe when every line was
+            // already tokenized before this edit. During the initial budgeted
+            // pass there are no cached tokens after `resume`, so stopping here
+            // would leave later lines empty (plain/white).
+            let converged = was_complete
+                && doc.edit_span().is_some_and(|(_, last)| index >= last)
                 && previous_next == Some(next);
             if converged {
                 self.complete = true;
@@ -301,5 +319,77 @@ mod tests {
         assert!(cache.tokens(0).is_none());
         assert_eq!(cache.language(), Some("rust"));
         let _ = fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(test)]
+mod regression_tests {
+    use super::*;
+    use crate::model::doc::Document;
+
+    #[test]
+    fn editing_after_a_budgeted_initial_pass_does_not_skip_lines() {
+        let dir = std::env::temp_dir().join(format!(
+            "igui-editor-highlight-large-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("main.gd");
+        let text = "extends Node\n".to_string()
+            + &(0..3000)
+                .map(|i| format!("var value_{i} = {i}\n"))
+                .collect::<String>();
+        std::fs::write(&path, text).unwrap();
+        let mut doc = Document::open(1, &path).unwrap();
+        let mut cache = HighlightCache::new();
+        let registry = SyntaxRegistry::with_builtins();
+        let settings = Settings::default();
+        assert!(!cache.sync(&doc, &registry, &settings, 2000, None));
+        let line_start = doc.line_start(2500);
+        doc.set_caret(line_start);
+        doc.insert_text("var replaced = 0");
+        assert!(cache.sync(&doc, &registry, &settings, 5000, None));
+        assert!(
+            cache.tokens(2100).is_some_and(|tokens| !tokens.is_empty()),
+            "line 2100 was skipped"
+        );
+        assert!(
+            cache.tokens(2500).is_some_and(|tokens| !tokens.is_empty()),
+            "edited line was skipped"
+        );
+        assert!(
+            cache.tokens(2600).is_some_and(|tokens| !tokens.is_empty()),
+            "line 2600 was skipped"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn edit_middle_line_keeps_following_highlighting() {
+        let dir = std::env::temp_dir().join(format!(
+            "igui-editor-highlight-middle-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("main.gd");
+        let text = "extends Node\n\nfunc _ready():\n\tvar a = 1\n\tprint(\"a\")\n\nfunc two():\n\tprint(\"b\")\n\treturn 2\n";
+        std::fs::write(&path, text).unwrap();
+        let mut doc = Document::open(1, &path).unwrap();
+        let mut cache = HighlightCache::new();
+        let registry = SyntaxRegistry::with_builtins();
+        let settings = Settings::default();
+        assert!(cache.sync(&doc, &registry, &settings, 100, None));
+        // Edit line 3 (inside _ready), keeping line count unchanged.
+        let line_start = doc.line_start(3);
+        doc.set_caret(line_start);
+        doc.insert_text("var b = 2");
+        assert!(cache.sync(&doc, &registry, &settings, 100, None));
+        assert!(
+            cache.tokens(7).is_some_and(|tokens| !tokens.is_empty()),
+            "line 7 lost highlighting"
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
