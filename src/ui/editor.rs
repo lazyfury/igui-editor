@@ -390,6 +390,20 @@ fn drag_to(state: &mut AppState, pos: Vec2, _measurer: &dyn TextMeasurer) {
     }
 }
 
+fn diff_line_color(line: &str, p: &crate::theme::Palette) -> igui_core::Color {
+    if line.starts_with("+++") || line.starts_with("---") || line.starts_with("diff --git") {
+        p.dim
+    } else if line.starts_with('+') {
+        p.accent
+    } else if line.starts_with('-') {
+        p.error
+    } else if line.starts_with("@@") {
+        p.faint
+    } else {
+        p.text
+    }
+}
+
 fn move_wrapped_vertical(
     state: &mut AppState,
     up: bool,
@@ -824,6 +838,10 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     env.ctx.save();
     env.ctx.clip_rect(text_rect);
     let ascent = measurer.ascent(font);
+    let (git_view, preview_start) = {
+        let doc = state.ws.active_doc().expect("checked above");
+        (doc.is_git_view(), doc.preview_start())
+    };
     let mut scratch = String::new();
     for vis in &vis {
         let line_text = {
@@ -843,19 +861,24 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         let row_start_x = x_in_line(measurer, line_text, vis.start_byte, font, tab);
         let y = row_y(vis.row);
         let baseline = y + (line_h - font) * 0.5 + ascent;
+        let color = if git_view && preview_start.is_none_or(|start| vis.line < start) {
+            diff_line_color(segment, &p)
+        } else {
+            p.text
+        };
         env.ctx.draw_text_weighted(
             scratch.as_str(),
             Vec2::new(text_rect.left() + pad + row_start_x - scroll_x, baseline),
             font,
             FontWeight::NORMAL,
             TextAlign::Left,
-            p.text,
+            color,
         );
     }
 
     // Syntax tokens are painted over the base text (same glyphs, token color),
     // which keeps tab expansion and horizontal metrics identical to the caret.
-    if state.settings.syntax {
+    if state.settings.syntax && !git_view {
         let doc = state.ws.active_doc().expect("checked above");
         for vis in &vis {
             let Some(tokens) = state.highlight.tokens(vis.line) else {

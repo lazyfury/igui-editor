@@ -1471,9 +1471,18 @@ impl AppState {
         self.dirty = true;
     }
 
-    fn show_git_view(&mut self, key: String, name: String, text: String) {
+    fn show_git_view(
+        &mut self,
+        key: String,
+        name: String,
+        text: String,
+        preview_start: Option<usize>,
+    ) {
         let index = self.ws.show_view(key, name, text);
         self.ws.select(index);
+        if let Some(doc) = self.ws.active_doc_mut() {
+            doc.set_git_preview_start(preview_start);
+        }
         self.tabs.reveal_active = true;
         self.focus = Focus::Editor;
         self.editor.preedit = None;
@@ -1542,18 +1551,29 @@ impl AppState {
                 GitEvent::Diff { generation, diff } if generation == self.git.diff_generation => {
                     let staged = diff.staged;
                     let path = diff.path.clone();
-                    let text = format!(
+                    let mut text = format!(
                         "diff --git a/{} b/{}\n{}\n{}",
                         path.display(),
                         path.display(),
                         if staged { "staged" } else { "worktree" },
                         diff.text
                     );
+                    let mut preview_start = None;
+                    if let Some(root) = self.git.status.root.as_ref() {
+                        if let Ok(content) = std::fs::read_to_string(root.join(&path)) {
+                            if content.len() <= 2 * 1024 * 1024 {
+                                let before = text.lines().count();
+                                text.push_str("\n──── file preview ────\n");
+                                text.push_str(&content);
+                                preview_start = Some(before + 2);
+                            }
+                        }
+                    }
                     let name = format!("Diff: {}", path.display());
                     let key = format!("git:diff:{}:{staged}", path.display());
                     self.git.diff = Some(diff);
                     self.git.diff_loading = false;
-                    self.show_git_view(key, name, text);
+                    self.show_git_view(key, name, text, preview_start);
                     self.status("git diff");
                 }
                 GitEvent::Log {
@@ -1583,7 +1603,7 @@ impl AppState {
                         text.push_str(&detail.diff);
                         let name = format!("Commit {}", detail.commit.short);
                         let key = format!("git:commit:{}", detail.commit.hash);
-                        self.show_git_view(key, name, text);
+                        self.show_git_view(key, name, text, None);
                         self.status("git commit");
                     } else {
                         self.error("could not load commit");

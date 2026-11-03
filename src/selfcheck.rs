@@ -2813,7 +2813,7 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
     git(&["config", "user.email", "selfcheck@example.com"])?;
     git(&["config", "user.name", "selfcheck"])?;
     let tracked = repo.join("tracked.txt");
-    let original: String = (0..80).map(|index| format!("line {index}\n")).collect();
+    let original: String = (0..5).map(|index| format!("line {index}\n")).collect();
     fs::write(&tracked, original).map_err(|error| format!("fixture: {error}"))?;
     git(&["add", "tracked.txt"])?;
     git(&["commit", "-qm", "initial"])?;
@@ -2821,7 +2821,7 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
         let message = format!("history {index}");
         git(&["commit", "--allow-empty", "-qm", &message])?;
     }
-    let changed: String = (0..80)
+    let changed: String = (0..5)
         .map(|index| format!("changed line {index}\n"))
         .collect();
     fs::write(&tracked, changed).map_err(|error| format!("fixture: {error}"))?;
@@ -2907,6 +2907,29 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
         {
             return Err("Git diff view has the wrong view key".into());
         }
+        if !doc.text().contains("file preview") {
+            return Err("Git diff view has no file preview".into());
+        }
+    }
+    let frame = harness.frame()?;
+    let diff_accent = crate::theme::Theme::new(Mode::Dark).p.accent.to_rgba8();
+    if !draw_text_has_color(&frame, "+changed line 0", diff_accent) {
+        let sample: Vec<String> = texts(&frame)
+            .into_iter()
+            .filter(|text| text.contains("changed line"))
+            .take(8)
+            .collect();
+        return Err(format!(
+            "Git diff additions are not highlighted: sample={:?} accent={:?} text={:?}",
+            sample,
+            diff_accent,
+            harness
+                .app
+                .state()
+                .ws
+                .active_doc()
+                .map(|doc| { doc.text().lines().take(12).collect::<Vec<_>>().join("|") })
+        ));
     }
     let before_edit = harness
         .app

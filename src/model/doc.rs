@@ -128,6 +128,8 @@ pub struct Document {
     /// Git diff/commit views are read-only and are never persisted/saved.
     read_only: bool,
     view_key: Option<String>,
+    git_view: bool,
+    preview_start: Option<usize>,
 }
 
 impl Document {
@@ -149,6 +151,8 @@ impl Document {
             scroll_x: 0.0,
             read_only: false,
             view_key: None,
+            git_view: false,
+            preview_start: None,
         }
     }
 
@@ -177,6 +181,8 @@ impl Document {
             scroll_x: 0.0,
             read_only: false,
             view_key: None,
+            git_view: false,
+            preview_start: None,
         };
         doc.caret = floor_boundary(&doc.text, caret);
         doc.anchor = floor_boundary(&doc.text, anchor);
@@ -222,6 +228,8 @@ impl Document {
             scroll_x: 0.0,
             read_only: false,
             view_key: None,
+            git_view: false,
+            preview_start: None,
         };
         doc.rebuild_lines();
         Ok(doc)
@@ -239,6 +247,18 @@ impl Document {
         self.view_key.as_deref()
     }
 
+    pub fn is_git_view(&self) -> bool {
+        self.git_view
+    }
+
+    pub fn preview_start(&self) -> Option<usize> {
+        self.preview_start
+    }
+
+    pub fn set_git_preview_start(&mut self, start: Option<usize>) {
+        self.preview_start = start;
+    }
+
     /// A synthetic, read-only document used for Git diff/commit views.
     pub fn view(
         id: u64,
@@ -254,6 +274,7 @@ impl Document {
         doc.dirty = false;
         doc.read_only = true;
         doc.view_key = Some(key.into());
+        doc.git_view = true;
         doc.rebuild_lines();
         doc
     }

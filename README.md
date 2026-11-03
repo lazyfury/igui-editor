@@ -61,7 +61,8 @@ worktree, and `Commit` opens a one-line message prompt. `Changes / History`
 switches to the last 50 commits; clicking one opens a read-only commit detail
 with author/date/subject, changed files and patch. Diff and commit details open
 as read-only tabs in the main editor (never persisted, never editable; the status
-bar shows `READ-ONLY`). Refreshes happen on
+bar shows `READ-ONLY`). Diff lines are colored (`+` accent, `-` error, hunk
+headers faint); change views append a full current-file preview after the diff. Refreshes happen on
 open/save/tab/folder changes, commit and via the panel button. Discard and
 network operations are intentionally not exposed.
 
