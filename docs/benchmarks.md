@@ -37,8 +37,8 @@ macOS arm64, release/bench profile, 0.1.0:
 
 ```text
 fixture: 128885 bytes, 4800 lines
-markdown parse            1.5 ms/iter
-preview layout            2.0 ms/iter      ~19k primitives
+markdown parse            0.7 ms/iter
+preview layout            1.7 ms/iter      ~19k primitives
 preview paint             0.04 ms/iter      ~410 visible commands
 typing (16 ms frame)      1.1 ms/frame work
 ```
