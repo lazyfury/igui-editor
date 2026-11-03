@@ -177,9 +177,9 @@ pub struct Metrics {
 
 impl Metrics {
     pub const COMPACT: Self = Self {
-        font_ui: 13.0,
+        font_ui: 14.0,
         font_small: 12.0,
-        font_editor: 13.0,
+        font_editor: 14.0,
         line_h: 19.0,
         row_h: 22.0,
         menubar_h: 26.0,
