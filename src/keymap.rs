@@ -343,7 +343,9 @@ impl Keymap {
             ("primary+i", Action::LspCompletion),
             ("ctrl+space", Action::LspCompletion),
             ("f1", Action::LspHover),
+            ("primary+shift+i", Action::LspHover),
             ("f12", Action::LspDefinition),
+            ("primary+shift+d", Action::LspDefinition),
             ("alt+z", Action::ToggleSoftWrap),
             ("ctrl+`", Action::ToggleTerminal),
         ];

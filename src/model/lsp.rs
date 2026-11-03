@@ -433,6 +433,7 @@ pub struct LspController {
     pending: HashMap<u64, (PendingKind, Instant)>,
     failed: Option<(PathBuf, Instant)>,
     pub hover: Option<HoverUi>,
+    pub hover_anchor: Option<igui_core::Vec2>,
     pub completion: Option<CompletionUi>,
     location: Option<Location>,
     changed: bool,
@@ -458,6 +459,7 @@ impl Default for LspController {
             pending: HashMap::new(),
             failed: None,
             hover: None,
+            hover_anchor: None,
             completion: None,
             location: None,
             changed: false,
@@ -591,6 +593,7 @@ impl LspController {
         self.symbols_in_flight.clear();
         self.pending.clear();
         self.hover = None;
+        self.hover_anchor = None;
         self.completion = None;
         self.location = None;
     }
@@ -876,6 +879,16 @@ impl LspController {
     }
 
     fn send_position(&mut self, method: &str, kind: PendingKind, doc: &Document) -> bool {
+        self.send_position_at(method, kind, doc, doc.caret())
+    }
+
+    fn send_position_at(
+        &mut self,
+        method: &str,
+        kind: PendingKind,
+        doc: &Document,
+        byte: usize,
+    ) -> bool {
         if self.status != LspStatus::Ready {
             return false;
         }
@@ -892,7 +905,7 @@ impl LspController {
         let Some(client) = self.client.as_mut() else {
             return false;
         };
-        let (line, character) = position_of_byte(doc, doc.caret());
+        let (line, character) = position_of_byte(doc, byte.min(doc.text().len()));
         let id = client.request(
             method,
             json!({
@@ -915,9 +928,24 @@ impl LspController {
 
     pub fn request_hover(&mut self, doc: &Document) -> bool {
         self.hover = None;
+        self.hover_anchor = None;
         self.completion = None;
         self.cancel_popup_requests();
         self.send_position("textDocument/hover", PendingKind::Hover, doc)
+    }
+
+    /// Hover at an arbitrary byte (mouse hover) with a viewport anchor.
+    pub fn request_hover_at(
+        &mut self,
+        doc: &Document,
+        byte: usize,
+        anchor: igui_core::Vec2,
+    ) -> bool {
+        self.hover = None;
+        self.hover_anchor = Some(anchor);
+        self.completion = None;
+        self.cancel_popup_requests();
+        self.send_position_at("textDocument/hover", PendingKind::Hover, doc, byte)
     }
 
     pub fn request_completion(&mut self, doc: &Document) -> bool {
@@ -929,9 +957,24 @@ impl LspController {
 
     pub fn request_definition(&mut self, doc: &Document) -> bool {
         self.hover = None;
+        self.hover_anchor = None;
         self.completion = None;
         self.cancel_popup_requests();
         self.send_position("textDocument/definition", PendingKind::Definition, doc)
+    }
+
+    /// Definition at an arbitrary byte (Ctrl/Cmd-click).
+    pub fn request_definition_at(&mut self, doc: &Document, byte: usize) -> bool {
+        self.hover = None;
+        self.hover_anchor = None;
+        self.completion = None;
+        self.cancel_popup_requests();
+        self.send_position_at(
+            "textDocument/definition",
+            PendingKind::Definition,
+            doc,
+            byte,
+        )
     }
 
     fn flush_semantic_requests(&mut self) {
@@ -1044,6 +1087,7 @@ impl LspController {
 
     pub fn dismiss_transient(&mut self) {
         self.hover = None;
+        self.hover_anchor = None;
         self.completion = None;
         self.cancel_popup_requests();
     }

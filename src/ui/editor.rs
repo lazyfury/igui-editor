@@ -48,6 +48,7 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
             let mut state = state.borrow_mut();
             match phase {
                 PointerPhase::Down => {
+                    state.clear_hover_target();
                     if state.ws.active_doc().is_none() {
                         let action = state
                             .editor
@@ -63,9 +64,23 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
                         pointer_down(&mut state, pos, shift, measurer.as_ref());
                     }
                 }
-                PointerPhase::Move => pointer_move(&mut state, pos, measurer.as_ref()),
+                PointerPhase::Move => {
+                    if state.editor.drag == Drag::None {
+                        if let Some((line, column)) = hit(&state, pos, measurer.as_ref()) {
+                            if let Some(doc) = state.ws.active_doc() {
+                                let doc_id = doc.id();
+                                let byte = doc.byte_at(line, column);
+                                state.set_hover_target(doc_id, byte, pos);
+                            }
+                        } else {
+                            state.clear_hover_target();
+                        }
+                    }
+                    pointer_move(&mut state, pos, measurer.as_ref());
+                }
                 PointerPhase::Up => state.editor.drag = Drag::None,
                 PointerPhase::DoubleClick => {
+                    state.clear_hover_target();
                     let Some((line, column)) = hit(&state, pos, measurer.as_ref()) else {
                         return;
                     };
@@ -100,6 +115,7 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
         move |tree, _id, delta| {
             let shift = igui_ui::modifiers(tree).shift;
             let mut state = state.borrow_mut();
+            state.clear_hover_target();
             if let Some(doc) = state.ws.active_doc_mut() {
                 if shift {
                     doc.scroll_x += delta.y;
@@ -294,6 +310,12 @@ struct VisRow {
 }
 
 /// `(line, column)` under a viewport point, or `None` outside the text area.
+/// Byte offset under a viewport position in the editor text area.
+pub fn byte_at(state: &AppState, pos: Vec2, measurer: &dyn TextMeasurer) -> Option<usize> {
+    let (line, column) = hit(state, pos, measurer)?;
+    state.ws.active_doc().map(|doc| doc.byte_at(line, column))
+}
+
 fn hit(state: &AppState, pos: Vec2, measurer: &dyn TextMeasurer) -> Option<(usize, usize)> {
     let doc = state.ws.active_doc()?;
     let editor = &state.editor;

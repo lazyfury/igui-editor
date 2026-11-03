@@ -594,6 +594,16 @@ pub struct DialogRequest {
     pub then_close: Option<usize>,
 }
 
+/// Pending mouse-hover request (delayed tooltip).
+#[derive(Clone, Copy, Debug)]
+pub struct HoverTarget {
+    pub doc: u64,
+    pub byte: usize,
+    pub anchor: Vec2,
+    pub since: Instant,
+    pub requested: bool,
+}
+
 /// Editor geometry captured by the last paint.
 #[derive(Clone, Debug, Default)]
 pub struct EditorUi {
@@ -1013,6 +1023,7 @@ pub struct AppState {
     pub outline: OutlineUi,
     pub outline_node: Option<NodeId>,
     pub outline_drag: Option<(f32, f32)>,
+    pub hover_target: Option<HoverTarget>,
     pub editor: EditorUi,
     pub tabs: TabsUi,
     pub tab_drag: Option<TabDrag>,
@@ -1148,6 +1159,7 @@ impl AppState {
             outline: OutlineUi::default(),
             outline_node: None,
             outline_drag: None,
+            hover_target: None,
             editor: EditorUi {
                 reveal: true,
                 wrap: crate::model::wrap::WrapLayout::default(),
@@ -1781,6 +1793,7 @@ impl AppState {
     }
 
     pub fn request_lsp_hover(&mut self) {
+        self.hover_target = None;
         let Some(doc) = self.ws.active_doc() else {
             return;
         };
@@ -1788,6 +1801,82 @@ impl AppState {
             self.dirty = true;
         } else {
             self.status(self.lsp_unavailable());
+        }
+    }
+
+    /// Updates the delayed mouse-hover target. Called from the editor pointer
+    /// move callback; a change hides the old card and restarts the timer.
+    pub fn set_hover_target(&mut self, doc: u64, byte: usize, anchor: Vec2) {
+        let changed = self
+            .hover_target
+            .is_none_or(|target| target.doc != doc || target.byte != byte);
+        if changed {
+            self.lsp.hover = None;
+            self.lsp.hover_anchor = None;
+            self.hover_target = Some(HoverTarget {
+                doc,
+                byte,
+                anchor,
+                since: Instant::now(),
+                requested: false,
+            });
+            self.dirty = true;
+        }
+    }
+
+    pub fn clear_hover_target(&mut self) {
+        self.hover_target = None;
+    }
+
+    /// Whether a delayed hover still needs frames before it requests.
+    pub fn hover_waiting(&self) -> bool {
+        self.hover_target
+            .is_some_and(|target| !target.requested && target.since.elapsed().as_millis() < 700)
+    }
+
+    /// Fires the pending hover request once the dwell time has passed.
+    pub fn tick_hover(&mut self) {
+        let Some(target) = self.hover_target else {
+            return;
+        };
+        if target.requested || target.since.elapsed() < Duration::from_millis(350) {
+            return;
+        }
+        let Some(doc) = self.ws.active_doc() else {
+            self.hover_target = None;
+            return;
+        };
+        if doc.id() != target.doc {
+            self.hover_target = None;
+            return;
+        }
+        if !matches!(
+            self.lsp.status(),
+            crate::model::lsp::LspStatus::Ready | crate::model::lsp::LspStatus::Starting
+        ) {
+            self.hover_target = None;
+            return;
+        }
+        if self.lsp.request_hover_at(doc, target.byte, target.anchor) {
+            if let Some(target) = self.hover_target.as_mut() {
+                target.requested = true;
+            }
+        }
+    }
+
+    pub fn request_lsp_definition_at(&mut self, byte: usize) -> bool {
+        self.hover_target = None;
+        self.lsp.hover = None;
+        self.lsp.hover_anchor = None;
+        let Some(doc) = self.ws.active_doc() else {
+            return false;
+        };
+        if self.lsp.request_definition_at(doc, byte) {
+            self.dirty = true;
+            true
+        } else {
+            self.status(self.lsp_unavailable());
+            false
         }
     }
 

@@ -61,15 +61,19 @@ fn paint_hover(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut Pain
     }
     let height = (lines.len() as f32 * line_h + 16.0).min(HOVER_MAX_H);
     let caret = state.editor.caret_rect;
-    let mut origin = Vec2::new(caret.right() + 8.0, caret.top() - height - 6.0);
+    let anchor = state
+        .lsp
+        .hover_anchor
+        .unwrap_or(Vec2::new(caret.left(), caret.top()));
+    let mut origin = Vec2::new(anchor.x + 8.0, anchor.y - height - 6.0);
     if origin.x + max_width > viewport.right() - 8.0 {
-        origin.x = caret.left() - max_width - 8.0;
+        origin.x = anchor.x - max_width - 8.0;
     }
     if origin.x < viewport.left() + 8.0 {
         origin.x = viewport.left() + 8.0;
     }
     if origin.y < viewport.top() + 8.0 {
-        origin.y = caret.bottom() + 6.0;
+        origin.y = anchor.y + 12.0;
     }
     if origin.y + height > viewport.bottom() - 8.0 {
         origin.y = (viewport.bottom() - height - 8.0).max(viewport.top() + 8.0);

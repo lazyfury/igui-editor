@@ -222,6 +222,7 @@ impl EditorApp {
         self.state.borrow_mut().tick_external_changes();
         self.state.borrow_mut().tick_git();
         self.state.borrow_mut().tick_lsp();
+        self.state.borrow_mut().tick_hover();
         self.state.borrow_mut().tick_terminal();
         self.state.borrow_mut().tick_reliability();
         self.state.borrow_mut().sync_scroll_positions();
@@ -318,11 +319,17 @@ impl EditorApp {
                     }
                     return EventResult::Handled;
                 }
+                let definition_click = state.focus == Focus::Editor
+                    && (igui_ui::modifiers(&self.tree).ctrl || igui_ui::modifiers(&self.tree).meta)
+                    && state.editor.text_rect.contains(*position);
                 if state.lsp.hover.is_some() || state.lsp.completion.is_some() {
                     state.lsp.dismiss_transient();
                     state.dirty = true;
-                    return EventResult::Handled;
+                    if !definition_click {
+                        return EventResult::Handled;
+                    }
                 }
+                state.clear_hover_target();
                 // The bar sits above the drop-down: a press on a bar item
                 // toggles that menu (including closing the open one).
                 if state.git.detail_visible {
@@ -419,6 +426,17 @@ impl EditorApp {
                 if ui::outline::click(&mut state, *position) {
                     return EventResult::Handled;
                 }
+                let modifiers = igui_ui::modifiers(&self.tree);
+                if state.focus == Focus::Editor
+                    && (modifiers.ctrl || modifiers.meta)
+                    && state.editor.text_rect.contains(*position)
+                {
+                    if let Some(byte) = ui::editor::byte_at(&state, *position, measurer.as_ref()) {
+                        if state.request_lsp_definition_at(byte) {
+                            return EventResult::Handled;
+                        }
+                    }
+                }
                 drop(state);
                 let result = igui_ui::route_input(&mut self.tree, event);
                 self.focus_editor();
@@ -508,6 +526,23 @@ impl EditorApp {
                 }
                 if tab_menu_changed || tree_menu_changed {
                     state.dirty = true;
+                }
+                if state.focus == Focus::Editor
+                    && state.editor.text_rect.contains(*position)
+                    && state.editor.drag == crate::state::Drag::None
+                {
+                    if let Some(byte) = ui::editor::byte_at(&state, *position, measurer.as_ref()) {
+                        if let Some(doc) = state.ws.active_doc() {
+                            let doc_id = doc.id();
+                            state.set_hover_target(doc_id, byte, *position);
+                        }
+                    } else {
+                        state.clear_hover_target();
+                    }
+                } else {
+                    state.clear_hover_target();
+                    state.lsp.hover = None;
+                    state.lsp.hover_anchor = None;
                 }
                 ui::outline::hover_at(&mut state, *position);
                 drop(state);
@@ -730,6 +765,15 @@ impl EditorApp {
                 drop(state);
                 igui_ui::route_input(&mut self.tree, event)
             }
+            InputEvent::PointerLeave => {
+                {
+                    let mut state = self.state.borrow_mut();
+                    state.clear_hover_target();
+                    state.lsp.hover = None;
+                    state.lsp.hover_anchor = None;
+                }
+                igui_ui::route_input(&mut self.tree, event)
+            }
             InputEvent::KeyUp { .. } => {
                 self.suppress_text = false;
                 igui_ui::route_input(&mut self.tree, event)
@@ -804,6 +848,7 @@ impl EditorApp {
             || self.state.borrow().search_busy()
             || self.state.borrow().terminal.open
             || self.state.borrow().lsp.is_busy()
+            || self.state.borrow().hover_waiting()
             || self.state.borrow().message.is_some()
     }
 

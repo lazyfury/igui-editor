@@ -3724,6 +3724,75 @@ fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
         return Err("dragging the outline handle did not widen the panel".into());
     }
 
+    // Mouse hover with a short dwell shows the same card; Ctrl+click on the
+    // text asks the server for a definition.
+    let frame = harness.frame()?;
+    let hover_pos = draw_position(&frame, "diagnostic")
+        .map(|pos| Vec2::new(pos.x + 2.0, pos.y - 4.0))
+        .ok_or("diagnostic text was not painted for hover")?;
+    harness.event(InputEvent::PointerMove {
+        position: hover_pos,
+    });
+    for _ in 0..100 {
+        harness.frame()?;
+        if harness.app.state().lsp.hover.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    if !texts(&harness.frame()?)
+        .iter()
+        .any(|text| text == "lsp hover card")
+    {
+        let state = harness.app.state();
+        return Err(format!(
+            "mouse dwell did not paint the LSP hover card (target={:?} status={:?} hover={:?} text_rect={:?} pos={:?})",
+            state.hover_target,
+            state.lsp.status(),
+            state.lsp.hover.is_some(),
+            state.editor.text_rect,
+            hover_pos
+        ));
+    }
+    harness.event(InputEvent::ModifiersChanged(Modifiers {
+        ctrl: true,
+        ..Modifiers::NONE
+    }));
+    harness.event(InputEvent::PointerDown {
+        position: hover_pos,
+        button: PointerButton::Left,
+    });
+    harness.event(InputEvent::PointerUp {
+        position: hover_pos,
+        button: PointerButton::Left,
+    });
+    harness.event(InputEvent::ModifiersChanged(Modifiers::NONE));
+    for _ in 0..100 {
+        harness.frame()?;
+        if harness
+            .app
+            .state()
+            .ws
+            .active_doc()
+            .is_some_and(|doc| doc.line_col().0 == 2)
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    if harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .is_none_or(|doc| doc.line_col().0 != 2)
+    {
+        return Err("Ctrl+click did not request a definition".into());
+    }
+    if let Some(doc) = harness.app.state_mut().ws.active_doc_mut() {
+        doc.set_caret(0);
+    }
+
     // Hover: F1, wait for the response, and assert the overlay is painted.
     harness.key(Key::F1);
     for _ in 0..100 {
