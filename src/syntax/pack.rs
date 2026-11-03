@@ -175,6 +175,16 @@ impl LanguagePack {
         if server.args.len() > 32 || server.args.iter().any(|arg| arg.len() > 512) {
             return Err("invalid lsp args".into());
         }
+        if server
+            .port_arg
+            .as_ref()
+            .is_some_and(|arg| arg.is_empty() || arg.len() > 64 || arg.contains('\n'))
+        {
+            return Err("invalid lsp port_arg".into());
+        }
+        if server.port == Some(0) {
+            return Err("lsp port must be non-zero".into());
+        }
         Ok(())
     }
 

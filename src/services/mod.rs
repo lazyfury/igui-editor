@@ -7,6 +7,7 @@
 //! terminal.
 
 pub mod git;
+pub mod godot;
 pub mod lsp;
 pub mod terminal;
 
@@ -76,6 +77,17 @@ pub struct SidebarContribution {
     pub label: &'static str,
 }
 
+/// How the client reaches a language server.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LanguageServerTransport {
+    /// Spawn a child and speak JSON-RPC over its stdin/stdout.
+    #[default]
+    Stdio,
+    /// Spawn a child that listens on loopback TCP, then connect to it.
+    Tcp,
+}
+
 /// Declarative language-server contribution. The command is resolved from
 /// `PATH`, or from `command_env` when that variable is set. `project_markers`
 /// keeps a server idle until a real project root exists (e.g. `Cargo.toml`).
@@ -99,6 +111,16 @@ pub struct LanguageServerSpec {
     pub command_env: Option<String>,
     #[serde(default)]
     pub args: Vec<String>,
+    #[serde(default)]
+    pub transport: LanguageServerTransport,
+    /// Argument prepended to the dynamically allocated loopback port, e.g.
+    /// `--lsp-port` for Godot. When absent, `port` must be set.
+    #[serde(default)]
+    pub port_arg: Option<String>,
+    /// Fixed port for a spawned TCP server. Built-in Godot allocates a fresh
+    /// loopback port per launch instead.
+    #[serde(default)]
+    pub port: Option<u16>,
 }
 
 impl LanguageServerSpec {
@@ -175,14 +197,17 @@ pub fn install_builtins() -> ServiceRegistry {
     let plugin = git::GitPlugin;
     let terminal = terminal::TerminalPlugin;
     let rust_lsp = lsp::RustLspPlugin;
+    let godot_lsp = godot::GodotLspPlugin;
     registry.plugins.push(plugin.id());
     registry.plugins.push(terminal.id());
     registry.plugins.push(rust_lsp.id());
+    registry.plugins.push(godot_lsp.id());
     let mut host = PluginHost {
         registry: &mut registry,
     };
     plugin.register(&mut host);
     terminal.register(&mut host);
     rust_lsp.register(&mut host);
+    godot_lsp.register(&mut host);
     registry
 }

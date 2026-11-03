@@ -1,6 +1,8 @@
 # Native services and built-in plugins
 
-Status: Git status/diff/stage/unstage/commit, the first native PTY terminal slice, and Rust LSP (rust-analyzer) are implemented. Extension host remains deferred.
+Status: Git status/diff/stage/unstage/commit, the first native PTY terminal slice,
+Rust LSP (rust-analyzer), and Godot GDScript LSP (TCP) are implemented. Extension
+host remains deferred.
 
 ## Intent
 
@@ -91,23 +93,25 @@ same service.
 2. Terminal service + panel.
 3. Extension host (deferred): JSON-RPC/WASM mapping of the same capabilities.
 
-## LSP service (Rust first)
+## LSP service (Rust + Godot)
 
-Status: Rust (`rust-analyzer`) diagnostics, hover, completion and definition are
-implemented. The client is language-agnostic; the built-in Rust plugin registers
-one declarative `LanguageServerSpec`.
+Status: Rust (`rust-analyzer`) and Godot GDScript diagnostics, hover, completion,
+definition and document symbols are implemented. The client is language-agnostic;
+the built-in plugins register declarative `LanguageServerSpec` values.
 
 ```text
 PluginHost
  └─ language_server(LanguageServerSpec)
        id, language, extensions, project_markers,
-       command / command_env, args
+       command / command_env, args, transport, port_arg
 ```
 
-- **Process**: one stdio JSON-RPC child per project root, lazily started when an
-  owned file is active and a `project_markers` file exists (`Cargo.toml` for
-  Rust). stdout framing is read on a thread; writes are serialized on a writer
-  thread. `stderr` is discarded.
+- **Process**: one JSON-RPC child per project root, lazily started when an owned
+  file is active and a `project_markers` file exists (`Cargo.toml` for Rust,
+  `project.godot` for Godot). Rust uses the child's stdio. Godot is launched
+  headless with a fresh loopback port, then the client connects over TCP (the
+  connection is established on a background thread, so startup never blocks a
+  frame). Frames are read/written on threads; `stderr` is discarded.
 - **Sync**: full-text `didOpen` / `didChange` / `didClose`; edits are debounced
   (140 ms) and use LSP UTF-16 positions.
 - **Server requests**: `workspace/configuration`, `workspace/workspaceFolders`,
@@ -119,8 +123,11 @@ PluginHost
   symbols feed the right outline panel. Hover and completion are transient
   overlays. Nothing is persisted.
 - **Rust spec**: command `rust-analyzer`, overridable with
-  `IGUI_EDITOR_RUST_ANALYZER` (tests use a scripted server); arguments are
-  passed directly, never through a shell.
+  `IGUI_EDITOR_RUST_ANALYZER`; stdio transport; arguments are passed directly,
+  never through a shell.
+- **Godot spec**: command `/Applications/Godot.app/Contents/MacOS/Godot` on
+  macOS (or `godot` elsewhere), overridable with `IGUI_EDITOR_GODOT`; TCP
+  transport with `--lsp-port <dynamic>`; the process is killed with the client.
 
 Capabilities:
 

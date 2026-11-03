@@ -331,6 +331,19 @@ mod tests {
     }
 
     #[test]
+    fn gdscript_colors_godot_types_and_flow_keywords() {
+        let tokens = kinds(
+            "await get_tree().create_timer(0.5).timeout\nmatch value:\n\t1 when ready:\n\t\tvar body: CharacterBody3D",
+            &GdScript,
+        );
+        assert!(tokens.contains(&("await".into(), TokenKind::Keyword)));
+        assert!(tokens.contains(&("match".into(), TokenKind::Keyword)));
+        assert!(tokens.contains(&("when".into(), TokenKind::Keyword)));
+        assert!(tokens.contains(&("CharacterBody3D".into(), TokenKind::TypeName)));
+        assert!(tokens.contains(&("get_tree".into(), TokenKind::Function)));
+    }
+
+    #[test]
     fn json_colors_constants_and_numbers() {
         let tokens = kinds("{\"on\": true, \"n\": 12.5}", &Json);
         assert!(tokens.contains(&("true".into(), TokenKind::Constant)));

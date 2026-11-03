@@ -1,14 +1,15 @@
 //! Language Server Protocol client and the small amount of state the editor
 //! needs from it.
 //!
-//! This is a generic JSON-RPC/stdio client: a [`LanguageServerSpec`] decides
-//! which executable to launch and which files it owns. Rust is the first
-//! built-in server (`rust-analyzer`); the spec is declarative so a future
-//! external plugin host can contribute another one without changing the
-//! editor.
+//! This is a generic JSON-RPC client: a [`LanguageServerSpec`] decides which
+//! executable to launch, which files it owns, and whether to use stdio or
+//! loopback TCP. Rust (`rust-analyzer`) and Godot GDScript are built in; the
+//! spec is declarative so a future external plugin host can contribute another
+//! one without changing the editor.
 
 use std::collections::{HashMap, HashSet};
 use std::io::{self, BufRead, BufReader, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -124,14 +125,35 @@ impl LspClient {
             .and_then(|name| std::env::var(name).ok())
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| spec.command.to_string());
-        let mut command = Command::new(resolve_command(&command));
-        command
+        let mut process = Command::new(resolve_command(&command));
+        process
             .args(&spec.args)
             .current_dir(root)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
             .stderr(Stdio::null());
-        let mut child = command.spawn()?;
+        match spec.transport {
+            crate::services::LanguageServerTransport::Stdio => Self::spawn_stdio(process),
+            crate::services::LanguageServerTransport::Tcp => {
+                let port = match spec.port {
+                    Some(port) => port,
+                    None => free_loopback_port()?,
+                };
+                if let Some(arg) = spec.port_arg.as_deref().filter(|arg| !arg.is_empty()) {
+                    process.arg(arg).arg(port.to_string());
+                } else if spec.port.is_none() {
+                    return Err(io::Error::other(
+                        "TCP language server needs a port_arg or a fixed port",
+                    ));
+                }
+                process.stdin(Stdio::null()).stdout(Stdio::null());
+                let child = process.spawn()?;
+                Self::spawn_tcp(child, port)
+            }
+        }
+    }
+
+    fn spawn_stdio(mut process: Command) -> io::Result<Self> {
+        process.stdin(Stdio::piped()).stdout(Stdio::piped());
+        let mut child = process.spawn()?;
         let stdin = child
             .stdin
             .take()
@@ -157,29 +179,74 @@ impl LspClient {
         let (events, incoming) = mpsc::channel::<ClientEvent>();
         thread::Builder::new()
             .name("igui-lsp-reader".into())
+            .spawn(move || read_events(stdout, events))
+            .map_err(|error| io::Error::other(format!("LSP reader thread: {error}")))?;
+
+        Ok(Self {
+            child,
+            outgoing,
+            incoming,
+            next_id: 1,
+        })
+    }
+
+    fn spawn_tcp(child: Child, port: u16) -> io::Result<Self> {
+        let (outgoing, out_rx) = mpsc::channel::<Value>();
+        let (events, incoming) = mpsc::channel::<ClientEvent>();
+        let connect_events = events.clone();
+        thread::Builder::new()
+            .name("igui-lsp-connect".into())
             .spawn(move || {
-                let mut stdout = BufReader::new(stdout);
-                loop {
-                    match read_message(&mut stdout) {
-                        Ok(Some(message)) => {
-                            if events.send(ClientEvent::Message(message)).is_err() {
-                                break;
-                            }
-                        }
-                        Ok(None) => {
-                            let _ = events.send(ClientEvent::ReadError(
-                                "language server closed stdout".into(),
-                            ));
-                            break;
-                        }
-                        Err(error) => {
-                            let _ = events.send(ClientEvent::ReadError(error.to_string()));
-                            break;
-                        }
+                let stream = match connect_loopback(port, Duration::from_secs(8)) {
+                    Ok(stream) => stream,
+                    Err(error) => {
+                        let _ = connect_events.send(ClientEvent::ReadError(format!(
+                            "language server TCP {port}: {error}"
+                        )));
+                        return;
                     }
+                };
+                let read_stream = match stream.try_clone() {
+                    Ok(stream) => stream,
+                    Err(error) => {
+                        let _ = connect_events.send(ClientEvent::ReadError(format!(
+                            "language server TCP clone: {error}"
+                        )));
+                        return;
+                    }
+                };
+                let writer_events = connect_events.clone();
+                let writer =
+                    thread::Builder::new()
+                        .name("igui-lsp-writer".into())
+                        .spawn(move || {
+                            let mut stream = stream;
+                            while let Ok(message) = out_rx.recv() {
+                                if let Err(error) = write_message(&mut stream, &message) {
+                                    let _ = writer_events.send(ClientEvent::ReadError(format!(
+                                        "language server TCP write: {error}"
+                                    )));
+                                    break;
+                                }
+                            }
+                        });
+                if let Err(error) = writer {
+                    let _ = connect_events.send(ClientEvent::ReadError(format!(
+                        "LSP writer thread: {error}"
+                    )));
+                    return;
+                }
+                let reader_events = connect_events.clone();
+                let reader = thread::Builder::new()
+                    .name("igui-lsp-reader".into())
+                    .spawn(move || read_events(read_stream, connect_events));
+                if let Err(error) = reader {
+                    let _ = reader_events.send(ClientEvent::ReadError(format!(
+                        "LSP reader thread: {error}"
+                    )));
                 }
             })
-            .map_err(|error| io::Error::other(format!("LSP reader thread: {error}")))?;
+            .map_err(|error| io::Error::other(format!("LSP connect thread: {error}")))?;
 
         Ok(Self {
             child,
@@ -215,6 +282,56 @@ impl LspClient {
 
     fn try_recv(&self) -> Option<ClientEvent> {
         self.incoming.try_recv().ok()
+    }
+}
+
+fn read_events(stream: impl io::Read, events: Sender<ClientEvent>) {
+    let mut reader = BufReader::new(stream);
+    loop {
+        match read_message(&mut reader) {
+            Ok(Some(message)) => {
+                if events.send(ClientEvent::Message(message)).is_err() {
+                    break;
+                }
+            }
+            Ok(None) => {
+                let _ = events.send(ClientEvent::ReadError(
+                    "language server closed its connection".into(),
+                ));
+                break;
+            }
+            Err(error) => {
+                let _ = events.send(ClientEvent::ReadError(error.to_string()));
+                break;
+            }
+        }
+    }
+}
+
+fn free_loopback_port() -> io::Result<u16> {
+    let listener = TcpListener::bind(("127.0.0.1", 0))?;
+    Ok(listener.local_addr()?.port())
+}
+
+fn connect_loopback(port: u16, timeout: Duration) -> io::Result<TcpStream> {
+    let address = SocketAddr::from(([127, 0, 0, 1], port));
+    let deadline = Instant::now() + timeout;
+    loop {
+        match TcpStream::connect_timeout(&address, Duration::from_millis(200)) {
+            Ok(stream) => {
+                let _ = stream.set_nodelay(true);
+                return Ok(stream);
+            }
+            Err(_) if Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(30));
+            }
+            Err(error) => {
+                return Err(io::Error::new(
+                    error.kind(),
+                    format!("could not connect to {address}: {error}"),
+                ));
+            }
+        }
     }
 }
 
@@ -1395,6 +1512,51 @@ mod tests {
         assert_eq!(read_message(&mut reader).unwrap(), Some(message));
         let mut empty = Cursor::new(b"X: 1\r\n\r\n".to_vec());
         assert!(read_message(&mut empty).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tcp_transport_connects_and_exchanges_json_rpc() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let spec = LanguageServerSpec {
+            id: "fake-tcp".into(),
+            language: "gdscript".into(),
+            extensions: vec!["gd".into()],
+            project_markers: vec![],
+            command: "/bin/sh".into(),
+            command_env: None,
+            args: vec!["-c".into(), "sleep 30".into()],
+            transport: crate::services::LanguageServerTransport::Tcp,
+            port_arg: None,
+            port: Some(port),
+        };
+        let mut client = LspClient::spawn(&spec, Path::new("/tmp")).unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream);
+        let id = client
+            .request("initialize", json!({"rootUri": "file:///tmp"}))
+            .unwrap();
+        let request = read_message(&mut reader).unwrap().unwrap();
+        assert_eq!(request["method"], "initialize");
+        assert_eq!(request["id"], id);
+        write_message(
+            &mut reader.get_mut(),
+            &json!({"jsonrpc": "2.0", "id": id, "result": {"capabilities": {}}}),
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match client.try_recv() {
+                Some(ClientEvent::Message(message)) => {
+                    assert_eq!(message["id"], id);
+                    break;
+                }
+                Some(ClientEvent::ReadError(error)) => panic!("TCP client error: {error}"),
+                None if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+                None => panic!("TCP client did not deliver the response"),
+            }
+        }
     }
 
     #[test]

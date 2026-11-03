@@ -5,7 +5,7 @@ A compact, square-cornered **text / Markdown editor** built on the
 `winit` + `wgpu`, UI painted through `igui_ui` / `igui_render` only.
 
 Tabs · undo/redo · find & replace · syntax highlighting (JSON language packs) ·
-native LSP (Rust / `rust-analyzer` first) · outline panel · Markdown split preview (tables included) ·
+native LSP (Rust / `rust-analyzer`, Godot / GDScript) · outline panel · Markdown split preview (tables included) ·
 Quick Open (`⌘P`) · project search + replace (`⇧⌘F`) · local Git
 status/diff/stage/commit · built-in terminal · scroll sync · tab drag/context menu ·
 soft wrap · external-change detection · Finder/Dock file opening · Dock Recent ·
@@ -34,6 +34,9 @@ Input -> SceneTree -> Update -> Layout -> Paint -> DrawList -> wgpu
   `Cargo.toml` uses `../igui/...` path dependencies.
 - `rust-analyzer` for Rust LSP features (optional but recommended; install with
   `rustup component add rust-analyzer`).
+- Godot 4 for GDScript LSP features (optional; the default macOS path is
+  `/Applications/Godot.app/Contents/MacOS/Godot`; override with
+  `IGUI_EDITOR_GODOT`). A `project.godot` file marks the project root.
 - macOS is the primary, manually tested platform. Linux/Windows host paths are
   wired, but not manually verified in this repository.
 
@@ -48,6 +51,7 @@ cargo run --release                          # restore the last session, else th
 cargo run --release -- src/app.rs            # open a file (its directory becomes the folder)
 cargo run --release -- src                    # open a folder (no tab: welcome with sidebar)
 cargo run --release -- --light README.md     # light palette
+cargo run --release -- /path/to/godot_project # open a Godot project folder
 ```
 
 A self-check runs the same UI headlessly (no screenshots required):
@@ -103,13 +107,23 @@ JetBrains share the command layer, while Vim has a real Normal/Visual/Insert
 state machine for the common motions and operators. See
 [`DESIGN-keymaps.md`](DESIGN-keymaps.md) for the design and boundaries.
 
-## Language intelligence (LSP, Rust first)
+## Language intelligence (LSP)
 
-The editor talks to language servers over native stdio JSON-RPC — no WebView,
-no JS bridge. The first built-in server is Rust: opening a `.rs` file inside a
-directory with a `Cargo.toml` lazily starts `rust-analyzer` from `PATH` (or the
-path in `IGUI_EDITOR_RUST_ANALYZER`). Install `rust-analyzer` separately; there
-is no server for loose files or non-project buffers.
+The editor talks to language servers over native JSON-RPC — no WebView, no JS
+bridge. Two built-in servers are registered:
+
+- **Rust** — opening a `.rs` file inside a directory with a `Cargo.toml` lazily
+  starts `rust-analyzer` from `PATH` (or the path in
+  `IGUI_EDITOR_RUST_ANALYZER`) over stdio.
+- **Godot GDScript** — opening a `.gd` file inside a directory with a
+  `project.godot` lazily starts the Godot editor's GDScript language server
+  over loopback TCP. On macOS the default executable is
+  `/Applications/Godot.app/Contents/MacOS/Godot`; set `IGUI_EDITOR_GODOT` to
+  use a different install. Godot runs headless (`--headless --editor --path .`)
+  and is stopped when the editor releases the project.
+
+Install the servers separately; there is no server for loose files or
+non-project buffers.
 
 - Diagnostics are painted as severity-colored underlines and square gutter
   markers; the footer shows `LSP 1E 2W` (or `LSP ERR` if the server cannot
@@ -135,10 +149,11 @@ is no server for loose files or non-project buffers.
   LSP UTF-16 columns. Diagnostics/hover/completion are transient UI state and
   are not persisted.
 
-Rust is just the first [`LanguageServerSpec`](src/services/lsp.rs). Data-only
-language packs under `<config>/languages/*.json` can contribute one too; the
-generic client, owned spec shape and capability ids are ready for a future
-external extension host. Native plugins are still compile-time (no dylib ABI).
+Both servers are declarative [`LanguageServerSpec`](src/services/mod.rs) values;
+Rust uses stdio and Godot uses TCP. Data-only language packs under
+`<config>/languages/*.json` can contribute one too; the generic client, owned
+spec shape and capability ids are ready for a future external extension host.
+Native plugins are still compile-time (no dylib ABI).
 
 ```json
 {
@@ -155,13 +170,29 @@ external extension host. Native plugins are still compile-time (no dylib ABI).
 }
 ```
 
+### Godot project
+
+Open a project folder (or any `.gd` file inside it); `.gd` tabs use the GDScript
+syntax provider immediately, and opening one starts Godot's headless language
+server for the nearest `project.godot`. For example:
+
+```bash
+cargo run --release -- "/path/to/godot_project/new_script.gd"
+```
+
+`IGUI_EDITOR_GODOT` can point at another Godot executable. Godot's server sends
+diagnostics, hover, completion, definition and document symbols; semantic
+tokens are not provided by Godot, so the syntax palette remains in charge of
+token colors.
+
 ## Outline (`⌘⌥O`, View → Outline)
 
 The right sidebar shows LSP document symbols (`textDocument/documentSymbol`) for
 the active document. Rust files inside a Cargo project get functions, methods,
-structs/enums, fields, variables and nested items from `rust-analyzer`; the list
-updates after edits. Clicking a row moves the caret to the symbol and reveals
-it in the editor. The left edge is a shared drag handle: drag it to resize
+structs/enums, fields, variables and nested items from `rust-analyzer`; GDScript
+files get functions, classes, signals, constants and variables from Godot's
+server. The list updates after edits. Clicking a row moves the caret to the
+symbol and reveals it in the editor. The left edge is a shared drag handle: drag it to resize
 (160–420 px), double-click resets to 224 px. The panel is persisted in the
 session and can be hidden from View → Outline or `⌘⌥O`. Symbols are transient
 LSP state, not saved to disk.
@@ -583,8 +614,9 @@ src/
   keymap.rs           chord parser, profiles, user override resolver
   vim.rs              Normal/Insert/Visual key handling (Vim profile)
   syntax/pack.rs      declarative JSON language packs
-  model/lsp.rs        stdio JSON-RPC client, diagnostics, hover/completion
+  model/lsp.rs        stdio/TCP JSON-RPC client, diagnostics, hover/completion
   services/lsp.rs     built-in Rust language-server spec (rust-analyzer)
+  services/godot.rs   built-in Godot GDScript language-server spec (TCP)
   model/recovery.rs   crash snapshots (txt + metadata)
   model/replace.rs    replace-in-files planning/apply (conflict + open skip)
   model/fs_tree.rs    lazy sidebar tree (dirs first, hidden entries skipped)
@@ -664,9 +696,9 @@ file-change detection (clean auto-reload, dirty Keep/Reload), session v4.
 Delivered (M7): macOS Finder/`open -a` file opening, Dock Recent/New File/Clear,
 quick file creation (`⇧⌘N`), system recent items, and a native dirty-quit guard.
 
-Delivered (M12): generic LSP stdio client + Rust `rust-analyzer` plugin,
-diagnostics, hover, completion and definition, plus data-only language-pack
-language-server specs.
+Delivered (M12): generic LSP stdio/TCP client + Rust `rust-analyzer` and Godot
+GDScript plugins (diagnostics, hover, completion, definition and symbols), plus
+data-only language-pack language-server specs.
 
 Next candidates: native macOS top menu bar (Window/Services/Help), window-close
 guard + Dock reopen, code-plugin loading (dylib/wasm), per-hit replace and

@@ -48,6 +48,9 @@ pub fn rust_server() -> LanguageServerSpec {
         command: "rust-analyzer".into(),
         command_env: Some("IGUI_EDITOR_RUST_ANALYZER".into()),
         args: Vec::new(),
+        transport: super::LanguageServerTransport::Stdio,
+        port_arg: None,
+        port: None,
     }
 }
 
