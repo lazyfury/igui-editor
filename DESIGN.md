@@ -35,8 +35,10 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
 
 - `model/` is pure Rust: no scene, no backend, no window. All editing rules are
   unit-tested.
-- `state.rs` is the single shared value (documents, theme, hit rectangles,
-  message). Input callbacks mutate it; painters read it.
+- `state/` holds the single shared value (documents, theme, hit rectangles,
+  message). `mod.rs` owns the struct and constructors; child modules own one
+  domain each (`actions`, `tabs`, `files`, `find`, `git`, `lsp`, `terminal`, …).
+  Input callbacks mutate it; painters read it.
 - `ui/` is one module per shell region; each builds exactly one control node
   and paints itself.
 - `app.rs` owns the tree, routes input, and implements `igui_app::AppLogic`.

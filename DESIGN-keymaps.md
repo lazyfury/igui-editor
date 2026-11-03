@@ -1,9 +1,10 @@
 # Keymap design and editor audit
 
-Status: first implementation landed. Command routing now goes through a pure
-`keymap` resolver; VS Code and JetBrains profiles are wired, and Vim has a
-Normal/Visual/Insert subset. This document records the design and the remaining
-scope.
+Status: command routing goes through a pure `keymap` resolver; VS Code and
+JetBrains profiles are wired, and Vim has a Normal/Visual/Insert subset. Menus
+now resolve their shortcut hints from the active profile, and the menu bar plus
+tab switching are keyboard-operable. This document records the design and the
+remaining scope.
 
 ## Current editor audit
 
@@ -17,6 +18,8 @@ scope.
 | Selection | Shift movement, mouse drag, double-click word, triple-click line, Select All, Alt-click extend |
 | Clipboard | Cut/copy/paste; empty-selection cut/copy operates on the current line |
 | Files | Open/save/save-as, tabs, close guards, external-change reload, autosave/recovery |
+| Tabs | `primary+1…8` select by index, `primary+9` last, `Ctrl+Tab` / `Ctrl+Shift+Tab` cycle |
+| Menus | `F10`, arrows, `Home`/`End`, `Enter`/`Space`, `Esc`; hints follow the profile |
 | Search | Find/replace, project search + replace, next/previous |
 | Views | Edit/split/preview, soft wrap, scroll sync |
 | Language | Syntax highlighting, language packs, LSP diagnostics/hover/completion/definition, semantic tokens |
@@ -25,9 +28,9 @@ scope.
 
 ### Gaps and rough edges
 
-- Shortcuts are spread across `input.rs`, `ui/editor.rs`, `app.rs`, and overlay
-  modules. There is no single binding table, no chord support and no user
-  overrides.
+- Global/editor commands have one binding table, but overlay keys (find, quick
+  open, completion, modal) are still hand-written modules that run before the
+  keymap; they are not representable in a profile yet.
 - `modifiers.meta || modifiers.ctrl` is used as "primary". That is Mac-oriented:
   VS Code on Windows/Linux uses Ctrl+Left/Right for word movement, while the
   current global path maps Ctrl/Cmd+Left/Right to line start/end.

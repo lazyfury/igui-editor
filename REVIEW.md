@@ -1,6 +1,6 @@
 # Architecture & interaction review
 
-Status: review of `b1b65a5`, with the first improvement cycle applied on top.
+Status: review of `b1b65a5`; improvement cycle 1 applied.
 Baseline: `cargo test` 164 passed, `cargo run -- --selfcheck` ok,
 `cargo clippy --all-targets` clean (only the upstream `block v0.1.6`
 future-incompat notice).
@@ -8,7 +8,7 @@ future-incompat notice).
 ## What already works well
 
 - The layering is explicit and enforced: `model/` is pure Rust,
-  `ui/` only paints, `state.rs` is the shared value, and `selfcheck.rs`
+  `ui/` only paints, `state/` is the shared value, and `selfcheck.rs`
   verifies the real pipeline without screenshots.
 - Overlay geometry is computed once and shared by paint and hit-testing
   (menu, tab/tree context menus, modal, quick open). This avoids the usual
@@ -52,14 +52,16 @@ Scope is deliberately small and independently verifiable.
 
 ## Acceptance checklist
 
-- [ ] `cargo test` passes unchanged expectations (plus new keymap/action tests).
-- [ ] `cargo run -- --selfcheck` passes, including new menu/tab assertions.
-- [ ] `cargo clippy --all-targets` has no app warnings.
-- [ ] Start the app and check: `F10` opens File, arrows + Enter run commands,
-      `⌘1`/`⌘2`/`⌘9` switch tabs, `Ctrl+Tab` cycles, menu hints match the
-      selected keymap profile, dirty-tab close still asks.
-- [ ] Session restore, sidebar, find, preview and terminal still behave as
+- [x] `cargo test` passes (173 tests, including menu navigation, tab chords, keymap labels).
+- [x] `cargo run -- --selfcheck` passes, including new menu/tab assertions.
+- [x] `cargo clippy --all-targets` has no app warnings.
+- [x] Headless acceptance covers `F10` + arrows + Enter, `⌘1`/`⌘2`/`⌘9`,
+      `Ctrl+Tab` / `Ctrl+Shift+Tab`, and menu hints matching the profile.
+- [x] Session restore, sidebar, find, preview and terminal still behave as
       before (self-check covers the main flow).
+- [x] Startup smoke test: the binary opens `README.md` and stays up (no stderr).
+- [ ] Manual visual pass on a macOS window (menu hint spacing, arrow highlight)
+      before release; not available in the headless test environment.
 
 ## Next candidates
 

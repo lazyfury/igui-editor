@@ -276,6 +276,9 @@ contents do not. Multiple sessions are a follow-up.
 | `⇧⌘N` | new file on disk (quick prompt) |
 | `⌃\`` | toggle the built-in terminal |
 | `⌘W` | close tab (asks Save / Discard / Cancel when dirty) |
+| `⌘1` … `⌘8` / `⌘9` | select tab by position / select the last tab |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | next / previous tab (`Ctrl+Tab` on macOS; `Ctrl` is literal there) |
+| `F10` | open the File menu; `↑`/`↓` move, `←`/`→` switch menus, `Enter` runs, `Esc` closes |
 | `⌘Z` / `⇧⌘Z` | undo / redo (typing runs coalesce) |
 | `⌘X` / `⌘C` / `⌘V` | cut / copy / paste (empty selection: cut/copy the current line) |
 | `⌘⇧K` (VS Code) | delete the current line |
@@ -353,6 +356,11 @@ bold / italic / strikethrough, inline code, fenced code blocks with a language
 label, nested lists, quotes with an accent rule, rules, images as `▢ alt`,
 styled links (no navigation) and **tables with per-column alignment**. The
 preview scrolls with the wheel/trackpad or its scrollbar.
+
+The menu bar is keyboard-operable: `F10` opens File, arrows move between items
+and menus, `Enter`/`Space` runs the focused command, and `Esc` closes the menu
+without touching the document. Menu hints are resolved from the active keymap
+profile, so VS Code / JetBrains / Vim show the chords they actually use.
 
 Mouse: click a folder to expand it, a file to open it in a tab, `×` to close a
 tab (unsaved tabs open a Save / Discard / Cancel modal), `+` for a new buffer,
@@ -580,6 +588,12 @@ Not `igui_theme::DefaultTheme`. The app owns its palette and metrics
 ## Verify (no screenshots)
 
 ```bash
+scripts/check.sh                            # fmt + clippy + tests + self-check
+```
+
+Or individually:
+
+```bash
 cargo test                                  # model: caret, undo, find, markdown, session, FS tree
 cargo run -- --selfcheck                    # headless DrawList assertions
 ```
@@ -689,7 +703,12 @@ src/
   ui/settings.rs      settings + Keymap row
   ui/terminal.rs      vt100 cell renderer + terminal key encoding
   input.rs            keyboard dispatch: modal -> find -> shortcuts -> tree
-  state.rs            shared state, actions, hit rects recorded during paint
+  state/mod.rs        AppState value, constructors, menus and hit rects
+  state/actions.rs    command dispatch (menus, shortcuts, keymap actions)
+  state/{tabs,files,find,modal,workspace}.rs  document lifecycle and dialogs
+  state/{terminal,git,lsp,search}.rs  native services and workers
+  state/{settings,view,reliability,services,new_file,quick_open}.rs
+                      settings, layout, autosave/recovery and prompt state
   theme.rs            geek palette + compact metrics
   kit.rs              control-node construction and text/line helpers
   ui/menu.rs          menu bar + app-level drop-down overlay
