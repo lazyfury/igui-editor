@@ -50,7 +50,9 @@ mod app;
 mod dialogs;
 mod input;
 mod kit;
+mod macos;
 mod model;
+mod native;
 mod state;
 mod ui;
 

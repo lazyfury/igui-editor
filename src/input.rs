@@ -35,7 +35,13 @@ pub fn shortcut(state: &mut AppState, key: Key, modifiers: Modifiers) -> Option<
     let shift = modifiers.shift;
     let action = match key {
         Key::Character(ch) => match ch.to_ascii_lowercase() {
-            'n' => Action::New,
+            'n' => {
+                if shift {
+                    Action::NewFile
+                } else {
+                    Action::New
+                }
+            }
             'o' => {
                 if shift {
                     Action::OpenFolder
@@ -230,6 +236,7 @@ pub fn modal_key(state: &mut AppState, key: Key) -> EventResult {
                 Some(Modal::ReplaceInFiles { .. }) => ModalButton::Apply,
                 Some(Modal::CloseTabs { .. }) => ModalButton::Discard,
                 Some(Modal::ExternalChange { .. }) => ModalButton::Reload,
+                Some(Modal::Quit { .. }) => ModalButton::Cancel,
                 _ => ModalButton::Save,
             };
             state.resolve_modal(confirm);

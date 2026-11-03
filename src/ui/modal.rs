@@ -26,12 +26,15 @@ pub const REPLACE_BUTTONS: [ModalButton; 2] = [ModalButton::Cancel, ModalButton:
 pub const CLOSE_TABS_BUTTONS: [ModalButton; 2] = [ModalButton::Cancel, ModalButton::Discard];
 /// Buttons for an external-change prompt.
 pub const EXTERNAL_BUTTONS: [ModalButton; 2] = [ModalButton::Cancel, ModalButton::Reload];
+/// Buttons for the macOS quit prompt.
+pub const QUIT_BUTTONS: [ModalButton; 2] = [ModalButton::Cancel, ModalButton::Discard];
 
 fn buttons_for(modal: Modal) -> &'static [ModalButton] {
     match modal {
         Modal::CloseDirtyTab { .. } => &CLOSE_BUTTONS,
         Modal::CloseTabs { .. } => &CLOSE_TABS_BUTTONS,
         Modal::ExternalChange { .. } => &EXTERNAL_BUTTONS,
+        Modal::Quit { .. } => &QUIT_BUTTONS,
         Modal::ReplaceInFiles { .. } => &REPLACE_BUTTONS,
     }
 }
@@ -101,6 +104,13 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
                 ),
             )
         }
+        Modal::Quit { dirty } => (
+            "Unsaved changes".to_string(),
+            format!(
+                "Discard changes in {dirty} tab{} and quit?",
+                if dirty == 1 { "" } else { "s" }
+            ),
+        ),
         Modal::ExternalChange { tab } => {
             let name = state
                 .ws
@@ -167,6 +177,7 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
         ctx.stroke_rect(*rect, 1.0, if primary { p.accent } else { p.border });
         let label = match button {
             ModalButton::Cancel if matches!(modal, Modal::ExternalChange { .. }) => "Keep",
+            ModalButton::Discard if matches!(modal, Modal::Quit { .. }) => "Discard & Quit",
             ModalButton::Cancel => "Cancel",
             ModalButton::Discard => "Discard",
             ModalButton::Save => "Save",

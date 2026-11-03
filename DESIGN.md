@@ -1,6 +1,6 @@
 # igui-editor — design
 
-Agreed direction (M1–M6 implemented). This document records the decisions so
+Agreed direction (M1–M7 implemented). This document records the decisions so
 future work does not re-litigate them.
 
 ## Product
@@ -209,6 +209,30 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    scroll is suppressed; wrap turns off above 2 MB / 20k lines. Wrapping is at
    character boundaries, not words.
 
+30. **The macOS bridge is a request queue, not a second app.** Native callbacks
+   (Finder, Dock, quit) push `NativeRequest` values and wake the window; the
+   main loop drains them and reuses `open_dropped` / `open_new_file` /
+   `clear_recent`. Apple Events are installed early; `application:openURLs:`,
+   `applicationDockMenu:` and `applicationShouldTerminate:` are added to the
+   *existing* winit delegate class. `NSApplication.setDelegate:` is hooked so
+   cold-launch file events are handled after winit installs its delegate.
+31. **Dock Recent mirrors the session.** `session.recent` is the single source
+   of truth (8 paths); each frame copies it into the native snapshot. The Dock
+   menu is rebuilt from that snapshot on demand, skips missing files, and sends
+   `Open` / `NewFile` / `ClearRecent` requests. Open/save also calls
+   `NSDocumentController.noteNewRecentDocumentURL:`.
+32. **Quick create is `create_new` + inline validation.** `⇧⌘N` opens a centered
+   prompt, defaults to the active file's parent (then workspace, then cwd), and
+   creates `untitled.md`. Relative names only, no `..`, parents must exist,
+   existing paths stay in the prompt with an error. Success reloads the sidebar
+   and opens the new file as a tab.
+33. **Quit is guarded at the AppKit boundary.** The dirty count is mirrored to
+   native state; `applicationShouldTerminate:` returns `NSTerminateLater` and
+   queues `Quit` when dirty. The in-app modal responds with
+   `replyToApplicationShouldTerminate:` (`Discard & Quit` / `Cancel`).
+   Closing the window still follows winit's event-loop exit path; a close guard
+   and Dock reopen are follow-ups (they need a host/engine change).
+
 ## Theme spec (geek / compact / no corners)
 
 Rules:
@@ -304,9 +328,15 @@ Markdown source-line anchors, session v3.
 visual-row caret/click/navigation mapping and a 2 MB / 20k-line cap, external
 file-change polling (clean reload, dirty Keep/Reload), session v4.
 
-Next candidates: code-plugin loading (dylib/wasm), per-hit replace and
-cross-file undo, incremental preview layout for very large documents,
-word-boundary wrapping, filesystem watcher for sidebar/search freshness.
+**M7 (done)** — macOS document-type registration, Finder/`open -a` request
+queue, Dock Recent / New File / Clear, quick file creation (`⇧⌘N`), system
+recent items, dirty quit confirmation. Native macOS top menu / close-guard /
+Dock reopen remain follow-ups.
+
+Next candidates: native macOS top menu (Window/Services/Help) and close guard,
+code-plugin loading (dylib/wasm), per-hit replace and cross-file undo,
+incremental preview layout for very large documents, word-boundary wrapping,
+filesystem watcher for sidebar/search freshness.
 
 ## Non-goals for the editor core
 

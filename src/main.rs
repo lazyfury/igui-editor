@@ -30,7 +30,8 @@ igui-editor — a compact text/Markdown editor built on igui
   -V, --version      显示版本
 
 快捷键:
-  ⌘S 保存     ⌘N 新建     ⌘W 关闭标签     ⌘Z 撤销     ⇧⌘Z 重做
+  ⌘S 保存     ⌘N 新建     ⇧⌘N 新建文件     ⌘W 关闭标签
+  ⌘Z 撤销     ⇧⌘Z 重做     ⌥Z 自动换行
   ⌘X / ⌘C / ⌘V 剪切 / 复制 / 粘贴     ⌘A 全选
   ⌘B 侧栏     ⇧⌘L 明暗主题
   Tab / ⇧Tab 缩进 / 反缩进     ⌘← / ⌘→ 行首 / 行尾     ⌘↑ / ⌘↓ 文档首 / 尾

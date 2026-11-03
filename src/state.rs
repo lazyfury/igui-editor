@@ -115,6 +115,7 @@ pub struct DocUi {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Action {
     New,
+    NewFile,
     Open,
     OpenFolder,
     CloseFolder,
@@ -138,6 +139,7 @@ pub enum Action {
     ToggleSoftWrap,
     SetLanguage(Option<String>),
     OpenRecent(PathBuf),
+    ClearRecent,
 }
 
 /// Platform's primary accelerator label.
@@ -151,6 +153,7 @@ impl Action {
     pub fn label(&self) -> String {
         match self {
             Action::New => "New Buffer".into(),
+            Action::NewFile => "New File…".into(),
             Action::Open => "Open…".into(),
             Action::OpenFolder => "Open Folder…".into(),
             Action::CloseFolder => "Close Folder".into(),
@@ -174,6 +177,7 @@ impl Action {
             Action::ToggleSoftWrap => "Soft Wrap".into(),
             Action::SetLanguage(None) => "Auto (by extension)".into(),
             Action::SetLanguage(Some(name)) => name.clone(),
+            Action::ClearRecent => "Clear Recent".into(),
             Action::OpenRecent(path) => {
                 let name = path
                     .file_name()
@@ -189,6 +193,10 @@ impl Action {
             Action::New => match ACCEL {
                 "⌘" => "⌘N",
                 _ => "Ctrl+N",
+            },
+            Action::NewFile => match ACCEL {
+                "⌘" => "⇧⌘N",
+                _ => "Ctrl+Shift+N",
             },
             Action::Open => match ACCEL {
                 "⌘" => "⌘O",
@@ -272,7 +280,7 @@ impl Action {
                 _ => "Alt+Z",
             },
             Action::SetLanguage(_) => "",
-            Action::OpenRecent(_) => "",
+            Action::OpenRecent(_) | Action::ClearRecent => "",
         }
     }
 
@@ -280,6 +288,7 @@ impl Action {
         let doc = state.ws.active_doc();
         match self {
             Action::New
+            | Action::NewFile
             | Action::Open
             | Action::OpenFolder
             | Action::ToggleSidebar
@@ -301,6 +310,7 @@ impl Action {
             Action::ToggleSoftWrap => doc.is_some(),
             Action::SetLanguage(_) => doc.is_some(),
             Action::OpenRecent(path) => path.is_file(),
+            Action::ClearRecent => !state.session.recent.is_empty(),
         }
     }
 
@@ -324,6 +334,7 @@ pub fn items(menu: Menu, state: &AppState) -> Vec<Option<Action>> {
         Menu::File => {
             let mut items = vec![
                 Some(Action::New),
+                Some(Action::NewFile),
                 Some(Action::Open),
                 Some(Action::OpenFolder),
                 Some(Action::CloseFolder),
@@ -337,6 +348,8 @@ pub fn items(menu: Menu, state: &AppState) -> Vec<Option<Action>> {
                 for path in state.session.recent.iter().take(MAX_RECENT) {
                     items.push(Some(Action::OpenRecent(path.clone())));
                 }
+                items.push(None);
+                items.push(Some(Action::ClearRecent));
             }
             items
         }
@@ -460,6 +473,8 @@ pub enum Modal {
     CloseTabs { keep: Option<usize>, from: usize },
     /// The file changed on disk while the buffer is dirty: Keep / Reload.
     ExternalChange { tab: usize },
+    /// macOS Cmd+Q with dirty tabs: Cancel / Discard & Quit.
+    Quit { dirty: usize },
     /// Replace every match in the scanned files: Cancel / Replace all.
     ReplaceInFiles { files: usize, occurrences: usize },
 }
@@ -632,6 +647,27 @@ pub struct QuickOpenState {
     pub preedit: Option<String>,
 }
 
+/// Quick-create-file prompt (`⇧⌘N`).
+pub struct NewFileState {
+    pub open: bool,
+    pub dir: PathBuf,
+    pub name: TextEdit,
+    pub error: Option<String>,
+    pub preedit: Option<String>,
+}
+
+impl Default for NewFileState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            name: TextEdit::new("untitled.md"),
+            error: None,
+            preedit: None,
+        }
+    }
+}
+
 impl Default for QuickOpenState {
     fn default() -> Self {
         Self {
@@ -763,6 +799,7 @@ pub struct AppState {
     /// A file drag is hovering the window (paints the drop overlay).
     pub drop_hover: bool,
     pub quick_open: QuickOpenState,
+    pub new_file: NewFileState,
     /// Split-view nodes (for drag resizing) and the divider rectangle.
     /// Editor/preview control for the active view (vertical band anchor).
     pub content_node: Option<NodeId>,
@@ -865,6 +902,7 @@ impl AppState {
             pending_sidebar_sync: false,
             drop_hover: false,
             quick_open: QuickOpenState::default(),
+            new_file: NewFileState::default(),
             search: SearchState::default(),
             content_node: None,
             content_center_y: None,
@@ -901,6 +939,97 @@ impl AppState {
         self.message
             .as_ref()
             .map(|(text, error, _)| (text.as_str(), *error))
+    }
+
+    /// Opens the quick-create-file prompt.
+    pub fn open_new_file(&mut self) {
+        if self.new_file.open || self.modal.is_some() || self.recovery_prompt.is_some() {
+            return;
+        }
+        self.settings_open = false;
+        self.quick_open.open = false;
+        if self.search.open {
+            self.close_project_search();
+        }
+        self.close_find();
+        self.menu_open = None;
+        self.tab_menu = None;
+        let (dir, _) = self.dialog_context();
+        self.new_file.dir =
+            dir.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        self.new_file.name = TextEdit::new("untitled.md");
+        self.new_file.name.select_all();
+        self.new_file.error = None;
+        self.new_file.preedit = None;
+        self.new_file.open = true;
+        self.dirty = true;
+    }
+
+    pub fn close_new_file(&mut self) {
+        self.new_file.open = false;
+        self.new_file.error = None;
+        self.new_file.preedit = None;
+        self.dirty = true;
+    }
+
+    /// Creates and opens the entered file. Errors stay inline in the prompt.
+    pub fn submit_new_file(&mut self) {
+        let name = self.new_file.name.text().trim().to_string();
+        if name.is_empty() {
+            self.new_file.error = Some("enter a file name".into());
+            self.dirty = true;
+            return;
+        }
+        let relative = Path::new(&name);
+        if relative.is_absolute()
+            || relative.components().any(|part| {
+                !matches!(
+                    part,
+                    std::path::Component::Normal(_) | std::path::Component::CurDir
+                )
+            })
+        {
+            self.new_file.error = Some("use a relative name without ..".into());
+            self.dirty = true;
+            return;
+        }
+        let path = self.new_file.dir.join(relative);
+        if let Some(parent) = path.parent() {
+            if !parent.is_dir() {
+                self.new_file.error = Some(format!("folder does not exist: {}", parent.display()));
+                self.dirty = true;
+                return;
+            }
+        }
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                self.new_file.error = Some(format!("already exists: {name}"));
+                self.dirty = true;
+                return;
+            }
+            Err(error) => {
+                self.new_file.error = Some(format!("create failed: {error}"));
+                self.dirty = true;
+                return;
+            }
+        }
+        let name = name.clone();
+        self.new_file.open = false;
+        self.new_file.error = None;
+        if self.ws.folder_open {
+            self.ws.tree.reload();
+            if let Some(parent) = path.parent() {
+                self.ws.tree.expand_to(parent);
+            }
+        }
+        self.open_path(path);
+        self.status(format!("created {name}"));
+        self.dirty = true;
     }
 
     /// Opens the quick-open palette (folder required).
@@ -1831,6 +1960,15 @@ impl AppState {
         self.status(format!("revealed {name}"));
     }
 
+    /// Called when macOS asks to quit with dirty tabs.
+    pub fn request_quit(&mut self, dirty: usize) {
+        self.tab_menu = None;
+        self.tab_drag = None;
+        self.menu_open = None;
+        self.modal = Some(Modal::Quit { dirty });
+        self.dirty = true;
+    }
+
     /// Closes the active tab, asking for confirmation when it is dirty.
     pub fn request_close_active(&mut self) {
         self.request_close_tab(self.ws.active);
@@ -1875,6 +2013,17 @@ impl AppState {
         self.dirty = true;
     }
 
+    pub fn clear_recent(&mut self) {
+        if self.session.recent.is_empty() {
+            return;
+        }
+        self.session.recent.clear();
+        self.config_dirty = true;
+        crate::macos::clear_system_recent();
+        self.status("recent files cleared");
+        self.dirty = true;
+    }
+
     pub fn open_path(&mut self, path: impl Into<PathBuf>) {
         let path = path.into();
         let path = std::fs::canonicalize(&path).unwrap_or(path);
@@ -1889,6 +2038,7 @@ impl AppState {
                 self.tabs.reveal_active = true;
                 self.remember_disk(&path);
                 self.session.push_recent(&path);
+                crate::macos::note_recent(&path);
                 self.config_dirty = true;
                 self.sync_layout();
                 self.sync_session_tabs();
@@ -1951,6 +2101,7 @@ impl AppState {
             self.config_dirty = true;
             self.sidebar.selected = Some(path.clone());
             self.remember_disk(&path);
+            crate::macos::note_recent(&path);
         }
         self.sync_session_tabs();
     }
@@ -2188,6 +2339,12 @@ impl AppState {
                 }
                 _ => {}
             }
+            return;
+        }
+        if let Modal::Quit { .. } = modal {
+            self.modal = None;
+            crate::macos::reply_quit(button == ModalButton::Discard);
+            self.dirty = true;
             return;
         }
         if let Modal::ExternalChange { tab } = modal {
@@ -2479,6 +2636,7 @@ impl AppState {
                 self.focus = Focus::Editor;
                 self.status("new buffer");
             }
+            Action::NewFile => self.open_new_file(),
             Action::Open => {
                 self.pending_dialog = Some(DialogRequest {
                     kind: DialogKind::Open,
@@ -2568,6 +2726,7 @@ impl AppState {
             }
             Action::SetLanguage(name) => self.set_language(name),
             Action::OpenRecent(path) => self.open_path(path),
+            Action::ClearRecent => self.clear_recent(),
         }
         self.dirty = true;
     }
@@ -2790,6 +2949,17 @@ mod tests {
         assert!(state.modal.is_none());
         assert!(state.ws.tabs.is_empty());
         assert!(state.ws.active_doc().is_none());
+    }
+
+    #[test]
+    fn quit_request_opens_a_confirm_modal() {
+        let mut state = state();
+        state.ws.active_doc_mut().unwrap().insert_text("dirty");
+        state.request_quit(1);
+        assert!(matches!(state.modal, Some(Modal::Quit { dirty: 1 })));
+        state.resolve_modal(ModalButton::Cancel);
+        assert!(state.modal.is_none());
+        assert_eq!(state.ws.tabs.len(), 1);
     }
 
     #[test]

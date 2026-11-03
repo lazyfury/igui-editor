@@ -180,6 +180,7 @@ pub fn build(open: Option<PathBuf>, mode: Option<Mode>) -> App {
         .service::<SharedWindow>()
         .cloned()
         .unwrap_or_default();
+    crate::macos::install(window.clone());
     let logic = EditorApp::with_dialogs(open, mode, Box::new(NativeDialogs { window }));
     builder.logic(logic).build()
 }

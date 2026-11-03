@@ -7,8 +7,9 @@ through `igui_ui` / `igui_render` only.
 Tabs · undo/redo · find & replace · syntax highlighting (JSON language packs) ·
 Markdown split preview (tables included) · Quick Open (`⌘P`) · project search +
 replace (`⇧⌘F`) · scroll sync · tab drag/context menu · soft wrap · external-change
-detection · drag & drop · settings panel · native file dialogs · recent files ·
-session + window restore · autosave & crash recovery · large-file guards.
+detection · Finder/Dock file opening · Dock Recent · quick file creation · drag &
+drop · settings panel · native file dialogs · recent files · session + window
+restore · autosave & crash recovery · large-file guards.
 
 This checkout is **outside** the igui repository: it consumes the engine through
 path dependencies and never modifies it.
@@ -27,10 +28,40 @@ cargo run --release -- src                    # open a folder (no tab: welcome w
 cargo run --release -- --light README.md     # light palette
 ```
 
+## Package the macOS app
+
+```bash
+packaging/package-macos.sh
+open dist/igui-editor.app
+```
+
+The script builds a release binary, turns `packaging/icon.png` into a full
+`.icns`, assembles `dist/igui-editor.app` (Info.plist, icon, binary), and
+ad-hoc signs it, and writes a versioned `.zip` next to it. See
+[`packaging/README.md`](packaging/README.md) for icon-only
+regeneration, bundle IDs, version/build overrides, and Developer ID/notarization
+notes. `dist/` is git-ignored.
+
 `⌘O` / `⇧⌘O` / `⇧⌘S` use the **native** file dialogs (macOS `NSOpenPanel` /
 `NSSavePanel` sheets, Linux XDG portal, Windows common dialogs). They are
 asynchronous: the sheet attaches to the window, the app keeps rendering, and the
 result is applied on the first frame after it closes.
+
+## macOS integration
+
+- The `.app` registers text/Markdown document types (`txt`, `md`, `markdown`,
+  `mdown`, `mkd`) with Editor role and `Alternate` rank. Finder double-click,
+  `open -a`, “Open With” and cold launch all feed the same native request queue.
+- **Dock Recent**: right-click the Dock icon for `New File…`, an `Open Recent`
+  submenu built from the last 8 session paths, and `Clear Menu`. Missing files
+  are hidden/disabled; opening/saving also notes the file in the system Recent
+  Items via `NSDocumentController`.
+- **Quit guard**: `⌘Q` with dirty tabs returns `NSTerminateLater` and shows the
+  in-app **Discard & Quit / Cancel** confirmation; a clean app quits directly.
+- The native bridge never replaces winit's `NSApplicationDelegate`; it adds
+  `application:openURLs:`, `applicationDockMenu:` and
+  `applicationShouldTerminate:` to the existing delegate class and keeps
+  `setDelegate:` hooked so cold-open events are not lost.
 
 ## Keys
 
@@ -39,6 +70,7 @@ result is applied on the first frame after it closes.
 | `⌘O` / `⇧⌘O` | open file / open folder (sidebar root) |
 | `⌘S` / `⇧⌘S` | save / save as |
 | `⌘N` | new buffer (untitled) |
+| `⇧⌘N` | new file on disk (quick prompt) |
 | `⌘W` | close tab (asks Save / Discard / Cancel when dirty) |
 | `⌘Z` / `⇧⌘Z` | undo / redo (typing runs coalesce) |
 | `⌘X` / `⌘C` / `⌘V` | cut / copy / paste |
@@ -346,6 +378,11 @@ folder; replace-in-files (cancel is a no-op, apply rewrites a non-open file, an
 open tab is skipped); and scroll sync moves the preview from the editor and the
 editor back from the preview (including the disable toggle).
 
+M7 checks: native request queue opens a file and triggers New File; quick-create
+creates a real file and refuses to overwrite; `application:openURLs:` is verified
+against cold and running `open -a` launches; Dock menu/quit methods are installed
+on the existing winit delegate.
+
 M6 checks: tab drag-reorder and the right-click Close menu, soft-wrap layout
 (long-line split, wrapped click / Up / Down, `⌥Z`), clean/dirty external reload
 with the Keep/Reload modal, and the session soft-wrap setting persisted.
@@ -378,6 +415,8 @@ src/
   model/wrap.rs       soft-wrap display rows + visual row/column mapping
   dialogs.rs          `Dialogs` trait + scripted test double
   drop.rs             shared file-drop target (winit observer -> update)
+  native.rs           Finder/Dock/quit request queue (main-thread)
+  macos/              Apple Event open, Dock menu, recent + quit guard
   input.rs            keyboard dispatch: modal -> find -> shortcuts -> tree
   state.rs            shared state, actions, hit rects recorded during paint
   theme.rs            geek palette + compact metrics
@@ -389,6 +428,7 @@ src/
   ui/editor.rs        gutter, text, selection, caret, scrollbars, IME preedit
   ui/find_bar.rs      find / replace strip
   ui/quick_open.rs    Quick Open palette
+  ui/new_file.rs      quick-create-file prompt
   ui/project_search.rs  project search panel
   ui/split.rs         draggable editor/preview divider
   ui/recovery.rs      startup recovery prompt
@@ -399,6 +439,11 @@ src/
   app.rs              shell construction, input routing, igui_app glue
   host.rs             winit + wgpu plugins, native dialogs, monospace face
   selfcheck.rs        --selfcheck
+packaging/
+  icon.png            1254×1254 app-icon source
+  build-icon.sh       sips/iconutil -> AppIcon.icns
+  package-macos.sh    release build + .app bundle + ad-hoc signature
+  Info.plist.in       bundle metadata template
 ```
 
 ## Scope and known gaps
@@ -430,13 +475,18 @@ Delivered (M6): tab drag-reorder + right-click context menu, soft wrap with
 visual-row caret/click/navigation mapping and a 2 MB / 20k-line cap, external
 file-change detection (clean auto-reload, dirty Keep/Reload), session v4.
 
-Next candidates: code-plugin loading (dylib/wasm) on top of `SyntaxRegistry`,
-per-hit replace and cross-file undo, incremental preview layout for very large
-documents, word-boundary wrapping, and a filesystem watcher for sidebar/search
-freshness.
+Delivered (M7): macOS Finder/`open -a` file opening, Dock Recent/New File/Clear,
+quick file creation (`⇧⌘N`), system recent items, and a native dirty-quit guard.
+
+Next candidates: native macOS top menu bar (Window/Services/Help), window-close
+guard + Dock reopen, code-plugin loading (dylib/wasm), per-hit replace and
+cross-file undo, incremental preview layout for very large documents, and
+word-boundary wrapping.
 
 Notes:
 
+- Native macOS top menu, a close-window dirty guard and Dock reopen are not
+  implemented yet; closing the window still follows winit's event-loop exit.
 - Only macOS has been exercised manually; the Linux (XDG portal) and Windows
   dialog paths are wired but untested.
 - The macOS sheet path is asynchronous by design (no nested modal loop, no

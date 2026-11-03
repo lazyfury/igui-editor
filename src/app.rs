@@ -178,6 +178,15 @@ impl EditorApp {
         // Dialogs run first: opening a Markdown file can change the pane
         // structure, and the same frame must rebuild for it.
         self.pump_dialog();
+        self.pump_native_requests();
+        // Keep native Dock Recent / quit state in step with the session.
+        {
+            let state = self.state.borrow();
+            crate::macos::set_recent(&state.session.recent);
+            crate::macos::set_dirty_count(
+                state.ws.tabs.iter().filter(|doc| doc.is_dirty()).count(),
+            );
+        }
         // A settings panel change (or a sidebar drag) may need the flex basis
         // updated without rebuilding the shell.
         let (pending, width, sidebar) = {
@@ -252,6 +261,7 @@ impl EditorApp {
         ui::tab_menu::paint(&mut state, measurer.as_ref(), ctx);
         ui::settings::paint(&mut state, measurer.as_ref(), ctx);
         ui::quick_open::paint(&mut state, measurer.as_ref(), ctx);
+        ui::new_file::paint(&mut state, measurer.as_ref(), ctx);
         ui::project_search::paint(&mut state, measurer.as_ref(), ctx);
         ui::drop::paint(&state, measurer.as_ref(), ctx);
         ui::modal::paint(&mut state, measurer.as_ref(), ctx);
@@ -287,6 +297,10 @@ impl EditorApp {
                 // toggles that menu (including closing the open one).
                 if state.settings_open {
                     ui::settings::click(&mut state, *position);
+                    return EventResult::Handled;
+                }
+                if state.new_file.open {
+                    ui::new_file::click(&mut state, *position);
                     return EventResult::Handled;
                 }
                 if state.quick_open.open {
@@ -430,6 +444,9 @@ impl EditorApp {
                 if state.settings_open && ui::settings::on_key(&mut state, *key, modifiers) {
                     return EventResult::Handled;
                 }
+                if state.new_file.open && ui::new_file::on_key(&mut state, *key, modifiers) {
+                    return EventResult::Handled;
+                }
                 if state.quick_open.open && ui::quick_open::on_key(&mut state, *key, modifiers) {
                     return EventResult::Handled;
                 }
@@ -461,6 +478,9 @@ impl EditorApp {
                     }
                     return result;
                 }
+                if state.new_file.open {
+                    return EventResult::Handled;
+                }
                 if state.find.open && *key == Key::Escape {
                     state.close_find();
                     return EventResult::Handled;
@@ -490,6 +510,10 @@ impl EditorApp {
                 if state.settings_open || state.recovery_prompt.is_some() {
                     return EventResult::Handled;
                 }
+                if state.new_file.open {
+                    ui::new_file::on_text(&mut state, text);
+                    return EventResult::Handled;
+                }
                 if state.quick_open.open {
                     ui::quick_open::on_text(&mut state, text);
                     return EventResult::Handled;
@@ -512,6 +536,10 @@ impl EditorApp {
             InputEvent::Ime(ime) => {
                 let mut state = self.state.borrow_mut();
                 if state.settings_open || state.recovery_prompt.is_some() {
+                    return EventResult::Handled;
+                }
+                if state.new_file.open {
+                    ui::new_file::on_ime(&mut state, ime);
                     return EventResult::Handled;
                 }
                 if state.quick_open.open {
@@ -600,6 +628,34 @@ impl EditorApp {
                     }
                 }
                 state.save_as(path, pending.then_close);
+            }
+        }
+    }
+
+    /// Drains Finder/Dock/quit commands from the macOS bridge.
+    fn pump_native_requests(&mut self) {
+        for request in crate::native::take() {
+            match request {
+                crate::native::NativeRequest::Open(paths) => {
+                    self.state.borrow_mut().open_dropped(paths);
+                }
+                crate::native::NativeRequest::NewFile => {
+                    self.state.borrow_mut().open_new_file();
+                }
+                crate::native::NativeRequest::ClearRecent => {
+                    self.state.borrow_mut().clear_recent();
+                }
+                crate::native::NativeRequest::Quit => {
+                    let dirty = self
+                        .state
+                        .borrow()
+                        .ws
+                        .tabs
+                        .iter()
+                        .filter(|doc| doc.is_dirty())
+                        .count();
+                    self.state.borrow_mut().request_quit(dirty);
+                }
             }
         }
     }
@@ -917,6 +973,7 @@ impl AppLogic for EditorApp {
         if let Some(drop) = ctx.service::<SharedDropTarget>() {
             self.drop = Some(drop.clone());
         }
+        crate::macos::install_dock();
         self.sync_title();
     }
 

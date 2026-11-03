@@ -437,6 +437,90 @@ fn check(dir: &Path) -> Result<(), String> {
         return Err("Reveal in Sidebar did not select the tab's file".into());
     }
 
+    // -- quick create file ----------------------------------------------
+    harness.shortcut(
+        Key::Character('n'),
+        Modifiers {
+            meta: true,
+            shift: true,
+            ..Modifiers::NONE
+        },
+    );
+    harness.frame()?;
+    if !harness.app.state().new_file.open {
+        return Err("⇧⌘N did not open the New File prompt".into());
+    }
+    harness.type_text("made.txt");
+    harness.key(Key::Enter);
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        if state.new_file.open {
+            return Err(format!(
+                "creating a file left the prompt open: {:?}",
+                state.new_file.error
+            ));
+        }
+        let path = canonical_target(main_path.with_file_name("made.txt"));
+        if !path.is_file() {
+            return Err("the New File prompt did not create the file".into());
+        }
+        if state.ws.active_doc().and_then(|doc| doc.path()) != Some(path.as_path()) {
+            return Err("the created file was not opened".into());
+        }
+    }
+    // A second create with the same name is an inline error, not an overwrite.
+    harness.shortcut(
+        Key::Character('n'),
+        Modifiers {
+            meta: true,
+            shift: true,
+            ..Modifiers::NONE
+        },
+    );
+    harness.frame()?;
+    harness.type_text("made.txt");
+    harness.key(Key::Enter);
+    harness.frame()?;
+    if !harness.app.state().new_file.open || harness.app.state().new_file.error.is_none() {
+        return Err("creating an existing file must stay in the prompt with an error".into());
+    }
+    harness.key(Key::Escape);
+    harness.frame()?;
+    let created_tab = harness.app.state().ws.active;
+    harness.app.state_mut().close_tab_now(created_tab);
+    harness.frame()?;
+
+    // Native macOS queue: Finder/Dock open + New File commands.
+    let native_path = dir.join("native-open.txt");
+    fs::write(&native_path, "native open\n").map_err(|error| format!("fixture: {error}"))?;
+    crate::native::push(crate::native::NativeRequest::Open(
+        vec![native_path.clone()],
+    ));
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        if state
+            .ws
+            .active_doc()
+            .and_then(|doc| doc.path())
+            .and_then(|path| path.file_name())
+            .and_then(|name| name.to_str())
+            != Some("native-open.txt")
+        {
+            return Err("the native Open request did not open the file".into());
+        }
+    }
+    let native_tab = harness.app.state().ws.active;
+    harness.app.state_mut().close_tab_now(native_tab);
+    crate::native::push(crate::native::NativeRequest::NewFile);
+    harness.frame()?;
+    if !harness.app.state().new_file.open {
+        return Err("the native New File request did not open the prompt".into());
+    }
+    harness.key(Key::Escape);
+    harness.frame()?;
+
     // -- typing, save, undo/redo ----------------------------------------
     harness.type_text("// typed by selfcheck\n");
     let frame = harness.frame()?;
