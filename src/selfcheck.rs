@@ -117,6 +117,18 @@ impl Harness {
         });
     }
 
+    fn double_click(&mut self, position: Vec2) {
+        self.event(InputEvent::PointerDown {
+            position,
+            button: PointerButton::Left,
+        });
+        self.event(InputEvent::DoubleClick { position });
+        self.event(InputEvent::PointerUp {
+            position,
+            button: PointerButton::Left,
+        });
+    }
+
     fn right_click(&mut self, position: Vec2) {
         self.event(InputEvent::PointerDown {
             position,
@@ -253,6 +265,78 @@ fn check(dir: &Path) -> Result<(), String> {
             ));
         }
     }
+    // -- double-click selects the word under the pointer, without snapping
+    // the selection back to the clicked caret.
+    let main_at = draw_position(&frame, "main").ok_or("main token was not painted")?;
+    let main_click = Vec2::new(main_at.x + 2.0, main_at.y - 4.0);
+    harness.click(main_click);
+    harness.double_click(main_click);
+    harness.event(InputEvent::PointerMove {
+        position: Vec2::new(main_click.x + 120.0, main_click.y),
+    });
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        let doc = state
+            .ws
+            .active_doc()
+            .ok_or("no document after double-click")?;
+        if doc.selected_text() != Some("main") {
+            return Err(format!(
+                "double-click selected {:?} at caret {:?}, expected main",
+                doc.selected_text(),
+                doc.line_col()
+            ));
+        }
+    }
+    harness.double_click(main_click);
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        let doc = state
+            .ws
+            .active_doc()
+            .ok_or("no document after triple-click")?;
+        if doc.selected_text() != Some("fn main() {\n") {
+            return Err(format!(
+                "triple-click selected {:?}, expected the whole line",
+                doc.selected_text()
+            ));
+        }
+    }
+    if let Some(doc) = harness.app.state_mut().ws.active_doc_mut() {
+        doc.set_caret(0);
+    }
+
+    // VS Code / JetBrains empty-selection cut: the current line is removed.
+    {
+        let mut state = harness.app.state_mut();
+        let doc = state
+            .ws
+            .active_doc_mut()
+            .ok_or("no document for line cut")?;
+        doc.set_caret(doc.byte_at(3, 2));
+    }
+    harness.shortcut(
+        Key::Character('x'),
+        Modifiers {
+            meta: true,
+            ..Modifiers::NONE
+        },
+    );
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        let doc = state.ws.active_doc().ok_or("no document after line cut")?;
+        if doc.text().contains("println!") {
+            return Err("⌘X with an empty selection did not cut the current line".into());
+        }
+    }
+    if let Some(doc) = harness.app.state_mut().ws.active_doc_mut() {
+        doc.undo();
+        doc.set_caret(0);
+    }
+
     // The close target reaches the tab's top edge, not just the painted glyph.
     let tabs_before = harness.app.state().ws.tabs.len();
     harness.shortcut(

@@ -69,11 +69,25 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
                     let Some((line, column)) = hit(&state, pos, measurer.as_ref()) else {
                         return;
                     };
+                    let triple = state.editor.last_double.is_some_and(|(at, previous)| {
+                        at.elapsed() < std::time::Duration::from_millis(450)
+                            && (previous - pos).length() <= 6.0
+                    });
                     if let Some(doc) = state.ws.active_doc_mut() {
                         let byte = doc.byte_at(line, column);
-                        doc.select_word_at(byte);
+                        if triple {
+                            doc.select_line_at(byte);
+                            state.editor.last_double = None;
+                        } else {
+                            doc.select_word_at(byte);
+                            state.editor.last_double = Some((std::time::Instant::now(), pos));
+                        }
                     }
-                    state.editor.reveal = true;
+                    // The host sends the second Down first. Stop that press's
+                    // selection drag here so a tiny pointer move cannot shrink
+                    // or move the word selection after it appears.
+                    state.editor.drag = Drag::None;
+                    state.editor.reveal = false;
                     state.dirty = true;
                 }
             }

@@ -495,6 +495,60 @@ impl Document {
         self.caret = end.max(start);
     }
 
+    /// The current line including its trailing newline, for copy/cut with no
+    /// selection. The last line has no trailing newline.
+    pub fn current_line_text(&self) -> Option<String> {
+        let (start, end) = self.clip_line_bounds()?;
+        Some(self.text[start..end].to_string())
+    }
+
+    /// VS Code / JetBrains style empty-selection cut: remove the current line
+    /// (including its newline) and return the removed text. The newline before
+    /// the last line is removed too, so cutting the final line does not leave
+    /// an empty row behind.
+    pub fn cut_current_line(&mut self) -> Option<String> {
+        if self.read_only || self.text.is_empty() {
+            return None;
+        }
+        let (start, end) = self.clip_line_bounds()?;
+        let text = self.text[start..end].to_string();
+        let replace_start = if end == self.text.len() && start > 0 {
+            prev_boundary(&self.text, start)
+        } else {
+            start
+        };
+        self.replace(replace_start, end, "", Kind::Other);
+        let caret = replace_start.min(self.text.len());
+        self.set_caret(caret);
+        Some(text)
+    }
+
+    fn clip_line_bounds(&self) -> Option<(usize, usize)> {
+        if self.text.is_empty() {
+            return None;
+        }
+        let line = self.line_of(self.caret);
+        let start = self.line_start(line);
+        let end = if line + 1 < self.line_count() {
+            self.line_start(line + 1)
+        } else {
+            self.text.len()
+        };
+        Some((start, end))
+    }
+
+    /// Selects the whole logical line containing `byte` (triple-click). The
+    /// selection includes the trailing newline when there is one.
+    pub fn select_line_at(&mut self, byte: usize) {
+        let line = self.line_of(byte);
+        self.anchor = self.line_start(line);
+        self.caret = if line + 1 < self.line_count() {
+            self.line_start(line + 1)
+        } else {
+            self.line_end(line)
+        };
+    }
+
     // -- edits ---------------------------------------------------------------
 
     pub fn insert_text(&mut self, insert: &str) {
@@ -1097,6 +1151,47 @@ mod tests {
         assert_eq!(doc.line_col(), (1, 3)); // caret ends after "x"
         let byte = doc.byte_at(1, 2); // after 你好 (6 bytes)
         assert_eq!(&doc.text()[..byte], "ab\n你好");
+    }
+
+    #[test]
+    fn select_line_includes_the_newline_except_at_eof() {
+        let mut doc = doc("one\ntwo");
+        doc.select_line_at(1);
+        assert_eq!(doc.selected_text(), Some("one\n"));
+        doc.select_line_at(doc.byte_at(1, 1));
+        assert_eq!(doc.selected_text(), Some("two"));
+    }
+
+    #[test]
+    fn cut_current_line_includes_newline_and_undoes() {
+        let mut doc = doc("one\ntwo\nthree");
+        doc.set_caret(doc.byte_at(1, 1));
+        assert_eq!(doc.cut_current_line().as_deref(), Some("two\n"));
+        assert_eq!(doc.text(), "one\nthree");
+        assert_eq!(doc.line_col(), (1, 0));
+        doc.undo();
+        assert_eq!(doc.text(), "one\ntwo\nthree");
+    }
+
+    #[test]
+    fn cut_last_line_removes_the_preceding_newline() {
+        let mut empty_last = doc("one\n");
+        let mut doc = doc("one\ntwo");
+        doc.set_caret(doc.byte_at(1, 1));
+        assert_eq!(doc.cut_current_line().as_deref(), Some("two"));
+        assert_eq!(doc.text(), "one");
+        empty_last.set_caret(empty_last.text().len());
+        assert_eq!(empty_last.cut_current_line().as_deref(), Some(""));
+        assert_eq!(empty_last.text(), "one");
+    }
+
+    #[test]
+    fn current_line_text_matches_the_caret_line() {
+        let mut doc = doc("one\ntwo");
+        doc.set_caret(0);
+        assert_eq!(doc.current_line_text().as_deref(), Some("one\n"));
+        doc.set_caret(doc.byte_at(1, 0));
+        assert_eq!(doc.current_line_text().as_deref(), Some("two"));
     }
 
     #[test]

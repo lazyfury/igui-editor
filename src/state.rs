@@ -328,8 +328,8 @@ impl Action {
             Action::CloseTab => doc.is_some(),
             Action::Undo => doc.is_some_and(|doc| !doc.is_read_only() && doc.can_undo()),
             Action::Redo => doc.is_some_and(|doc| !doc.is_read_only() && doc.can_redo()),
-            Action::Cut => doc.is_some_and(|doc| !doc.is_read_only() && doc.has_selection()),
-            Action::Copy => doc.is_some_and(|doc| doc.has_selection()),
+            Action::Cut => doc.is_some_and(|doc| !doc.is_read_only()),
+            Action::Copy => doc.is_some(),
             Action::Paste => {
                 doc.is_some_and(|doc| !doc.is_read_only()) && state.clipboard.is_some()
             }
@@ -562,6 +562,8 @@ pub struct EditorUi {
     pub view_h: f32,
     /// In-progress IME composition (text, optional cursor range).
     pub preedit: Option<(String, Option<(usize, usize)>)>,
+    /// Last word-selecting double click, to recognize a triple click.
+    pub last_double: Option<(Instant, Vec2)>,
     /// Scroll the caret into view on the next paint (set by input, not by
     /// wheel scrolling).
     pub reveal: bool,
@@ -3568,12 +3570,25 @@ impl AppState {
                         doc.delete_selection();
                     }
                     self.find.dirty = true;
+                } else if let Some(text) = self
+                    .ws
+                    .active_doc_mut()
+                    .and_then(Document::cut_current_line)
+                {
+                    self.set_clipboard(&text);
+                    self.find.dirty = true;
+                    self.status("cut line");
                 }
             }
             Action::Copy => {
                 if let Some(text) = self.selected_text() {
                     self.set_clipboard(&text);
                     self.status("copied");
+                } else if let Some(text) =
+                    self.ws.active_doc().and_then(Document::current_line_text)
+                {
+                    self.set_clipboard(&text);
+                    self.status("copied line");
                 }
             }
             Action::Paste => match self.get_clipboard() {

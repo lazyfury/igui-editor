@@ -154,7 +154,7 @@ contents do not. Multiple sessions are a follow-up.
 | `⌃\`` | toggle the built-in terminal |
 | `⌘W` | close tab (asks Save / Discard / Cancel when dirty) |
 | `⌘Z` / `⇧⌘Z` | undo / redo (typing runs coalesce) |
-| `⌘X` / `⌘C` / `⌘V` | cut / copy / paste |
+| `⌘X` / `⌘C` / `⌘V` | cut / copy / paste (empty selection: cut/copy the current line) |
 | `⌘A` | select all |
 | `⌘P` | Quick Open (fuzzy file picker) |
 | `⇧⌘F` | search in folder |
@@ -175,12 +175,19 @@ contents do not. Multiple sessions are a follow-up.
 | `⌥←` / `⌥→` | word left / right |
 | `⌥` + click | extend selection |
 | double click | select word |
+| triple click | select the current line |
 | `Enter` / `⇧Enter` in find | next / previous match |
 | `Esc` | close find · cancel modal |
 | wheel / trackpad | vertical scroll, `⇧`+wheel horizontal; over the tab strip it scrolls overflowing tabs (no tab scrollbar) |
 | drag a tab | reorder it (order persists across restarts) |
 | right-click a tab | Close / Close Others / Close to the Right / Copy Path / Reveal in Sidebar |
 | drop files / folders | files open in tabs; a folder becomes the workspace |
+
+Editing follows VS Code / JetBrains conventions: `⌘X` / `⌘C` with an empty
+selection operate on the current line, double-click selects a word, and
+triple-click selects the line (including its newline). Put the caret at the end
+of a line and press `⌘X` to remove that line; no special “line selection” click
+mode is required.
 
 Find bar: query and replacement fields, `Aa` (case) and `W` (whole word)
 toggles, `Replace` / `Replace All`, match counter, prev/next/close. All matches
