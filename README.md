@@ -151,8 +151,9 @@ non-project buffers.
 - When a hover is a Godot native class or member, the card shows **OPEN GODOT
   DOCS**; clicking it opens an embedded documentation panel backed by Godot's
   `textDocument/nativeSymbol` response. The panel renders BBCode references as
-  clickable class/member links, supports Back and scrolling, and Ctrl/Cmd-click
-  a native class name opens the same panel. `_ready` and other local completion
+  clickable class/member links, supports Back and scrolling. Ctrl/Cmd-clicking
+  any native symbol (class, method, virtual method, global function or property)
+  opens the same panel; the completion preview offers the same docs action. `_ready` and other local completion
   items can open their resolved documentation as a plain embedded document.
 - Moving the mouse over code for about 350 ms opens the same hover card. The
   card stays while the pointer is over it, and gets a short grace period when

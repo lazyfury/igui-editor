@@ -1833,6 +1833,9 @@ impl AppState {
                 self.dirty = true;
             }
         }
+        if let Some(target) = self.lsp.take_native_docs_target() {
+            self.open_native_docs(&target);
+        }
     }
 
     fn open_lsp_location(&mut self, location: lsp::Location) {
@@ -2167,6 +2170,15 @@ impl AppState {
         if self.lsp.request_completion(doc) {
             self.dirty = true;
         }
+    }
+
+    /// Probes hover at a byte so Ctrl/Cmd-click can open native docs for
+    /// methods, virtual methods, global functions and properties.
+    pub fn request_lsp_native_docs_at(&mut self, byte: usize) -> bool {
+        let Some(doc) = self.ws.active_doc() else {
+            return false;
+        };
+        self.lsp.request_native_docs_at(doc, byte)
     }
 
     pub fn request_lsp_completion(&mut self) {

@@ -162,6 +162,7 @@ pub struct Location {
 enum PendingKind {
     Initialize,
     Hover,
+    HoverDocs,
     Completion,
     CompletionResolve { index: usize },
     Definition,
@@ -633,6 +634,7 @@ pub struct LspController {
     native_classes: HashSet<String>,
     native_symbols: HashMap<(String, String), NativeSymbol>,
     native_result: Option<(String, String, NativeSymbol)>,
+    native_docs_target: Option<NativeTarget>,
     location: Option<Location>,
     changed: bool,
 }
@@ -666,6 +668,7 @@ impl Default for LspController {
             native_classes: HashSet::new(),
             native_symbols: HashMap::new(),
             native_result: None,
+            native_docs_target: None,
             location: None,
             changed: false,
         }
@@ -830,6 +833,7 @@ impl LspController {
         self.native_classes.clear();
         self.native_symbols.clear();
         self.native_result = None;
+        self.native_docs_target = None;
         self.location = None;
     }
 
@@ -904,6 +908,10 @@ impl LspController {
             }
             PendingKind::Hover => {
                 self.hover = hover_ui(result);
+                self.changed = true;
+            }
+            PendingKind::HoverDocs => {
+                self.native_docs_target = hover_ui(result).and_then(|hover| hover.native);
                 self.changed = true;
             }
             PendingKind::Completion => {
@@ -1222,6 +1230,17 @@ impl LspController {
         self.completion = None;
         self.cancel_popup_requests();
         self.send_position_at("textDocument/hover", PendingKind::Hover, doc, byte)
+    }
+
+    /// Ctrl/Cmd-click documentation probe: ask for hover at a byte and let the
+    /// caller open native docs if the declaration is a native symbol.
+    pub fn request_native_docs_at(&mut self, doc: &Document, byte: usize) -> bool {
+        self.native_docs_target = None;
+        self.send_position_at("textDocument/hover", PendingKind::HoverDocs, doc, byte)
+    }
+
+    pub fn take_native_docs_target(&mut self) -> Option<NativeTarget> {
+        self.native_docs_target.take()
     }
 
     pub fn request_completion(&mut self, doc: &Document) -> bool {
@@ -2070,6 +2089,18 @@ mod tests {
             print.docs_url(),
             "https://docs.godotengine.org/en/stable/classes/class_@globalscope.html#class-globalscope-method-print"
         );
+        let ready = native_target_from_hover("func Node._ready() -> void\n\n...").unwrap();
+        assert_eq!(
+            (ready.class.as_str(), ready.symbol.as_str()),
+            ("Node", "_ready")
+        );
+        assert_eq!(ready.kind, NativeDocKind::Method);
+        let property = native_target_from_hover("var Node.name: StringName\n\n...").unwrap();
+        assert_eq!(
+            (property.class.as_str(), property.symbol.as_str()),
+            ("Node", "name")
+        );
+        assert_eq!(property.kind, NativeDocKind::Property);
     }
 
     #[test]

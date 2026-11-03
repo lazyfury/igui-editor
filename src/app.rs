@@ -486,7 +486,8 @@ impl EditorApp {
                             state.open_native_docs(&target);
                             return EventResult::Handled;
                         }
-                        if state.request_lsp_definition_at(byte) {
+                        let native_docs = state.request_lsp_native_docs_at(byte);
+                        if state.request_lsp_definition_at(byte) || native_docs {
                             return EventResult::Handled;
                         }
                     }

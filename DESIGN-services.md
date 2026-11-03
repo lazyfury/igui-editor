@@ -130,7 +130,8 @@ PluginHost
   Completion activation is debounced (140 ms) and the selected item is resolved
   with `completionItem/resolve` to show a hover-style preview; native previews
   can enter the same embedded docs, while local methods use a plain resolved
-  document. Completion is prefix-filtered before the UI
+  document. Ctrl/Cmd-click performs a hover probe for classes, methods, virtual
+  methods, globals and properties before falling back to definition. Completion is prefix-filtered before the UI
   cap so global methods such as `print` are not lost in Godot's ~2000-item
   result. Semantic tokens
   are requested on open/change and painted over the syntax pass with
