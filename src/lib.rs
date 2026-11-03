@@ -9,8 +9,9 @@
 //! implementation; `main.rs` only parses arguments and starts the host.
 //!
 //! - `model/`: pure document + workspace + Markdown logic (unit-tested, no UI).
-//! - `syntax/`: the syntax-highlighting **extension API** plus built-in
-//!   providers (Rust, C, C++, JS, TS, Go, GDScript, JSON, TOML, Markdown).
+//! - `syntax/`: the syntax-highlighting **extension API**, built-in providers
+//!   (Rust, C, C++, JS, TS, Go, GDScript, JSON, TOML, Markdown) and declarative
+//!   JSON language packs (`load_language_packs`, `<config>/languages/*.json`).
 //! - `state.rs`: shared app state written by callbacks and read by painters.
 //! - `ui/`: one module per shell region and overlay.
 //! - `app.rs`: shell construction, input routing, `igui_app` glue.

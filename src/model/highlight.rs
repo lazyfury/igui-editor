@@ -105,8 +105,11 @@ impl HighlightCache {
         registry: &SyntaxRegistry,
         settings: &Settings,
         budget: usize,
+        language_override: Option<&str>,
     ) -> bool {
-        let registered = registry.for_path(doc.path());
+        let registered = language_override
+            .and_then(|name| registry.by_name(name))
+            .or_else(|| registry.for_path(doc.path()));
         let name = registered.as_ref().map(|provider| provider.name());
         let provider = if settings.syntax { registered } else { None };
         let line_count = doc.line_count();
@@ -206,7 +209,7 @@ mod tests {
         let mut cache = HighlightCache::new();
         let registry = SyntaxRegistry::with_builtins();
         let settings = Settings::default();
-        assert!(cache.sync(&doc, &registry, &settings, FRAME_LINE_BUDGET));
+        assert!(cache.sync(&doc, &registry, &settings, FRAME_LINE_BUDGET, None));
         assert_eq!(cache.language(), Some("rust"));
         assert_eq!(
             cache.tokens(0).unwrap()[0].kind,
@@ -226,7 +229,7 @@ mod tests {
         let end = doc.text().len();
         doc.set_caret(end);
         doc.insert_text("// tail");
-        assert!(cache.sync(&doc, &registry, &settings, FRAME_LINE_BUDGET));
+        assert!(cache.sync(&doc, &registry, &settings, FRAME_LINE_BUDGET, None));
         assert!(cache
             .tokens(2)
             .unwrap()
@@ -245,11 +248,11 @@ mod tests {
         let mut cache = HighlightCache::new();
         let registry = SyntaxRegistry::with_builtins();
         let settings = Settings::default();
-        assert!(!cache.sync(&doc, &registry, &settings, 3));
+        assert!(!cache.sync(&doc, &registry, &settings, 3, None));
         assert!(cache.tokens(2).is_some());
         assert!(cache.tokens(5).is_none());
         loop {
-            if cache.sync(&doc, &registry, &settings, 3) {
+            if cache.sync(&doc, &registry, &settings, 3, None) {
                 break;
             }
         }
@@ -272,7 +275,13 @@ mod tests {
         let doc = Document::open(11, &path).unwrap();
         let mut cache = HighlightCache::new();
         let registry = SyntaxRegistry::with_builtins();
-        assert!(cache.sync(&doc, &registry, &Settings::default(), FRAME_LINE_BUDGET));
+        assert!(cache.sync(
+            &doc,
+            &registry,
+            &Settings::default(),
+            FRAME_LINE_BUDGET,
+            None
+        ));
         assert!(!cache.is_active());
         assert_eq!(cache.language(), Some("rust"));
         let _ = fs::remove_dir_all(dir);
@@ -287,7 +296,7 @@ mod tests {
             syntax: false,
             ..Settings::default()
         };
-        assert!(cache.sync(&doc, &registry, &settings, 100));
+        assert!(cache.sync(&doc, &registry, &settings, 100, None));
         assert!(!cache.is_active());
         assert!(cache.tokens(0).is_none());
         assert_eq!(cache.language(), Some("rust"));

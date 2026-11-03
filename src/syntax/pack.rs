@@ -1,0 +1,329 @@
+//! Declarative language packs: JSON files under `<config>/languages/*.json`.
+//!
+//! This is the data-only half of the extension seam: a pack can add keywords,
+//! comments, strings and simple flags to the existing C-family tokenizer
+//! without shipping code. Built-ins always win a name clash (the registry keeps
+//! the first registration), and code plugins remain out of scope.
+//!
+//! ```json
+//! {
+//!   "name": "lua",
+//!   "extensions": ["lua"],
+//!   "line_comment": ["--"],
+//!   "block_comment": ["--[[", "]]"],
+//!   "keywords": ["function", "local", "end"],
+//!   "constants": ["true", "false", "nil"],
+//!   "strings": [{ "quote": "\"", "escapes": true }]
+//! }
+//! ```
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use serde::Deserialize;
+
+use super::cstyle::{self, LangSpec, StringSpec};
+use super::SyntaxProvider;
+
+/// Packs loaded per launch.
+pub const MAX_PACKS: usize = 64;
+/// Largest pack file in bytes.
+pub const MAX_PACK_BYTES: u64 = 64 * 1024;
+
+/// One JSON language pack.
+#[derive(Clone, Debug, Deserialize)]
+pub struct LanguagePack {
+    pub name: String,
+    pub extensions: Vec<String>,
+    #[serde(default)]
+    pub line_comment: Vec<String>,
+    #[serde(default)]
+    pub block_comment: Option<Vec<String>>,
+    #[serde(default)]
+    pub nested_block: bool,
+    #[serde(default)]
+    pub keywords: Vec<String>,
+    #[serde(default)]
+    pub types: Vec<String>,
+    #[serde(default)]
+    pub constants: Vec<String>,
+    #[serde(default)]
+    pub strings: Vec<PackString>,
+    #[serde(default)]
+    pub triple: bool,
+    #[serde(default)]
+    pub template: bool,
+    #[serde(default)]
+    pub template_escapes: bool,
+    #[serde(default)]
+    pub preprocessor: bool,
+    #[serde(default)]
+    pub annotations: bool,
+    #[serde(default)]
+    pub toml_tables: bool,
+    #[serde(default)]
+    pub case_types: bool,
+}
+
+/// One quote style.
+#[derive(Clone, Debug, Deserialize)]
+pub struct PackString {
+    /// Exactly one ASCII character, e.g. `"` or `'`.
+    pub quote: String,
+    #[serde(default)]
+    pub escapes: bool,
+}
+
+impl LanguagePack {
+    /// Parses and validates one JSON document.
+    pub fn parse(json: &str) -> Result<Self, String> {
+        let pack: Self = serde_json::from_str(json).map_err(|error| error.to_string())?;
+        pack.validate()?;
+        Ok(pack)
+    }
+
+    /// Checks names, extensions, markers and list sizes.
+    pub fn validate(&self) -> Result<(), String> {
+        let name = self.name.trim();
+        if name.is_empty() || name.chars().count() > 32 {
+            return Err("name must be 1..32 characters".into());
+        }
+        if self.extensions.is_empty() || self.extensions.len() > 16 {
+            return Err("extensions must contain 1..16 entries".into());
+        }
+        for extension in &self.extensions {
+            if extension.is_empty()
+                || extension.len() > 12
+                || extension.starts_with('.')
+                || extension.contains('/')
+            {
+                return Err(format!("invalid extension {extension:?}"));
+            }
+        }
+        if self.line_comment.len() > 4
+            || self
+                .line_comment
+                .iter()
+                .any(|marker| marker.is_empty() || marker.len() > 8 || marker.contains('\n'))
+        {
+            return Err("invalid line_comment markers".into());
+        }
+        if let Some(block) = &self.block_comment {
+            if block.len() != 2
+                || block
+                    .iter()
+                    .any(|marker| marker.is_empty() || marker.len() > 8 || marker.contains('\n'))
+            {
+                return Err("block_comment must be two non-empty markers".into());
+            }
+        }
+        for (label, list) in [
+            ("keywords", &self.keywords),
+            ("types", &self.types),
+            ("constants", &self.constants),
+        ] {
+            if list.len() > 2_000 || list.iter().any(|item| item.len() > 64 || item.is_empty()) {
+                return Err(format!("invalid {label} list"));
+            }
+        }
+        if self.strings.len() > 8 {
+            return Err("too many string styles".into());
+        }
+        for string in &self.strings {
+            let mut chars = string.quote.chars();
+            let Some(quote) = chars.next() else {
+                return Err("string quote must not be empty".into());
+            };
+            if !quote.is_ascii() || chars.next().is_some() {
+                return Err("string quote must be one ASCII character".into());
+            }
+        }
+        Ok(())
+    }
+
+    fn into_provider(self) -> Result<Arc<dyn SyntaxProvider>, String> {
+        self.validate()?;
+        let strings: Vec<StringSpec> = if self.strings.is_empty() {
+            vec![
+                StringSpec {
+                    quote: b'"',
+                    escapes: true,
+                },
+                StringSpec {
+                    quote: b'\'',
+                    escapes: true,
+                },
+            ]
+        } else {
+            self.strings
+                .iter()
+                .map(|string| {
+                    let quote = string.quote.as_bytes()[0];
+                    StringSpec {
+                        quote,
+                        escapes: string.escapes,
+                    }
+                })
+                .collect()
+        };
+        let spec: &'static LangSpec = Box::leak(Box::new(LangSpec {
+            name: leak(&self.name),
+            extensions: leak_strs(self.extensions),
+            line_comment: leak_strs(self.line_comment),
+            block_comment: self
+                .block_comment
+                .map(|block| (leak(&block[0]), leak(&block[1]))),
+            nested_block: self.nested_block,
+            strings: Box::leak(strings.into_boxed_slice()),
+            triple: self.triple,
+            rust: false,
+            cpp_raw: false,
+            template: self.template,
+            template_escapes: self.template_escapes,
+            preprocessor: self.preprocessor,
+            annotations: self.annotations,
+            toml_tables: self.toml_tables,
+            case_types: self.case_types,
+            keywords: leak_strs(self.keywords),
+            types: leak_strs(self.types),
+            constants: leak_strs(self.constants),
+        }));
+        Ok(cstyle::provider(spec))
+    }
+}
+
+/// Loads every `*.json` under `dir` (sorted, capped). Returns providers plus
+/// human-readable errors for skipped files; a missing directory is not an
+/// error.
+pub fn load_language_packs(dir: &Path) -> (Vec<Arc<dyn SyntaxProvider>>, Vec<String>) {
+    let mut providers = Vec::new();
+    let mut errors = Vec::new();
+    let Ok(entries) = fs::read_dir(dir) else {
+        return (providers, errors);
+    };
+    let mut paths: Vec<PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
+        .collect();
+    paths.sort();
+    paths.truncate(MAX_PACKS);
+    for path in paths {
+        let name = path.display().to_string();
+        match fs::metadata(&path) {
+            Ok(meta) if meta.len() > MAX_PACK_BYTES => {
+                errors.push(format!("{name}: larger than 64 KB"));
+                continue;
+            }
+            Err(error) => {
+                errors.push(format!("{name}: {error}"));
+                continue;
+            }
+            _ => {}
+        }
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) => {
+                errors.push(format!("{name}: {error}"));
+                continue;
+            }
+        };
+        match LanguagePack::parse(&text).and_then(|pack| pack.into_provider()) {
+            Ok(provider) => providers.push(provider),
+            Err(error) => errors.push(format!("{name}: {error}")),
+        }
+    }
+    (providers, errors)
+}
+
+fn leak(value: &str) -> &'static str {
+    Box::leak(value.to_string().into_boxed_str())
+}
+
+fn leak_strs(values: Vec<String>) -> &'static [&'static str] {
+    let leaked: Vec<&'static str> = values.iter().map(|value| leak(value)).collect();
+    Box::leak(leaked.into_boxed_slice())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+    use crate::syntax::{Highlight, SyntaxRegistry, TokenKind};
+
+    fn dir(tag: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("igui-editor-pack-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn lua_pack() -> &'static str {
+        r#"{
+            "name": "lua",
+            "extensions": ["lua"],
+            "line_comment": ["--"],
+            "block_comment": ["--[[", "]]"],
+            "keywords": ["function", "local", "end"],
+            "constants": ["true", "false", "nil"],
+            "strings": [{"quote": "\"", "escapes": true}]
+        }"#
+    }
+
+    #[test]
+    fn parses_and_highlights_declarative_packs() {
+        let pack = LanguagePack::parse(lua_pack()).expect("valid pack");
+        assert_eq!(pack.name, "lua");
+        let provider = pack.into_provider().expect("provider");
+        assert_eq!(provider.name(), "lua");
+        assert_eq!(provider.extensions(), &["lua"]);
+        let (tokens, _) = provider.highlight_line("local function f() end -- note", 0);
+        assert!(tokens
+            .iter()
+            .any(|token: &Highlight| token.kind == TokenKind::Keyword));
+        assert!(tokens.iter().any(|token| token.kind == TokenKind::Comment));
+    }
+
+    #[test]
+    fn rejects_bad_packs() {
+        assert!(LanguagePack::parse(r#"{"name":"","extensions":["x"]}"#).is_err());
+        assert!(LanguagePack::parse(r#"{"name":"x","extensions":[]}"#).is_err());
+        assert!(LanguagePack::parse(
+            r#"{"name":"x","extensions":["x"],"strings":[{"quote":"ab"}]}"#
+        )
+        .is_err());
+        assert!(
+            LanguagePack::parse(r#"{"name":"x","extensions":["x"],"block_comment":["/*"]}"#)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn load_dir_skips_broken_files_and_keeps_good_ones() {
+        let dir = dir("load");
+        fs::write(dir.join("lua.json"), lua_pack()).unwrap();
+        fs::write(dir.join("broken.json"), "{ not json").unwrap();
+        fs::write(dir.join("notes.txt"), "ignored").unwrap();
+        let (providers, errors) = load_language_packs(&dir);
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0].name(), "lua");
+        assert_eq!(errors.len(), 1);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn builtins_win_name_clashes() {
+        let mut registry = SyntaxRegistry::with_builtins();
+        let pack = LanguagePack::parse(lua_pack()).unwrap();
+        registry.register(pack.into_provider().unwrap());
+        let fake_rust =
+            LanguagePack::parse(r#"{"name":"rust","extensions":["fake"],"keywords":["whatever"]}"#)
+                .unwrap();
+        registry.register(fake_rust.into_provider().unwrap());
+        assert_eq!(registry.by_name("rust").unwrap().extensions(), &["rs"]);
+        assert!(registry.by_name("lua").is_some());
+    }
+}

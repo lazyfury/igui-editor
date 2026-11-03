@@ -4,10 +4,11 @@ A compact, square-cornered **text / Markdown editor** built on the
 [`igui`](../igui) engine (Rust). Native window: `winit` + `wgpu`, UI painted
 through `igui_ui` / `igui_render` only.
 
-Tabs · undo/redo · find & replace · syntax highlighting · Markdown split preview
-(tables included) · Quick Open (`⌘P`) · project search (`⇧⌘F`) · drag & drop ·
-settings panel · native file dialogs · recent files · session + window restore ·
-autosave & crash recovery · large-file guards.
+Tabs · undo/redo · find & replace · syntax highlighting (JSON language packs) ·
+Markdown split preview (tables included) · Quick Open (`⌘P`) · project search +
+replace (`⇧⌘F`) · scroll sync · drag & drop · settings panel · native file dialogs ·
+recent files · session + window restore · autosave & crash recovery ·
+large-file guards.
 
 This checkout is **outside** the igui repository: it consumes the engine through
 path dependencies and never modifies it.
@@ -50,6 +51,7 @@ result is applied on the first frame after it closes.
 | `⌘B` | toggle sidebar |
 | `⇧⌘L` | toggle dark / light |
 | `⇧⌘M` | cycle Editor → Split Preview → Preview Only |
+| `⇧⌘Y` | toggle editor/preview scroll sync |
 | `Tab` / `⇧Tab` | indent / outdent (block-aware) |
 | `Enter` | newline with the current indentation |
 | `⌘←` / `⌘→` | smart home / line end |
@@ -123,6 +125,51 @@ registry.register(Arc::new(MyLang));
 
 Plugin **loading** is not implemented; the trait, the registry and
 `EditorApp::register_syntax` are the extension seam only.
+
+## Language packs (`Lang` menu, `<config>/languages/*.json`)
+
+Built-ins always win a name clash; packs are data only (no code loading).
+Drop a JSON file like this into the config's `languages/` directory and restart:
+
+```json
+{
+  "name": "lua",
+  "extensions": ["lua"],
+  "line_comment": ["--"],
+  "block_comment": ["--[[", "]]"],
+  "keywords": ["function", "local", "end", "return"],
+  "constants": ["nil", "true", "false"],
+  "strings": [{ "quote": "\"", "escapes": true }]
+}
+```
+
+The optional fields mirror the C-family tokenizer: `types`, `constants`,
+`strings`, `nested_block`, `triple`, `template`, `template_escapes`,
+`preprocessor`, `annotations`, `toml_tables`, `case_types`. Limits: 64 packs,
+64 KB each; invalid packs are skipped (reported on stderr + status).
+
+Per-document override: **Lang** menu → Auto (by extension) or any registered
+provider. Path overrides are persisted in the session; untitled buffers keep
+theirs for the session only.
+
+## Replace in files
+
+The `⇧⌘F` panel has a replace row. `Replace all in files` plans the change and
+asks for confirmation, then rewrites files atomically:
+
+- re-matches each file's **current** text (never stale offsets);
+- skips files open in a tab, changed since the search (length/mtime), binaries
+  and files over 1 MB;
+- caps at 200 files per run; failures are listed, the rest still applies;
+- there is no cross-file undo — commit or back up first.
+
+## Scroll sync (`⇧⌘Y`, View menu)
+
+In Split view the editor and rendered preview stay in step. Markdown blocks
+carry their source line ranges, so the preview publishes `(source line → y)`
+anchors; scrolling either side moves the other to the corresponding block. One
+side wins per frame (the one that changed), which prevents feedback loops; the
+setting is persisted in the session. Preview-only and Edit modes ignore it.
 
 ## Settings (`⌘,` or View → Settings…)
 
@@ -200,8 +247,9 @@ remembered per document and the last ratio is persisted.
   original name/path and are marked dirty so the first save writes them back.
 - **Window state**: size and position are persisted and restored (skipped while
   maximized/fullscreen).
-- Session format is version 2 (`folder`, `split`, `autosave`, `window.*` added);
-  v1 files still load (the folder is inferred from the first tab).
+- Session format is version 3 (`languages`, `sync_scroll` added on top of v2's
+  `folder`/`split`/`autosave`/`window.*`); v1/v2 files still load (v1 infers the
+  folder from the first tab).
 
 ## Theme: "geek", compact, no corners
 
@@ -263,6 +311,13 @@ settings panel (font, tab width, gutter, guides, syntax, sidebar width), sidebar
 drag-resize, the large-preview truncation banner, the >32 MB open refusal, tab
 overflow scrolling, and settings restored from the session.
 
+M5 checks: a temporary JSON language pack highlights a `.lua` fixture, the
+per-document override (lua → rust → Auto) changes token colors and the status
+bar, overrides survive a session restore, replace-in-files (cancel is a no-op,
+apply rewrites a non-open file, an open tab is skipped), and scroll sync moves
+the preview from the editor and the editor back from the preview (including the
+disable toggle).
+
 M4 checks: welcome/no-folder state and empty sidebar, drop overlay, dropping a
 file vs a folder, CLI folder argument, Quick Open (filter → open), project
 search (debounced worker → result → jump selects the match), split-divider drag
@@ -281,7 +336,9 @@ src/
   model/fuzzy.rs      Quick Open ranking
   model/workspace_index.rs  ignored-dir file index (Quick Open)
   model/search.rs     background project search (worker + caps)
+  syntax/pack.rs      declarative JSON language packs
   model/recovery.rs   crash snapshots (txt + metadata)
+  model/replace.rs    replace-in-files planning/apply (conflict + open skip)
   model/fs_tree.rs    lazy sidebar tree (dirs first, hidden entries skipped)
   model/markdown.rs   Markdown event stream -> flat block model
   model/session.rs    key=value session file (atomic write, escaping, v2)
@@ -330,10 +387,15 @@ Delivered (M4): welcome/no-folder state, file & folder drag-and-drop, CLI folder
 argument, Quick Open, project search (worker + caps), draggable split divider,
 autosave, crash recovery prompt, window size/position restore, session v2.
 
-Next candidates: plugin/language-pack loading on top of `SyntaxRegistry`,
-replace-in-files, editor/preview scroll sync (needs a block ↔ line mapping),
-incremental preview layout for very large documents, tab drag-reorder/context
-menu, and soft wrap (still needs a design: it breaks the line/column mapping).
+Delivered (M5): declarative JSON language packs + per-document language
+override (persisted by path), replace-in-files with a confirmation modal,
+conflict/open-tab skipping and atomic writes, editor/preview scroll sync via
+Markdown source-line anchors, session v3.
+
+Next candidates: code-plugin loading (dylib/wasm) on top of `SyntaxRegistry`,
+per-hit replace and cross-file undo, incremental preview layout for very large
+documents, tab drag-reorder/context menu, and soft wrap (still needs a design:
+it breaks the line/column mapping).
 
 Notes:
 

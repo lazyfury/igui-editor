@@ -9,6 +9,8 @@
 //! not nested nodes, so the preview layout stays a single loop and tables /
 //! footnotes can be added later without touching the renderer's structure.
 
+use std::ops::Range;
+
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 
 /// Inline emphasis of a run of text.
@@ -93,16 +95,27 @@ pub enum BlockKind {
 pub struct Block {
     pub quote: usize,
     pub indent: usize,
+    /// 0-based source line range (inclusive start, exclusive end).
+    pub start_line: usize,
+    pub end_line: usize,
     pub kind: BlockKind,
 }
 
 /// Parses Markdown (CommonMark + strikethrough/GFM lists) into blocks.
 pub fn parse(text: &str) -> Vec<Block> {
     let options = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_GFM | Options::ENABLE_TABLES;
-    let parser = Parser::new_ext(text, options);
-    let mut state = ParseState::default();
-    for event in parser {
-        state.event(event);
+    let mut line_starts = vec![0usize];
+    for (index, byte) in text.bytes().enumerate() {
+        if byte == b'\n' {
+            line_starts.push(index + 1);
+        }
+    }
+    let mut state = ParseState {
+        line_starts,
+        ..ParseState::default()
+    };
+    for (event, range) in Parser::new_ext(text, options).into_offset_iter() {
+        state.event(event, range);
     }
     state.finish()
 }
@@ -125,6 +138,11 @@ struct ParseState {
     styles: Vec<Style>,
     image: Option<String>,
     table: Option<TableState>,
+    line_starts: Vec<usize>,
+    /// Byte offset where the current block started, and where the latest
+    /// event ended (used to derive source line ranges).
+    block_start: Option<usize>,
+    block_end: usize,
 }
 
 #[derive(Debug)]
@@ -151,9 +169,18 @@ struct CodeState {
 }
 
 impl ParseState {
-    fn event(&mut self, event: Event<'_>) {
+    fn event(&mut self, event: Event<'_>, range: Range<usize>) {
+        self.block_end = range.end;
+        if self.block_start.is_none()
+            && matches!(
+                event,
+                Event::Start(Tag::Heading { .. } | Tag::Paragraph | Tag::CodeBlock(_) | Tag::Item)
+            )
+        {
+            self.block_start = Some(range.start);
+        }
         match event {
-            Event::Start(tag) => self.start(tag),
+            Event::Start(tag) => self.start(tag, range),
             Event::End(tag) => self.end(tag),
             Event::Text(text) => {
                 if let Some(code) = &mut self.code {
@@ -175,6 +202,7 @@ impl ParseState {
             Event::HardBreak => self.push_inline("\n", self.current_style()),
             Event::Rule => {
                 self.flush_paragraph();
+                self.block_start = Some(range.start);
                 self.push_block(BlockKind::Rule);
             }
             Event::TaskListMarker(checked) => {
@@ -187,7 +215,7 @@ impl ParseState {
         }
     }
 
-    fn start(&mut self, tag: Tag<'_>) {
+    fn start(&mut self, tag: Tag<'_>, range: Range<usize>) {
         match tag {
             Tag::Heading { level, .. } => self.heading = Some(level as u8),
             Tag::Paragraph => {}
@@ -237,11 +265,13 @@ impl ParseState {
             Tag::Link { .. } => self.styles.push(Style::Link),
             Tag::Image { .. } => {
                 self.flush_paragraph();
+                self.block_start = Some(range.start);
                 self.image = Some(String::new());
             }
             Tag::Table(aligns) => {
                 self.flush_paragraph();
                 self.flush_item();
+                self.block_start = Some(range.start);
                 self.table = Some(TableState {
                     aligns: aligns
                         .into_iter()
@@ -414,11 +444,15 @@ impl ParseState {
         if let Some(item) = self.item.take() {
             let runs = std::mem::take(&mut self.runs);
             if runs.is_empty() {
+                self.block_start = None;
                 return;
             }
+            let (start_line, end_line) = self.block_lines();
             self.blocks.push(Block {
                 quote: self.quote,
                 indent: item.depth,
+                start_line,
+                end_line,
                 kind: BlockKind::Item {
                     ordered: item.ordered,
                     number: item.number,
@@ -430,11 +464,27 @@ impl ParseState {
 
     fn push_block(&mut self, kind: BlockKind) {
         let indent = self.item.as_ref().map_or(0, |item| item.depth);
+        let (start_line, end_line) = self.block_lines();
         self.blocks.push(Block {
             quote: self.quote,
             indent,
+            start_line,
+            end_line,
             kind,
         });
+    }
+
+    /// Source line span of the block that is being flushed.
+    fn block_lines(&mut self) -> (usize, usize) {
+        let start = self.block_start.take().unwrap_or(self.block_end);
+        let end = self.block_end.max(start);
+        (self.line_of(start), self.line_of(end))
+    }
+
+    fn line_of(&self, byte: usize) -> usize {
+        self.line_starts
+            .partition_point(|start| *start <= byte)
+            .saturating_sub(1)
     }
 }
 
@@ -461,6 +511,18 @@ mod tests {
             BlockKind::Paragraph(runs) => assert_eq!(plain(runs), "Body text."),
             other => panic!("expected paragraph, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn blocks_carry_source_line_ranges() {
+        let blocks = parse("# Title\n\nBody\n\n- a\n- b\n");
+        assert_eq!((blocks[0].start_line, blocks[0].end_line), (0, 1));
+        assert_eq!((blocks[1].start_line, blocks[1].end_line), (2, 3));
+        let item = blocks
+            .iter()
+            .find(|block| matches!(block.kind, BlockKind::Item { .. }))
+            .expect("list item");
+        assert_eq!(item.start_line, 4);
     }
 
     #[test]

@@ -64,6 +64,8 @@ struct Cache {
     key: CacheKey,
     prims: Vec<Prim>,
     height: f32,
+    /// `(source start line, content y)` for scroll sync.
+    anchors: Vec<(usize, f32)>,
 }
 
 /// Preview scroll + cached layout, stored on the app state.
@@ -81,6 +83,8 @@ pub struct PreviewUi {
     /// Parsed blocks and the `(document id, revision)` they came from.
     blocks: Vec<Block>,
     parsed_key: Option<(u64, u64)>,
+    /// Block anchors for scroll sync (populated by the layout).
+    pub anchors: Vec<(usize, f32)>,
     /// The document was cut at [`PREVIEW_MAX_BYTES`].
     truncated: bool,
     /// The document is too large to preview at all.
@@ -208,7 +212,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         .as_ref()
         .is_none_or(|cache| cache.key != key)
     {
-        let (mut prims, mut height) = if state.preview.too_large {
+        let (mut prims, mut height, anchors) = if state.preview.too_large {
             (
                 vec![banner(
                     "preview disabled for files over 8 MB — use the editor",
@@ -216,6 +220,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                     0.0,
                 )],
                 44.0,
+                Vec::new(),
             )
         } else {
             layout(&state.preview.blocks, measurer, view.width(), &theme, body)
@@ -228,15 +233,29 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             ));
             height += 28.0;
         }
-        state.preview.cache = Some(Cache { key, prims, height });
+        state.preview.cache = Some(Cache {
+            key,
+            prims,
+            height,
+            anchors,
+        });
     }
+    let Some((height, anchors)) = state
+        .preview
+        .cache
+        .as_ref()
+        .map(|cache| (cache.height, cache.anchors.clone()))
+    else {
+        return;
+    };
+    state.preview.total_h = height;
+    state.preview.anchors = anchors;
+    let max_scroll = (height - view.height()).max(0.0);
+    state.preview.scroll = state.preview.scroll.clamp(0.0, max_scroll);
+
     let Some(cache) = &state.preview.cache else {
         return;
     };
-    state.preview.total_h = cache.height;
-    let max_scroll = (cache.height - view.height()).max(0.0);
-    state.preview.scroll = state.preview.scroll.clamp(0.0, max_scroll);
-
     env.ctx.save();
     env.ctx.clip_rect(view);
     let offset = Vec2::new(view.left(), view.top() - state.preview.scroll);
@@ -298,7 +317,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     );
     let mut vthumb = Rect::ZERO;
     if max_scroll > 0.0 {
-        let thumb_h = (view.height() * view.height() / cache.height)
+        let thumb_h = (view.height() * view.height() / height)
             .min(view.height())
             .max(1.0);
         let travel = (view.height() - thumb_h).max(0.0);
@@ -321,16 +340,18 @@ fn layout(
     width: f32,
     theme: &Theme,
     body: f32,
-) -> (Vec<Prim>, f32) {
+) -> (Vec<Prim>, f32, Vec<(usize, f32)>) {
     let p = theme.p;
     let body_line = (body * 1.54).round().max(14.0);
     let code_font = (body - 1.0).max(9.0);
     let code_line = (code_font * 1.5).round().max(12.0);
     let content_w = (width - PAD * 2.0).max(40.0);
     let mut prims = Vec::new();
+    let mut anchors: Vec<(usize, f32)> = Vec::with_capacity(blocks.len() + 1);
     let mut y = PAD;
 
     for block in blocks {
+        anchors.push((block.start_line, y));
         let quote_x = block.quote as f32 * 12.0;
         let indent_x = block.indent as f32 * 18.0;
         let x = PAD + quote_x + indent_x;
@@ -501,7 +522,10 @@ fn layout(
         }
     }
 
-    (prims, y + PAD)
+    if let Some(last) = blocks.last() {
+        anchors.push((last.end_line, y));
+    }
+    (prims, y + PAD, anchors)
 }
 
 fn baseline(top: f32, line_h: f32, size: f32, measurer: &dyn TextMeasurer) -> f32 {

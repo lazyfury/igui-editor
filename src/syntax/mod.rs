@@ -38,15 +38,24 @@
 //! - Tokens are half-open **byte ranges** inside the line, sorted and disjoint.
 //!   Anything not covered stays plain text.
 //! - `max_line_len()` lets a provider opt out of pathological lines.
+//!
+//! ## Declarative packs
+//!
+//! Data-only languages do not need code: drop a JSON file under
+//! `<config>/languages/` and the app registers it after the built-ins via
+//! [`load_language_packs`]. See [`LanguagePack`] for the fields and limits; a
+//! pack can never shadow a built-in name.
 
 use std::path::Path;
 use std::sync::Arc;
 
 mod cstyle;
 mod markdown;
+mod pack;
 
 pub use cstyle::{Cpp, GdScript, Go, JavaScript, Json, Rust, Toml, TypeScript, C};
 pub use markdown::Markdown;
+pub use pack::{load_language_packs, LanguagePack, PackString};
 
 /// How a token is colored. The renderer maps these to theme colors.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

@@ -122,6 +122,26 @@ impl Harness {
 
 fn check(dir: &Path) -> Result<(), String> {
     let config = dir.join("session.conf");
+    // Data-only language pack loaded at startup.
+    fs::create_dir_all(dir.join("languages")).map_err(|error| format!("fixture: {error}"))?;
+    fs::write(
+        dir.join("languages").join("lua.json"),
+        r#"{
+            "name": "lua",
+            "extensions": ["lua"],
+            "line_comment": ["--"],
+            "block_comment": ["--[[", "]]"],
+            "keywords": ["local", "function", "end", "return"],
+            "constants": ["nil", "true", "false"],
+            "strings": [{"quote": "\"", "escapes": true}]
+        }"#,
+    )
+    .map_err(|error| format!("fixture: {error}"))?;
+    let lua_text = "local function hello()\n    return nil -- note\nend\n";
+    fs::write(dir.join("replace.txt"), "hello alpha\nhello beta\n")
+        .map_err(|error| format!("fixture: {error}"))?;
+    fs::write(dir.join("sample.lua"), lua_text).map_err(|error| format!("fixture: {error}"))?;
+    let canonical_lua = canonical_target(dir.join("sample.lua"));
     let main_path = dir.join("main.rs");
     let notes_path = dir.join("notes.md");
     let out_path = dir.join("out.txt");
@@ -168,6 +188,9 @@ fn check(dir: &Path) -> Result<(), String> {
 
     // -- startup ---------------------------------------------------------
     let frame = harness.frame()?;
+    if harness.app.state().syntax.by_name("lua").is_none() {
+        return Err("the declarative lua language pack was not registered".into());
+    }
     let painted = texts(&frame);
     expect(&painted, "fn main() {", "the opened file's first line")?;
     expect(&painted, "println!", "the opened file's second line")?;
@@ -885,6 +908,55 @@ fn check(dir: &Path) -> Result<(), String> {
         }
     }
 
+    // Declarative language pack + per-document override.
+    harness.app.state_mut().open_path(canonical_lua.clone());
+    let frame = harness.frame()?;
+    {
+        let state = harness.app.state();
+        if state.language_name() != Some("lua") {
+            return Err(format!(
+                "the lua pack was not selected by extension (got {:?})",
+                state.language_name()
+            ));
+        }
+    }
+    expect(&texts(&frame), "LUA", "pack language in the status bar")?;
+    let keyword = crate::theme::Theme::new(Mode::Dark)
+        .token_color(crate::syntax::TokenKind::Keyword)
+        .to_rgba8();
+    if !draw_text_has_color(&frame, "local", keyword) {
+        return Err("the lua pack did not highlight `local` as a keyword".into());
+    }
+    harness.app.state_mut().set_language(Some("rust".into()));
+    let frame = harness.frame()?;
+    {
+        let state = harness.app.state();
+        if state.language_name() != Some("rust") {
+            return Err("the language override to rust did not apply".into());
+        }
+    }
+    expect(
+        &texts(&frame),
+        "RUST",
+        "overridden language in the status bar",
+    )?;
+    if draw_text_has_color(&frame, "local", keyword) {
+        return Err("the rust override kept the lua keyword color".into());
+    }
+    harness.app.state_mut().set_language(None);
+    let frame = harness.frame()?;
+    {
+        let state = harness.app.state();
+        if state.language_name() != Some("lua") {
+            return Err("clearing the override did not return to the lua pack".into());
+        }
+    }
+    expect(
+        &texts(&frame),
+        "LUA",
+        "auto language after clearing the override",
+    )?;
+
     // Settings panel: fonts, tabs, gutter, guides, syntax, sidebar width.
     harness.shortcut(
         Key::Character(','),
@@ -1316,6 +1388,69 @@ fn check(dir: &Path) -> Result<(), String> {
             ));
         }
     }
+    // Replace in files, through the confirmation modal.
+    harness.frame()?;
+    let replace_path = dir.join("replace.txt");
+    let replace_original =
+        fs::read_to_string(&replace_path).map_err(|error| format!("read replace.txt: {error}"))?;
+    let (replace_rect, replace_button) = {
+        let state = harness.app.state();
+        (state.search.replace_rect, state.search.replace_button)
+    };
+    if replace_rect.width() < 10.0 {
+        return Err("the replace field has no geometry".into());
+    }
+    harness.click(replace_rect.center());
+    harness.type_text("bonjour");
+    harness.frame()?;
+    harness.click(replace_button.center());
+    let frame = harness.frame()?;
+    expect(&texts(&frame), "Replace in files", "replace confirmation")?;
+    let cancel = {
+        let state = harness.app.state();
+        state
+            .modal_buttons
+            .iter()
+            .find(|(button, _)| *button == ModalButton::Cancel)
+            .map(|(_, rect)| rect.center())
+            .ok_or("no Cancel button on the replace modal")?
+    };
+    harness.click(cancel);
+    harness.frame()?;
+    if fs::read_to_string(&replace_path).map_err(|e| format!("read: {e}"))? != replace_original {
+        return Err("cancelling the replace modal changed the file".into());
+    }
+    harness.click(replace_button.center());
+    let frame = harness.frame()?;
+    expect(
+        &texts(&frame),
+        "Replace in files",
+        "replace confirmation (second)",
+    )?;
+    if !harness
+        .app
+        .state()
+        .modal_buttons
+        .iter()
+        .any(|(button, _)| *button == ModalButton::Apply)
+    {
+        return Err("no Replace all button on the replace modal".into());
+    }
+    // Enter confirms the replace modal (keyboard path).
+    harness.key(Key::Enter);
+    harness.frame()?;
+    let replaced =
+        fs::read_to_string(&replace_path).map_err(|error| format!("read back: {error}"))?;
+    if !replaced.contains("bonjour alpha") || !replaced.contains("bonjour beta") {
+        return Err(format!(
+            "replace in files did not rewrite replace.txt (got {replaced:?})"
+        ));
+    }
+    let main_after =
+        fs::read_to_string(&main_path).map_err(|error| format!("read back: {error}"))?;
+    if !main_after.contains("\"hello\"") {
+        return Err("replace in files overwrote an open tab's file".into());
+    }
     harness.key(Key::Escape);
     harness.frame()?;
     if harness.app.state().search.open {
@@ -1394,6 +1529,64 @@ fn check(dir: &Path) -> Result<(), String> {
         ));
     }
     let idle_grip_y = split_y;
+
+    // Scroll sync: editor -> preview, preview -> editor, and the toggle.
+    let line_h = harness.app.state().editor_metrics().line_h;
+    {
+        let mut state = harness.app.state_mut();
+        state
+            .ws
+            .active_doc_mut()
+            .ok_or("no active document")?
+            .scroll_y = line_h * 6.0;
+    }
+    harness.frame()?;
+    let preview_synced = harness.app.state().preview.scroll;
+    if preview_synced <= 0.0 {
+        return Err("scrolling the editor did not move the preview".into());
+    }
+    {
+        let mut state = harness.app.state_mut();
+        let target = (state.preview.scroll + 200.0).min(state.preview.total_h.max(0.0));
+        state.preview.scroll = target;
+    }
+    harness.frame()?;
+    let editor_synced = harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .map_or(0.0, |doc| doc.scroll_y);
+    if (editor_synced - line_h * 6.0).abs() < 0.5 {
+        return Err("scrolling the preview did not move the editor".into());
+    }
+    {
+        let mut state = harness.app.state_mut();
+        state.sync_scroll = false;
+    }
+    let preview_mark = harness.app.state().preview.scroll;
+    {
+        let mut state = harness.app.state_mut();
+        state
+            .ws
+            .active_doc_mut()
+            .ok_or("no active document")?
+            .scroll_y = line_h * 2.0;
+    }
+    harness.frame()?;
+    if (harness.app.state().preview.scroll - preview_mark).abs() > 0.5 {
+        return Err("scroll sync stayed active after being disabled".into());
+    }
+    {
+        let mut state = harness.app.state_mut();
+        state.sync_scroll = true;
+        if let Some(doc) = state.ws.active_doc_mut() {
+            doc.scroll_y = 0.0;
+        }
+        state.preview.scroll = 0.0;
+    }
+    harness.frame()?;
+
     let drag_to = Vec2::new(divider.center().x + 60.0, divider.center().y);
     harness.event(InputEvent::PointerDown {
         position: divider.center(),
@@ -1618,7 +1811,22 @@ fn check(dir: &Path) -> Result<(), String> {
     if !config.is_file() {
         return Err("the session file was not written".into());
     }
+    {
+        let mut state = harness.app.state_mut();
+        if let Some(index) = state
+            .ws
+            .tabs
+            .iter()
+            .position(|doc| doc.path() == Some(canonical_lua.as_path()))
+        {
+            state.ws.select(index);
+            state.set_language(Some("rust".into()));
+        }
+    }
+    harness.frame()?;
     let final_settings = harness.app.state().settings;
+    let final_languages = harness.app.state().language_by_path.clone();
+    let final_sync = harness.app.state().sync_scroll;
     let restored_dialogs = ScriptedDialogs::new(vec![]);
     let restored = EditorApp::with_config(
         None,
@@ -1655,6 +1863,15 @@ fn check(dir: &Path) -> Result<(), String> {
             .all(|path| path != &canonical_out)
         {
             return Err("session restore lost the recent files".into());
+        }
+        if state.sync_scroll != final_sync {
+            return Err("session restore lost the scroll-sync setting".into());
+        }
+        if state.language_by_path != final_languages {
+            return Err(format!(
+                "session restore lost the language overrides ({:?} vs {:?})",
+                state.language_by_path, final_languages
+            ));
         }
         if state.settings != final_settings {
             return Err(format!(

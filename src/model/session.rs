@@ -43,6 +43,10 @@ pub struct Session {
     pub split: f32,
     /// Autosave enabled.
     pub autosave: bool,
+    /// Per-path language overrides (provider name).
+    pub languages: Vec<(PathBuf, String)>,
+    /// Keep the editor and Markdown preview scroll positions in sync.
+    pub sync_scroll: bool,
     /// Last window geometry (logical size + position).
     pub window: Option<WindowGeometry>,
 }
@@ -57,7 +61,7 @@ pub struct WindowGeometry {
 impl Default for Session {
     fn default() -> Self {
         Self {
-            version: 2,
+            version: 3,
             theme: "dark".into(),
             sidebar: true,
             folder: None,
@@ -71,6 +75,8 @@ impl Default for Session {
             sidebar_width: 232.0,
             split: 0.5,
             autosave: true,
+            languages: Vec::new(),
+            sync_scroll: true,
             window: None,
         }
     }
@@ -95,6 +101,7 @@ impl Session {
         let mut recent: BTreeMap<usize, PathBuf> = BTreeMap::new();
         let mut tabs: BTreeMap<usize, PathBuf> = BTreeMap::new();
         let mut window: [Option<f32>; 4] = [None; 4];
+        let mut languages: BTreeMap<usize, (Option<PathBuf>, Option<String>)> = BTreeMap::new();
         for line in text.lines() {
             let Some((key, value)) = line.split_once('=') else {
                 continue;
@@ -118,6 +125,22 @@ impl Session {
                 }
                 "split" => session.split = value.parse().unwrap_or(session.split),
                 "autosave" => session.autosave = value == "1",
+                "sync_scroll" => session.sync_scroll = value == "1",
+                key if key.starts_with("lang.") => {
+                    let rest = &key["lang.".len()..];
+                    let Some((index, field)) = rest.split_once('.') else {
+                        continue;
+                    };
+                    let Ok(index) = index.parse::<usize>() else {
+                        continue;
+                    };
+                    let entry = languages.entry(index).or_insert((None, None));
+                    match field {
+                        "path" => entry.0 = Some(PathBuf::from(value)),
+                        "name" => entry.1 = Some(value),
+                        _ => {}
+                    }
+                }
                 "window.w" => window[0] = value.parse().ok(),
                 "window.h" => window[1] = value.parse().ok(),
                 "window.x" => window[2] = value.parse().ok(),
@@ -144,6 +167,10 @@ impl Session {
                 });
             }
         }
+        session.languages = languages
+            .into_values()
+            .filter_map(|(path, name)| Some((path?, name?)))
+            .collect();
         session.recent = recent.into_values().take(MAX_RECENT).collect();
         session.tabs = tabs.into_values().take(MAX_RECENT).collect();
         session
@@ -152,7 +179,7 @@ impl Session {
     pub fn render(&self) -> String {
         let mut out = String::new();
         // Always write the current format; parsing older files still works.
-        out.push_str("version=2\n");
+        out.push_str("version=3\n");
         out.push_str(&format!("theme={}\n", self.theme));
         out.push_str(&format!("sidebar={}\n", u8::from(self.sidebar)));
         if let Some(folder) = &self.folder {
@@ -166,6 +193,14 @@ impl Session {
         out.push_str(&format!("sidebar_width={}\n", self.sidebar_width));
         out.push_str(&format!("split={}\n", self.split));
         out.push_str(&format!("autosave={}\n", u8::from(self.autosave)));
+        out.push_str(&format!("sync_scroll={}\n", u8::from(self.sync_scroll)));
+        for (index, (path, name)) in self.languages.iter().enumerate() {
+            out.push_str(&format!(
+                "lang.{index}.path={}\nlang.{index}.name={}\n",
+                escape(&path.to_string_lossy()),
+                escape(name)
+            ));
+        }
         if let Some(window) = self.window {
             out.push_str(&format!("window.w={}\n", window.size.0));
             out.push_str(&format!("window.h={}\n", window.size.1));
@@ -298,6 +333,8 @@ mod tests {
             sidebar_width: 260.0,
             split: 0.6,
             autosave: false,
+            languages: vec![(PathBuf::from("/tmp/x.lua"), "lua".into())],
+            sync_scroll: false,
             window: Some(WindowGeometry {
                 size: (1024.0, 700.0),
                 position: (40.0, 60.0),

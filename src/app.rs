@@ -78,7 +78,29 @@ impl EditorApp {
             Mode::Light
         });
         let workspace = workspace_for(open, &session);
-        let mut state = AppState::new(Theme::new(theme_mode), workspace, session, config_path);
+        let mut state = AppState::new(
+            Theme::new(theme_mode),
+            workspace,
+            session,
+            config_path.clone(),
+        );
+        // Data-only language packs (`<config>/languages/*.json`) join the
+        // registry after the built-ins, so a pack can never override one.
+        let (providers, errors) = crate::syntax::load_language_packs(
+            &config_path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join("languages"),
+        );
+        for provider in providers {
+            state.syntax.register(provider);
+        }
+        if !errors.is_empty() {
+            for error in &errors {
+                eprintln!("language pack: {error}");
+            }
+            state.status(format!("{} language pack(s) skipped", errors.len()));
+        }
         // Keep the session's folder in sync with what actually opened (CLI
         // folder/file, a restored folder, or none).
         let folder = state.ws.folder().map(Path::to_path_buf);
@@ -173,6 +195,7 @@ impl EditorApp {
         }
         self.analysis_behind = self.state.borrow_mut().tick_analysis();
         self.state.borrow_mut().tick_reliability();
+        self.state.borrow_mut().sync_scroll_positions();
         if !self.window_restored {
             self.restore_window_position();
         }
@@ -246,7 +269,8 @@ impl EditorApp {
                     match ui::modal::hit(&state, *position) {
                         Some(button) => state.resolve_modal(button),
                         None => {
-                            let (panel, _) = ui::modal::layout(state.viewport.logical_rect());
+                            let (panel, _) =
+                                ui::modal::layout(state.viewport.logical_rect(), state.modal);
                             if !panel.contains(*position) {
                                 state.resolve_modal(crate::state::ModalButton::Cancel);
                             }

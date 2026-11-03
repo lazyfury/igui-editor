@@ -1,6 +1,6 @@
 # igui-editor — design
 
-Agreed direction (M1–M4 implemented). This document records the decisions so
+Agreed direction (M1–M5 implemented). This document records the decisions so
 future work does not re-litigate them.
 
 ## Product
@@ -165,7 +165,24 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    2 s idle; every dirty buffer (including untitled) gets a raw `.txt` +
    metadata snapshot under `<config>/recovery/`, and a startup prompt offers
    Restore All / Discard All. Window size/position persist in the session
-   (restored unless maximized). Session format is version 2.
+   (restored unless maximized). Session format is version 3.
+24. **Language packs are data, not code.** `<config>/languages/*.json` packs are
+   validated, capped and registered into `SyntaxRegistry` after the built-ins
+   (the registry keeps the first registration, so a pack can never shadow a
+   built-in). Fields map onto the existing C-family tokenizer; strings are
+   leaked at load time so the provider keeps the engine's `&'static` spec
+   contract. Per-document overrides live in **Lang** and persist by path
+   (`lang.N.path/name`); untitled buffers keep an in-memory override.
+25. **Replace-in-files is plan → confirm → apply.** The plan re-matches each
+   file's current text (never stale hit offsets), collects non-overlapping
+   matches, and records length + mtime. Open tabs, files changed since the plan,
+   binaries and >1 MB files are skipped and reported; writes are temp+rename
+   with the original permissions. No cross-file undo by design.
+26. **Scroll sync uses source-line anchors.** Markdown blocks carry
+   `start_line`/`end_line`; the preview layout publishes `(line, y)` anchors.
+   A frame's authoritative side is whichever scroll changed (tracked from the
+   previous frame), and the other side is interpolated from the anchors, so the
+   pair cannot ping-pong. Split + toggle only; persisted as `sync_scroll`.
 
 ## Theme spec (geek / compact / no corners)
 

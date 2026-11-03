@@ -15,7 +15,7 @@
 
 use igui_core::{EventResult, Key, Modifiers};
 
-use crate::state::{Action, AppState, Focus, ModalButton};
+use crate::state::{Action, AppState, Focus, Modal, ModalButton};
 
 /// App-wide commands. `Some` means the key was consumed.
 pub fn shortcut(state: &mut AppState, key: Key, modifiers: Modifiers) -> Option<EventResult> {
@@ -77,6 +77,7 @@ pub fn shortcut(state: &mut AppState, key: Key, modifiers: Modifiers) -> Option<
             'b' => Action::ToggleSidebar,
             'l' => Action::ToggleTheme,
             'm' => Action::SetView(state.view_of_active().next()),
+            'y' => Action::ToggleScrollSync,
             'g' => {
                 if state.find.open {
                     state.find_step(if shift { -1 } else { 1 });
@@ -214,7 +215,14 @@ pub fn find_key(state: &mut AppState, key: Key, modifiers: Modifiers) -> EventRe
 pub fn modal_key(state: &mut AppState, key: Key) -> EventResult {
     match key {
         Key::Escape => state.resolve_modal(ModalButton::Cancel),
-        Key::Enter => state.resolve_modal(ModalButton::Save),
+        Key::Enter => {
+            let confirm = if matches!(state.modal, Some(Modal::ReplaceInFiles { .. })) {
+                ModalButton::Apply
+            } else {
+                ModalButton::Save
+            };
+            state.resolve_modal(confirm);
+        }
         _ => {}
     }
     EventResult::Handled

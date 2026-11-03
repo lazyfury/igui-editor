@@ -1,4 +1,4 @@
-//! Confirmation modal: closing a tab with unsaved changes.
+//! Confirmation modal: closing a dirty tab, or applying a replace-in-files plan.
 //!
 //! Painted as an app overlay *after* the tree (like the menu drop-down) and
 //! hit-tested from the same layout function, so the dialog never needs z-order
@@ -9,24 +9,34 @@ use igui_core::{Color, Rect, Size, Vec2};
 use igui_render::PaintContext;
 use igui_ui::TextMeasurer;
 
-use crate::kit;
-use crate::state::{AppState, ModalButton};
+use crate::kit::{self, RectExt};
+use crate::state::{AppState, Modal, ModalButton};
 
-const PANEL_W: f32 = 420.0;
+const PANEL_W: f32 = 460.0;
 const PANEL_H: f32 = 172.0;
-const BUTTON_W: f32 = 92.0;
+const BUTTON_W: f32 = 100.0;
 const BUTTON_H: f32 = 28.0;
 
-/// Buttons of the open modal, left to right.
-pub const BUTTONS: [ModalButton; 3] =
+/// Buttons for the dirty-close modal.
+pub const CLOSE_BUTTONS: [ModalButton; 3] =
     [ModalButton::Cancel, ModalButton::Discard, ModalButton::Save];
+/// Buttons for the replace-in-files modal.
+pub const REPLACE_BUTTONS: [ModalButton; 2] = [ModalButton::Cancel, ModalButton::Apply];
+
+fn buttons_for(modal: Modal) -> &'static [ModalButton] {
+    match modal {
+        Modal::CloseDirtyTab { .. } => &CLOSE_BUTTONS,
+        Modal::ReplaceInFiles { .. } => &REPLACE_BUTTONS,
+    }
+}
 
 /// The modal's panel and its button rectangles, centered in `viewport`.
-pub fn layout(viewport: Rect) -> (Rect, Vec<(ModalButton, Rect)>) {
+pub fn layout(viewport: Rect, modal: Option<Modal>) -> (Rect, Vec<(ModalButton, Rect)>) {
+    let buttons_for = modal.map(buttons_for).unwrap_or(&CLOSE_BUTTONS);
     let panel = Rect::from_center_size(viewport.center(), Size::new(PANEL_W, PANEL_H));
-    let mut buttons = Vec::with_capacity(BUTTONS.len());
+    let mut buttons = Vec::with_capacity(buttons_for.len());
     let mut x = panel.right() - 16.0 - BUTTON_W;
-    for button in BUTTONS.iter().rev() {
+    for button in buttons_for.iter().rev() {
         let rect = Rect::from_min_size(
             Vec2::new(x, panel.bottom() - 16.0 - BUTTON_H),
             Size::new(BUTTON_W, BUTTON_H),
@@ -55,25 +65,46 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
     );
 
     let viewport = state.viewport.logical_rect();
-    let (panel, buttons) = layout(viewport);
+    let (panel, buttons) = layout(viewport, Some(modal));
     kit::fill(ctx, panel, p.raised);
     ctx.stroke_rect(panel, 1.0, p.border);
-    // Accent rule marks the destructive flow the dialog belongs to.
     kit::hline(ctx, panel.left(), panel.right(), panel.top(), p.accent);
 
-    let name = match modal {
-        crate::state::Modal::CloseDirtyTab { tab } => state
-            .ws
-            .tabs
-            .get(tab)
-            .map(|doc| doc.name().to_string())
-            .unwrap_or_else(|| "this file".into()),
+    let (title, body) = match modal {
+        Modal::CloseDirtyTab { tab } => {
+            let name = state
+                .ws
+                .tabs
+                .get(tab)
+                .map(|doc| doc.name().to_string())
+                .unwrap_or_else(|| "this file".into());
+            (
+                "Unsaved changes".to_string(),
+                format!("Save changes to {name} before closing?"),
+            )
+        }
+        Modal::ReplaceInFiles { files, occurrences } => {
+            let replacement = state
+                .pending_replace
+                .as_ref()
+                .map(|job| job.replacement.clone())
+                .unwrap_or_default();
+            let suffix = if occurrences == 1 { "" } else { "s" };
+            let file_suffix = if files == 1 { "" } else { "s" };
+            (
+                "Replace in files".to_string(),
+                format!(
+                    "Replace {occurrences} occurrence{suffix} in {files} file{file_suffix} with “{}”?",
+                    kit::truncate(measurer, &replacement, m.font_ui, panel.width() - 60.0)
+                ),
+            )
+        }
     };
 
     let title_baseline = panel.top() + 40.0;
     kit::text(
         ctx,
-        "Unsaved changes",
+        &title,
         panel.left() + 18.0,
         title_baseline,
         14.0,
@@ -81,7 +112,7 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
     );
     kit::text(
         ctx,
-        &format!("Save changes to {name} before closing?"),
+        &kit::truncate(measurer, &body, m.font_ui, panel.width() - 36.0),
         panel.left() + 18.0,
         title_baseline + 28.0,
         m.font_ui,
@@ -90,8 +121,8 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
 
     state.modal_buttons = buttons.clone();
     for (button, rect) in &buttons {
-        let primary = *button == ModalButton::Save;
-        let danger = *button == ModalButton::Discard;
+        let primary = matches!(button, ModalButton::Save | ModalButton::Apply);
+        let danger = matches!(button, ModalButton::Discard);
         let fill = if primary {
             p.accent
         } else if danger {
@@ -105,6 +136,7 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
             ModalButton::Cancel => "Cancel",
             ModalButton::Discard => "Discard",
             ModalButton::Save => "Save",
+            ModalButton::Apply => "Replace all",
         };
         let color = if primary {
             p.bg

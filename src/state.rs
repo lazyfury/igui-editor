@@ -9,21 +9,24 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Instant;
 
 use igui_core::{NodeId, Rect, ViewportSize};
 use igui_ui::{Clipboard, TextEdit};
 
 use crate::model::brackets::match_bracket;
+use crate::model::doc::Document;
 use crate::model::find::{find_all, Matcher};
 use crate::model::highlight::HighlightCache;
 use crate::model::recovery::{RecoveryEntry, RecoveryStore};
+use crate::model::replace::{self, PlannedFile};
 use crate::model::search::{SearchHit, SearchMessage, SearchWorker};
 use crate::model::session::{Session, WindowGeometry};
 use crate::model::workspace_index::{display_path, FileIndex};
 use crate::model::Workspace;
 use crate::settings::{EditorMetrics, Row, Settings};
-use crate::syntax::{SyntaxRegistry, TokenKind};
+use crate::syntax::{SyntaxProvider, SyntaxRegistry, TokenKind};
 use crate::theme::{Mode, Theme};
 use crate::ui::preview::PreviewUi;
 
@@ -37,16 +40,18 @@ pub enum Menu {
     File,
     Edit,
     View,
+    Language,
 }
 
 impl Menu {
-    pub const ALL: [Menu; 3] = [Menu::File, Menu::Edit, Menu::View];
+    pub const ALL: [Menu; 4] = [Menu::File, Menu::Edit, Menu::View, Menu::Language];
 
     pub const fn label(self) -> &'static str {
         match self {
             Menu::File => "File",
             Menu::Edit => "Edit",
             Menu::View => "View",
+            Menu::Language => "Lang",
         }
     }
 }
@@ -128,6 +133,8 @@ pub enum Action {
     ToggleSidebar,
     ToggleTheme,
     SetView(ViewMode),
+    ToggleScrollSync,
+    SetLanguage(Option<String>),
     OpenRecent(PathBuf),
 }
 
@@ -160,6 +167,9 @@ impl Action {
             Action::ToggleSidebar => "Toggle Sidebar".into(),
             Action::ToggleTheme => "Toggle Theme".into(),
             Action::SetView(mode) => mode.label().into(),
+            Action::ToggleScrollSync => "Sync Scroll".into(),
+            Action::SetLanguage(None) => "Auto (by extension)".into(),
+            Action::SetLanguage(Some(name)) => name.clone(),
             Action::OpenRecent(path) => {
                 let name = path
                     .file_name()
@@ -248,6 +258,11 @@ impl Action {
                 "⌘" => "⇧⌘M",
                 _ => "Ctrl+Shift+M",
             },
+            Action::ToggleScrollSync => match ACCEL {
+                "⌘" => "⇧⌘Y",
+                _ => "Ctrl+Shift+Y",
+            },
+            Action::SetLanguage(_) => "",
             Action::OpenRecent(_) => "",
         }
     }
@@ -261,7 +276,8 @@ impl Action {
             | Action::ToggleSidebar
             | Action::ToggleTheme
             | Action::Find
-            | Action::Settings => true,
+            | Action::Settings
+            | Action::ToggleScrollSync => true,
             Action::QuickOpen | Action::ProjectSearch => state.ws.folder_open,
             Action::Save => doc.is_some(),
             Action::SaveAs => doc.is_some(),
@@ -272,6 +288,7 @@ impl Action {
             Action::Paste => doc.is_some() && state.clipboard.is_some(),
             Action::SelectAll => doc.is_some(),
             Action::SetView(_) => doc.is_some(),
+            Action::SetLanguage(_) => doc.is_some(),
             Action::OpenRecent(path) => path.is_file(),
         }
     }
@@ -279,6 +296,11 @@ impl Action {
     pub fn checked(&self, state: &AppState) -> bool {
         match self {
             Action::SetView(mode) => *mode == state.view_of_active(),
+            Action::ToggleScrollSync => state.sync_scroll,
+            Action::SetLanguage(None) => state.language_override_of_active().is_none(),
+            Action::SetLanguage(Some(name)) => {
+                state.language_override_of_active() == Some(name.as_str())
+            }
             _ => false,
         }
     }
@@ -319,6 +341,13 @@ pub fn items(menu: Menu, state: &AppState) -> Vec<Option<Action>> {
             Some(Action::QuickOpen),
             Some(Action::ProjectSearch),
         ],
+        Menu::Language => {
+            let mut items = vec![Some(Action::SetLanguage(None))];
+            for name in state.syntax.names() {
+                items.push(Some(Action::SetLanguage(Some(name.to_string()))));
+            }
+            items
+        }
         Menu::View => vec![
             Some(Action::ToggleSidebar),
             Some(Action::ToggleTheme),
@@ -327,6 +356,7 @@ pub fn items(menu: Menu, state: &AppState) -> Vec<Option<Action>> {
             Some(Action::SetView(ViewMode::Split)),
             Some(Action::SetView(ViewMode::Preview)),
             None,
+            Some(Action::ToggleScrollSync),
             Some(Action::Settings),
         ],
     }
@@ -412,6 +442,8 @@ impl Default for FindState {
 pub enum Modal {
     /// Close a dirty tab: Save / Discard / Cancel.
     CloseDirtyTab { tab: usize },
+    /// Replace every match in the scanned files: Cancel / Replace all.
+    ReplaceInFiles { files: usize, occurrences: usize },
 }
 
 /// Buttons of the confirmation modal.
@@ -420,6 +452,8 @@ pub enum ModalButton {
     Cancel,
     Discard,
     Save,
+    /// Confirms a replace-in-files plan.
+    Apply,
 }
 
 /// A dialog request, executed in `update` (outside input dispatch, on the main
@@ -491,6 +525,15 @@ pub struct TabsUi {
     pub strip: Rect,
 }
 
+/// A planned replace-in-files run (applied from the confirmation modal).
+#[derive(Clone, Debug)]
+pub struct ReplaceJob {
+    pub plans: Vec<PlannedFile>,
+    pub replacement: String,
+    pub files: usize,
+    pub occurrences: usize,
+}
+
 /// Quick Open palette (`⌘P`).
 pub struct QuickOpenState {
     pub open: bool,
@@ -516,10 +559,20 @@ impl Default for QuickOpenState {
     }
 }
 
-/// Project search (`⇧⌘F`): query, streamed hits and the worker.
+/// Which search field owns typing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum SearchFocus {
+    #[default]
+    Query,
+    Replace,
+}
+
+/// Project search (`⇧⌘F`): query/replace, streamed hits and the worker.
 pub struct SearchState {
     pub open: bool,
     pub query: TextEdit,
+    pub replace: TextEdit,
+    pub focus: SearchFocus,
     pub case_sensitive: bool,
     pub whole_word: bool,
     pub hits: Vec<SearchHit>,
@@ -531,6 +584,9 @@ pub struct SearchState {
     /// Debounce timer for the next (re)start.
     pub pending: Option<Instant>,
     pub preedit: Option<String>,
+    /// Geometry of the replace row (recorded in paint for hit tests).
+    pub replace_rect: Rect,
+    pub replace_button: Rect,
 }
 
 impl Default for SearchState {
@@ -538,6 +594,8 @@ impl Default for SearchState {
         Self {
             open: false,
             query: TextEdit::new(""),
+            replace: TextEdit::new(""),
+            focus: SearchFocus::Query,
             case_sensitive: false,
             whole_word: false,
             hits: Vec::new(),
@@ -548,6 +606,8 @@ impl Default for SearchState {
             files_scanned: 0,
             pending: None,
             preedit: None,
+            replace_rect: Rect::ZERO,
+            replace_button: Rect::ZERO,
         }
     }
 }
@@ -622,6 +682,16 @@ pub struct AppState {
     pub split_divider: Rect,
     pub recovery: RecoveryStore,
     pub recovery_prompt: Option<Vec<RecoveryEntry>>,
+    /// Planned replace-in-files job waiting for confirmation.
+    pub pending_replace: Option<ReplaceJob>,
+    /// Per-path language overrides (persisted) and per-document ones (untitled).
+    pub language_by_path: HashMap<PathBuf, String>,
+    pub language_by_id: HashMap<u64, String>,
+    /// Keep editor and preview scroll positions in sync (W3).
+    pub sync_scroll: bool,
+    last_editor_scroll: f32,
+    last_preview_scroll: f32,
+    sync_rev: u64,
     last_activity: Instant,
     doc_revs: HashMap<u64, u64>,
     pub search: SearchState,
@@ -635,6 +705,8 @@ impl AppState {
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .join("recovery");
+        let languages: HashMap<PathBuf, String> = session.languages.iter().cloned().collect();
+        let sync_scroll = session.sync_scroll;
         Self {
             theme,
             ws,
@@ -690,6 +762,13 @@ impl AppState {
             split_divider: Rect::ZERO,
             recovery: RecoveryStore::new(recovery_dir),
             recovery_prompt: None,
+            pending_replace: None,
+            language_by_path: languages,
+            language_by_id: HashMap::new(),
+            sync_scroll,
+            last_editor_scroll: 0.0,
+            last_preview_scroll: 0.0,
+            sync_rev: u64::MAX,
             last_activity: Instant::now(),
             doc_revs: HashMap::new(),
         }
@@ -810,6 +889,7 @@ impl AppState {
         self.menu_open = None;
         self.search.open = true;
         self.search.query.select_all();
+        self.search.focus = SearchFocus::Query;
         self.search.selected = 0;
         self.search.scroll = 0;
         self.search.hits.clear();
@@ -1087,12 +1167,129 @@ impl AppState {
         self.settings.editor()
     }
 
+    /// The override for a document (path first, then untitled id).
+    pub fn language_override_for(&self, doc: &Document) -> Option<&str> {
+        doc.path()
+            .and_then(|path| self.language_by_path.get(path))
+            .or_else(|| self.language_by_id.get(&doc.id()))
+            .map(String::as_str)
+    }
+
+    /// The active document's override, if any.
+    pub fn language_override_of_active(&self) -> Option<&str> {
+        self.ws
+            .active_doc()
+            .and_then(|doc| self.language_override_for(doc))
+    }
+
+    /// Provider for the active document (override, then extension).
+    pub fn language_of_active(&self) -> Option<Arc<dyn SyntaxProvider>> {
+        let doc = self.ws.active_doc()?;
+        self.language_override_for(doc)
+            .and_then(|name| self.syntax.by_name(name))
+            .or_else(|| self.syntax.for_path(doc.path()))
+    }
+
     /// Provider name for the active document (shown in the status bar), even
     /// when highlighting is disabled by a size limit.
     pub fn language_name(&self) -> Option<&'static str> {
-        self.syntax
-            .for_path(self.ws.active_doc().and_then(|doc| doc.path()))
-            .map(|provider| provider.name())
+        self.language_of_active().map(|provider| provider.name())
+    }
+
+    /// Sets (or clears with `None`) the active document's language override.
+    pub fn set_language(&mut self, name: Option<String>) {
+        let Some(doc) = self.ws.active_doc() else {
+            return;
+        };
+        if let Some(name) = &name {
+            if self.syntax.by_name(name).is_none() {
+                self.error(format!("unknown language: {name}"));
+                return;
+            }
+        }
+        let id = doc.id();
+        let path = doc.path().map(Path::to_path_buf);
+        match (path, name) {
+            (Some(path), Some(name)) => {
+                self.language_by_path.insert(path, name.clone());
+                self.status(format!("language: {name}"));
+            }
+            (Some(path), None) => {
+                self.language_by_path.remove(&path);
+                self.status("language: auto");
+            }
+            (None, Some(name)) => {
+                self.language_by_id.insert(id, name.clone());
+                self.status(format!("language: {name}"));
+            }
+            (None, None) => {
+                self.language_by_id.remove(&id);
+                self.status("language: auto");
+            }
+        }
+        self.sync_languages_session();
+        self.highlight.reset();
+        self.find.dirty = true;
+        self.dirty = true;
+    }
+
+    fn sync_languages_session(&mut self) {
+        let mut entries: Vec<(PathBuf, String)> = self
+            .language_by_path
+            .iter()
+            .map(|(path, name)| (path.clone(), name.clone()))
+            .collect();
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        self.session.languages = entries;
+        self.config_dirty = true;
+    }
+
+    /// Keeps the editor and preview in step while in Split view. One side is
+    /// authoritative per frame (whichever changed), so the pair never loops.
+    pub fn sync_scroll_positions(&mut self) {
+        let split = self.view_of_active() == ViewMode::Split;
+        let Some(doc) = self.ws.active_doc() else {
+            return;
+        };
+        let rev = doc.rev();
+        let line_h = self.editor_metrics().line_h.max(1.0);
+        let editor_scroll = doc.scroll_y;
+        let preview_scroll = self.preview.scroll;
+        let anchors = self.preview.anchors.clone();
+        if !split || !self.sync_scroll || rev != self.sync_rev || anchors.len() < 2 {
+            self.last_editor_scroll = editor_scroll;
+            self.last_preview_scroll = preview_scroll;
+            self.sync_rev = rev;
+            return;
+        }
+        let editor_changed = (editor_scroll - self.last_editor_scroll).abs() > 0.5;
+        let preview_changed = (preview_scroll - self.last_preview_scroll).abs() > 0.5;
+        if editor_changed && !preview_changed {
+            self.preview.scroll = preview_y_for_line(&anchors, editor_scroll / line_h);
+        } else if preview_changed && !editor_changed {
+            let line = line_for_preview_y(&anchors, preview_scroll);
+            if let Some(doc) = self.ws.active_doc_mut() {
+                doc.scroll_y = line * line_h;
+            }
+        }
+        self.last_editor_scroll = self
+            .ws
+            .active_doc()
+            .map_or(editor_scroll, |doc| doc.scroll_y);
+        self.last_preview_scroll = self.preview.scroll;
+        self.sync_rev = rev;
+        self.dirty = true;
+    }
+
+    pub fn toggle_sync_scroll(&mut self) {
+        self.sync_scroll = !self.sync_scroll;
+        self.session.sync_scroll = self.sync_scroll;
+        self.config_dirty = true;
+        self.status(format!(
+            "scroll sync: {}",
+            if self.sync_scroll { "ON" } else { "OFF" }
+        ));
+        self.dirty = true;
     }
 
     pub fn open_settings(&mut self) {
@@ -1219,6 +1416,7 @@ impl AppState {
         if self.pending_sidebar_sync {
             self.pending_sidebar_sync = false;
         }
+        let language_override = self.language_override_of_active().map(str::to_string);
         let behind = {
             let AppState {
                 ws,
@@ -1234,6 +1432,7 @@ impl AppState {
                         syntax,
                         settings,
                         crate::model::highlight::FRAME_LINE_BUDGET,
+                        language_override.as_deref(),
                     );
                     highlight.is_behind()
                 }
@@ -1369,6 +1568,7 @@ impl AppState {
         if let Some(id) = id {
             self.doc_revs.remove(&id);
             self.recovery.remove(id);
+            self.language_by_id.remove(&id);
         }
         self.after_tabs_changed();
     }
@@ -1661,6 +1861,40 @@ impl AppState {
 
     /// Applies a confirmation-modal choice.
     pub fn resolve_modal(&mut self, button: ModalButton) {
+        let Some(modal) = self.modal else {
+            return;
+        };
+        if let Modal::ReplaceInFiles { .. } = modal {
+            match button {
+                ModalButton::Cancel => {
+                    self.pending_replace = None;
+                    self.modal = None;
+                }
+                ModalButton::Apply => {
+                    let Some(job) = self.pending_replace.take() else {
+                        self.modal = None;
+                        return;
+                    };
+                    let applied = replace::apply(job.plans);
+                    self.modal = None;
+                    let mut message = format!(
+                        "replaced {} in {} file(s)",
+                        applied.occurrences, applied.files
+                    );
+                    if !applied.errors.is_empty() {
+                        message.push_str(&format!("; {} skipped", applied.errors.len()));
+                        if let Some(first) = applied.errors.first() {
+                            message.push_str(&format!(" ({first})"));
+                        }
+                    }
+                    self.status(message);
+                    self.search_query_changed();
+                    self.dirty = true;
+                }
+                _ => {}
+            }
+            return;
+        }
         let Some(Modal::CloseDirtyTab { tab }) = self.modal else {
             return;
         };
@@ -1691,6 +1925,7 @@ impl AppState {
                     Err(message) => self.error(message),
                 }
             }
+            ModalButton::Apply => {}
         }
         self.dirty = true;
     }
@@ -1758,6 +1993,52 @@ impl AppState {
         } else if !had_files {
             self.status("nothing to open");
         }
+        self.dirty = true;
+    }
+
+    /// Plans a replace-in-files run from the current hits and asks for
+    /// confirmation. Open tabs are skipped.
+    pub fn request_replace_in_files(&mut self, replacement: String) {
+        if self.search.hits.is_empty() {
+            self.error("nothing to replace");
+            return;
+        }
+        let matcher = Matcher {
+            query: self.search.query.text().trim().to_string(),
+            case_sensitive: self.search.case_sensitive,
+            whole_word: self.search.whole_word,
+        };
+        if matcher.query.is_empty() || replacement.is_empty() {
+            self.error("enter a search term and a replacement");
+            return;
+        }
+        let paths = self.search.hits.iter().map(|hit| hit.path.clone());
+        let open: std::collections::HashSet<PathBuf> = self
+            .ws
+            .tabs
+            .iter()
+            .filter_map(|doc| doc.path().map(Path::to_path_buf))
+            .collect();
+        let (plans, errors) =
+            replace::plan(paths, &matcher, &replacement, |path| open.contains(path));
+        if plans.is_empty() {
+            let detail = errors
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "no matches".into());
+            self.error(format!("nothing replaced: {detail}"));
+            return;
+        }
+        let files = plans.len();
+        let occurrences: usize = plans.iter().map(|plan| plan.count).sum();
+        self.pending_replace = Some(ReplaceJob {
+            plans,
+            replacement,
+            files,
+            occurrences,
+        });
+        self.modal = Some(Modal::ReplaceInFiles { files, occurrences });
+        self.menu_open = None;
         self.dirty = true;
     }
 
@@ -1855,6 +2136,8 @@ impl AppState {
                 self.status(format!("theme: {}", self.theme.name()));
             }
             Action::SetView(mode) => self.set_view(mode),
+            Action::ToggleScrollSync => self.toggle_sync_scroll(),
+            Action::SetLanguage(name) => self.set_language(name),
             Action::OpenRecent(path) => self.open_path(path),
         }
         self.dirty = true;
@@ -1891,6 +2174,45 @@ impl AppState {
 
 fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
+}
+
+/// Preview scroll offset (content space) for a fractional source line.
+fn preview_y_for_line(anchors: &[(usize, f32)], line: f32) -> f32 {
+    let base = anchors[0].1;
+    let line = line.max(0.0);
+    if line <= anchors[0].0 as f32 {
+        return 0.0;
+    }
+    for pair in anchors.windows(2) {
+        let (from, y0) = pair[0];
+        let (to, y1) = pair[1];
+        if to == from {
+            continue;
+        }
+        if line <= to as f32 {
+            let t = (line - from as f32) / (to - from) as f32;
+            return (y0 + (y1 - y0) * t - base).max(0.0);
+        }
+    }
+    (anchors.last().map_or(0.0, |anchor| anchor.1) - base).max(0.0)
+}
+
+/// Fractional source line for a preview scroll offset.
+fn line_for_preview_y(anchors: &[(usize, f32)], y: f32) -> f32 {
+    let base = anchors[0].1;
+    let y = y + base;
+    for pair in anchors.windows(2) {
+        let (from, y0) = pair[0];
+        let (to, y1) = pair[1];
+        if y1 <= y0 {
+            continue;
+        }
+        if y <= y1 {
+            let t = (y - y0) / (y1 - y0);
+            return from as f32 + (to - from) as f32 * t.clamp(0.0, 1.0);
+        }
+    }
+    anchors.last().map_or(0.0, |anchor| anchor.0 as f32)
 }
 
 fn settings_from_session(session: &Session) -> Settings {

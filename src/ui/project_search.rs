@@ -1,18 +1,20 @@
-//! Project search panel (`⇧⌘F`): query, toggles, streamed results.
+//! Project search panel (`⇧⌘F`): query, replace, toggles, streamed results.
 
 use igui_core::{Key, Modifiers, Rect, Size, Vec2};
 use igui_render::PaintContext;
-use igui_ui::TextMeasurer;
+use igui_ui::{TextEdit, TextMeasurer};
 
 use crate::kit::{self, RectExt};
-use crate::state::AppState;
+use crate::state::{AppState, SearchFocus};
 
-const WIDTH: f32 = 760.0;
+const WIDTH: f32 = 780.0;
 const ROW_H: f32 = 26.0;
 const QUERY_H: f32 = 34.0;
+const REPLACE_H: f32 = 30.0;
+const REPLACE_BUTTON_W: f32 = 168.0;
 const PAD: f32 = 8.0;
 const FOOTER_H: f32 = 24.0;
-const MAX_ROWS: usize = 14;
+const MAX_ROWS: usize = 12;
 const TOGGLE: f32 = 26.0;
 const LINE_W: f32 = 46.0;
 
@@ -21,14 +23,16 @@ pub struct Layout {
     pub query: Rect,
     pub case_rect: Rect,
     pub word_rect: Rect,
+    pub replace_rect: Rect,
+    pub replace_button: Rect,
     pub rows: Vec<Rect>,
     pub footer: Rect,
 }
 
 pub fn layout(viewport: Rect, hit_count: usize) -> Layout {
     let visible = hit_count.clamp(1, MAX_ROWS);
-    let height = PAD + QUERY_H + 6.0 + visible as f32 * ROW_H + FOOTER_H + PAD;
-    let width = WIDTH.min(viewport.width() - 48.0).max(300.0);
+    let height = PAD + QUERY_H + 6.0 + REPLACE_H + 6.0 + visible as f32 * ROW_H + FOOTER_H + PAD;
+    let width = WIDTH.min(viewport.width() - 48.0).max(320.0);
     let panel = Rect::from_center_size(viewport.center(), Size::new(width, height));
     let case_rect = Rect::from_min_size(
         Vec2::new(panel.right() - PAD - TOGGLE, panel.top() + PAD),
@@ -45,8 +49,19 @@ pub fn layout(viewport: Rect, hit_count: usize) -> Layout {
             QUERY_H,
         ),
     );
+    let replace_button = Rect::from_min_size(
+        Vec2::new(panel.right() - PAD - REPLACE_BUTTON_W, query.bottom() + 6.0),
+        Size::new(REPLACE_BUTTON_W, REPLACE_H),
+    );
+    let replace_rect = Rect::from_min_size(
+        Vec2::new(panel.left() + PAD, query.bottom() + 6.0),
+        Size::new(
+            (replace_button.left() - 8.0 - (panel.left() + PAD)).max(80.0),
+            REPLACE_H,
+        ),
+    );
     let mut rows = Vec::with_capacity(visible);
-    let mut y = query.bottom() + 6.0;
+    let mut y = replace_rect.bottom() + 6.0;
     for _ in 0..visible {
         rows.push(Rect::from_min_size(
             Vec2::new(panel.left() + PAD, y),
@@ -63,6 +78,8 @@ pub fn layout(viewport: Rect, hit_count: usize) -> Layout {
         query,
         case_rect,
         word_rect,
+        replace_rect,
+        replace_button,
         rows,
         footer,
     }
@@ -89,7 +106,22 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
         p.accent,
     );
 
-    paint_query(state, measurer, ctx, &layout);
+    paint_field(
+        state,
+        measurer,
+        ctx,
+        layout.query,
+        SearchFocus::Query,
+        "Search in folder…",
+    );
+    paint_field(
+        state,
+        measurer,
+        ctx,
+        layout.replace_rect,
+        SearchFocus::Replace,
+        "Replace with…",
+    );
     paint_toggle(
         ctx,
         measurer,
@@ -106,6 +138,9 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
         "W",
         state.search.whole_word,
     );
+    paint_replace_button(state, measurer, ctx, layout.replace_button);
+    state.search.replace_rect = layout.replace_rect;
+    state.search.replace_button = layout.replace_button;
 
     let visible = layout.rows.len();
     let count = state.search.hits.len();
@@ -201,7 +236,7 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
 
     kit::text(
         ctx,
-        "↑↓ move · Enter open · Esc close",
+        "↑↓ move · Enter open · Tab replace · Esc close",
         layout.footer.left(),
         kit::baseline(measurer, layout.footer, m.font_small),
         m.font_small,
@@ -220,6 +255,30 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
         kit::baseline(measurer, layout.footer, m.font_small),
         m.font_small,
         p.faint,
+    );
+}
+
+fn paint_replace_button(
+    state: &AppState,
+    measurer: &dyn TextMeasurer,
+    ctx: &mut PaintContext,
+    rect: Rect,
+) {
+    let theme = state.theme;
+    let m = theme.m;
+    let p = theme.p;
+    let enabled = !state.search.hits.is_empty() && !state.search_busy();
+    kit::fill(ctx, rect, if enabled { p.accent } else { p.hover });
+    ctx.stroke_rect(rect, 1.0, if enabled { p.accent } else { p.border });
+    let label = "Replace all in files";
+    let width = kit::width(measurer, label, m.font_ui);
+    kit::text(
+        ctx,
+        label,
+        rect.center().x - width * 0.5,
+        kit::baseline(measurer, rect, m.font_ui),
+        m.font_ui,
+        if enabled { p.bg } else { p.faint },
     );
 }
 
@@ -254,18 +313,20 @@ fn draw_preview(
     }
 }
 
-fn paint_query(
+fn paint_field(
     state: &AppState,
     measurer: &dyn TextMeasurer,
     ctx: &mut PaintContext,
-    layout: &Layout,
+    rect: Rect,
+    field: SearchFocus,
+    placeholder: &str,
 ) {
     let theme = state.theme;
     let m = theme.m;
     let p = theme.p;
-    let rect = layout.query;
+    let focused = state.search.focus == field;
     kit::fill(ctx, rect, p.bg);
-    ctx.stroke_rect(rect, 1.0, p.accent);
+    ctx.stroke_rect(rect, 1.0, if focused { p.accent } else { p.border });
     let inner = Rect::from_min_size(
         Vec2::new(rect.left() + 8.0, rect.top()),
         Size::new((rect.width() - 16.0).max(8.0), rect.height()),
@@ -273,20 +334,16 @@ fn paint_query(
     ctx.save();
     ctx.clip_rect(inner);
     let baseline = kit::baseline(measurer, rect, m.font_ui);
-    let query = &state.search.query;
-    if query.text().is_empty() && state.search.preedit.is_none() {
-        kit::text(
-            ctx,
-            "Search in folder…",
-            inner.left(),
-            baseline,
-            m.font_ui,
-            p.faint,
-        );
+    let edit: &TextEdit = match field {
+        SearchFocus::Query => &state.search.query,
+        SearchFocus::Replace => &state.search.replace,
+    };
+    if edit.text().is_empty() && !(focused && state.search.preedit.is_some()) {
+        kit::text(ctx, placeholder, inner.left(), baseline, m.font_ui, p.faint);
     }
-    if let Some((start, end)) = query.selection() {
-        let x0 = inner.left() + kit::width(measurer, &query.text()[..start], m.font_ui);
-        let x1 = inner.left() + kit::width(measurer, &query.text()[..end], m.font_ui);
+    if let Some((start, end)) = edit.selection() {
+        let x0 = inner.left() + kit::width(measurer, &edit.text()[..start], m.font_ui);
+        let x1 = inner.left() + kit::width(measurer, &edit.text()[..end], m.font_ui);
         ctx.fill_rect(
             Rect::from_min_size(
                 Vec2::new(x0, rect.top() + 4.0),
@@ -295,18 +352,20 @@ fn paint_query(
             p.selection,
         );
     }
-    kit::text(ctx, query.text(), inner.left(), baseline, m.font_ui, p.text);
-    let caret_x = inner.left() + kit::width(measurer, &query.text()[..query.caret()], m.font_ui);
-    if let Some(preedit) = &state.search.preedit {
-        kit::text(ctx, preedit, caret_x, baseline, m.font_ui, p.accent);
+    kit::text(ctx, edit.text(), inner.left(), baseline, m.font_ui, p.text);
+    let caret_x = inner.left() + kit::width(measurer, &edit.text()[..edit.caret()], m.font_ui);
+    if focused {
+        if let Some(preedit) = &state.search.preedit {
+            kit::text(ctx, preedit, caret_x, baseline, m.font_ui, p.accent);
+        }
+        ctx.fill_rect(
+            Rect::from_min_size(
+                Vec2::new(caret_x, rect.top() + 4.0),
+                Size::new(2.0, rect.height() - 8.0),
+            ),
+            p.accent,
+        );
     }
-    ctx.fill_rect(
-        Rect::from_min_size(
-            Vec2::new(caret_x, rect.top() + 4.0),
-            Size::new(2.0, rect.height() - 8.0),
-        ),
-        p.accent,
-    );
     ctx.restore();
 }
 
@@ -358,6 +417,18 @@ pub fn click(state: &mut AppState, pos: Vec2) -> bool {
         return true;
     }
     if layout.query.contains(pos) {
+        state.search.focus = SearchFocus::Query;
+        state.dirty = true;
+        return true;
+    }
+    if layout.replace_rect.contains(pos) {
+        state.search.focus = SearchFocus::Replace;
+        state.dirty = true;
+        return true;
+    }
+    if layout.replace_button.contains(pos) {
+        let replacement = state.search.replace.text().to_string();
+        state.request_replace_in_files(replacement);
         return true;
     }
     for (index, row) in layout.rows.iter().enumerate() {
@@ -389,22 +460,55 @@ pub fn on_key(state: &mut AppState, key: Key, modifiers: Modifiers) -> bool {
     let shift = modifiers.shift;
     match key {
         Key::Escape => state.close_project_search(),
-        Key::Enter => state.search_accept(),
+        Key::Enter => match state.search.focus {
+            SearchFocus::Query => state.search_accept(),
+            SearchFocus::Replace => {
+                let replacement = state.search.replace.text().to_string();
+                state.request_replace_in_files(replacement);
+            }
+        },
+        Key::Tab => {
+            state.search.focus = match state.search.focus {
+                SearchFocus::Query => SearchFocus::Replace,
+                SearchFocus::Replace => SearchFocus::Query,
+            };
+            state.search.preedit = None;
+            state.dirty = true;
+        }
         Key::ArrowUp => state.search_move(-1),
         Key::ArrowDown => state.search_move(1),
         Key::Backspace => {
-            state.search.query.backspace();
-            state.search_query_changed();
+            let changed = edit_field(state, |field| field.backspace());
+            if changed {
+                after_edit(state);
+            }
         }
         Key::Delete => {
-            state.search.query.delete();
-            state.search_query_changed();
+            let changed = edit_field(state, |field| field.delete());
+            if changed {
+                after_edit(state);
+            }
         }
-        Key::ArrowLeft => state.search.query.move_left(shift, modifiers.alt),
-        Key::ArrowRight => state.search.query.move_right(shift, modifiers.alt),
-        Key::Home => state.search.query.move_home(shift),
-        Key::End => state.search.query.move_end(shift),
-        Key::Character('a') if accel => state.search.query.select_all(),
+        Key::ArrowLeft => {
+            if let Some(field) = field_mut(state) {
+                field.move_left(shift, modifiers.alt);
+            }
+        }
+        Key::ArrowRight => {
+            if let Some(field) = field_mut(state) {
+                field.move_right(shift, modifiers.alt);
+            }
+        }
+        Key::Home => {
+            if let Some(field) = field_mut(state) {
+                field.move_home(shift);
+            }
+        }
+        Key::End => {
+            if let Some(field) = field_mut(state) {
+                field.move_end(shift);
+            }
+        }
         _ => {}
     }
     state.dirty = true;
@@ -412,9 +516,10 @@ pub fn on_key(state: &mut AppState, key: Key, modifiers: Modifiers) -> bool {
 }
 
 pub fn on_text(state: &mut AppState, text: &str) {
-    state.search.query.insert(text);
-    state.search.preedit = None;
-    state.search_query_changed();
+    let changed = edit_field(state, |field| field.insert(text));
+    if changed {
+        after_edit(state);
+    }
 }
 
 pub fn on_ime(state: &mut AppState, event: &igui_core::ImeEvent) {
@@ -429,5 +534,36 @@ pub fn on_ime(state: &mut AppState, event: &igui_core::ImeEvent) {
             state.dirty = true;
         }
         igui_core::ImeEvent::Enabled => {}
+    }
+}
+
+fn field_mut(state: &mut AppState) -> Option<&mut TextEdit> {
+    match state.search.focus {
+        SearchFocus::Query => Some(&mut state.search.query),
+        SearchFocus::Replace => Some(&mut state.search.replace),
+    }
+}
+
+fn edit_field(state: &mut AppState, edit: impl FnOnce(&mut TextEdit)) -> bool {
+    let before = match state.search.focus {
+        SearchFocus::Query => state.search.query.text().to_string(),
+        SearchFocus::Replace => state.search.replace.text().to_string(),
+    };
+    if let Some(field) = field_mut(state) {
+        edit(field);
+    }
+    let after = match state.search.focus {
+        SearchFocus::Query => state.search.query.text().to_string(),
+        SearchFocus::Replace => state.search.replace.text().to_string(),
+    };
+    before != after
+}
+
+fn after_edit(state: &mut AppState) {
+    state.search.preedit = None;
+    if state.search.focus == SearchFocus::Query {
+        state.search_query_changed();
+    } else {
+        state.dirty = true;
     }
 }

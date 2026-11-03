@@ -81,6 +81,34 @@ macro_rules! provider {
     };
 }
 
+/// A provider over a runtime-built [`LangSpec`] (declarative language packs).
+pub(crate) struct PackProvider {
+    spec: &'static LangSpec,
+}
+
+impl SyntaxProvider for PackProvider {
+    fn name(&self) -> &'static str {
+        self.spec.name
+    }
+
+    fn extensions(&self) -> &'static [&'static str] {
+        self.spec.extensions
+    }
+
+    fn highlight_line(&self, line: &str, state: u32) -> (Vec<Highlight>, u32) {
+        highlight(self.spec, line, state)
+    }
+
+    fn max_line_len(&self) -> usize {
+        4000
+    }
+}
+
+/// Wraps a leaked spec as a provider for [`super::load_language_packs`].
+pub(crate) fn provider(spec: &'static LangSpec) -> std::sync::Arc<dyn SyntaxProvider> {
+    std::sync::Arc::new(PackProvider { spec })
+}
+
 fn highlight(spec: &LangSpec, line: &str, state_in: u32) -> (Vec<Highlight>, u32) {
     let mut out: Vec<Highlight> = Vec::new();
     let mut i = 0usize;
