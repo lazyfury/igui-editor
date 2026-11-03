@@ -1,8 +1,8 @@
 # igui-editor
 
 A compact, square-cornered **text / Markdown editor** built on the
-[`igui`](../igui) engine (Rust). Native window: `winit` + `wgpu`, UI painted
-through `igui_ui` / `igui_render` only.
+[`igui`](https://github.com/lazyfury/igui) engine (Rust). Native window:
+`winit` + `wgpu`, UI painted through `igui_ui` / `igui_render` only.
 
 Tabs · undo/redo · find & replace · syntax highlighting (JSON language packs) ·
 native LSP (Rust / `rust-analyzer` first) · outline panel · Markdown split preview (tables included) ·
@@ -13,21 +13,47 @@ quick file creation · drag & drop · settings panel · native file dialogs ·
 recent files · session + window restore · autosave & crash recovery ·
 large-file guards.
 
-This checkout is **outside** the igui repository: it consumes the engine through
-path dependencies and never modifies it.
+This repository is **independent from the igui engine**: it consumes the
+engine through path dependencies and never modifies it. The two checkouts must
+be siblings:
+
+```text
+workspace/
+├── igui/
+└── igui-editor/
+```
 
 ```
 Input -> SceneTree -> Update -> Layout -> Paint -> DrawList -> wgpu
 ```
 
-## Run
+## Requirements
+
+- Rust **1.85+** with Cargo.
+- A sibling [`igui`](https://github.com/lazyfury/igui) checkout, because
+  `Cargo.toml` uses `../igui/...` path dependencies.
+- `rust-analyzer` for Rust LSP features (optional but recommended; install with
+  `rustup component add rust-analyzer`).
+- macOS is the primary, manually tested platform. Linux/Windows host paths are
+  wired, but not manually verified in this repository.
+
+## Build from source
 
 ```bash
+git clone https://github.com/lazyfury/igui-editor.git
+git clone https://github.com/lazyfury/igui.git
 cd igui-editor
+
 cargo run --release                          # restore the last session, else the welcome state
 cargo run --release -- src/app.rs            # open a file (its directory becomes the folder)
 cargo run --release -- src                    # open a folder (no tab: welcome with sidebar)
 cargo run --release -- --light README.md     # light palette
+```
+
+A self-check runs the same UI headlessly (no screenshots required):
+
+```bash
+cargo run --release -- --selfcheck
 ```
 
 ## Package the macOS app
