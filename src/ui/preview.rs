@@ -11,6 +11,7 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use igui_core::{Color, FontWeight, NodeId, Rect, Size, Vec2};
 use igui_render::TextAlign;
@@ -28,6 +29,10 @@ const SCROLLBAR: f32 = 8.0;
 pub const PREVIEW_MAX_BYTES: usize = 512 * 1024;
 /// Above this size the preview is disabled (banner only).
 pub const PREVIEW_LARGE_BYTES: usize = 8 * 1024 * 1024;
+/// Above this size, edits are coalesced before a full parse + layout.
+pub const PREVIEW_DEBOUNCE_BYTES: usize = 48 * 1024;
+/// Trailing idle time before a coalesced preview rebuild.
+pub const PREVIEW_DEBOUNCE: Duration = Duration::from_millis(120);
 
 /// One backend-neutral preview drawing primitive (content-space coordinates).
 #[derive(Clone, Debug, PartialEq)]
@@ -64,8 +69,6 @@ struct Cache {
     key: CacheKey,
     prims: Vec<Prim>,
     height: f32,
-    /// `(source start line, content y)` for scroll sync.
-    anchors: Vec<(usize, f32)>,
 }
 
 /// Preview scroll + cached layout, stored on the app state.
@@ -83,12 +86,30 @@ pub struct PreviewUi {
     /// Parsed blocks and the `(document id, revision)` they came from.
     blocks: Vec<Block>,
     parsed_key: Option<(u64, u64)>,
-    /// Block anchors for scroll sync (populated by the layout).
-    pub anchors: Vec<(usize, f32)>,
+    /// Block anchors for scroll sync (populated by the layout). `Rc` keeps the
+    /// per-frame scroll-sync path from copying the list.
+    pub anchors: Rc<Vec<(usize, f32)>>,
     /// The document was cut at [`PREVIEW_MAX_BYTES`].
     truncated: bool,
     /// The document is too large to preview at all.
     too_large: bool,
+    /// Trailing debounce deadline while typing in a large Markdown file.
+    rebuild_at: Option<Instant>,
+    /// Revision that scheduled `rebuild_at` (a new revision pushes it out).
+    deferred_rev: Option<u64>,
+}
+
+impl PreviewUi {
+    /// Whether a coalesced rebuild is waiting for its debounce deadline.
+    pub fn rebuild_pending(&self) -> bool {
+        self.rebuild_at.is_some()
+    }
+
+    /// Drops a pending rebuild when the preview pane is no longer mounted.
+    pub fn cancel_rebuild(&mut self) {
+        self.rebuild_at = None;
+        self.deferred_rev = None;
+    }
 }
 
 impl std::fmt::Debug for PreviewUi {
@@ -180,25 +201,15 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     );
     state.preview.rect = rect;
 
-    let Some(doc) = state.ws.active_doc() else {
+    let Some((doc_id, rev, len)) = state
+        .ws
+        .active_doc()
+        .map(|doc| (doc.id(), doc.rev(), doc.text().len()))
+    else {
+        state.preview.rebuild_at = None;
+        state.preview.deferred_rev = None;
         return;
     };
-    let doc_id = doc.id();
-    let rev = doc.rev();
-    if state.preview.parsed_key != Some((doc_id, rev)) {
-        let text = doc.text().to_string();
-        let len = text.len();
-        state.preview.too_large = len > PREVIEW_LARGE_BYTES;
-        state.preview.truncated = len > PREVIEW_MAX_BYTES && !state.preview.too_large;
-        state.preview.blocks = if state.preview.too_large {
-            Vec::new()
-        } else if state.preview.truncated {
-            markdown::parse(&text[..truncate_boundary(&text, PREVIEW_MAX_BYTES)])
-        } else {
-            markdown::parse(&text)
-        };
-        state.preview.parsed_key = Some((doc_id, rev));
-    }
     let body = state.settings.editor().font;
     let key = CacheKey {
         doc: doc_id,
@@ -207,62 +218,59 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         mode: theme.mode,
         font: body.round() as u32,
     };
-    if state
+    let stale = state
         .preview
         .cache
         .as_ref()
-        .is_none_or(|cache| cache.key != key)
-    {
-        let (mut prims, mut height, anchors) = if state.preview.too_large {
-            (
-                vec![banner(
-                    "preview disabled for files over 8 MB — use the editor",
-                    p.faint,
-                    0.0,
-                )],
-                44.0,
-                Vec::new(),
-            )
-        } else {
-            layout(&state.preview.blocks, measurer, view.width(), &theme, body)
-        };
-        if state.preview.truncated {
-            prims.push(banner(
-                "… preview truncated at 512 KB — use the editor for the rest",
-                p.faint,
-                height,
-            ));
-            height += 28.0;
-        }
-        state.preview.cache = Some(Cache {
-            key,
-            prims,
-            height,
-            anchors,
+        .is_none_or(|cache| cache.key != key);
+    if stale {
+        // Parsing + laying out a large document costs milliseconds; doing it
+        // on every keystroke pins a core. Coalesce edits for large Markdown
+        // files and keep painting the previous layout until the user pauses.
+        let same_layout = state.preview.cache.as_ref().is_some_and(|cache| {
+            cache.key.doc == key.doc
+                && cache.key.width == key.width
+                && cache.key.mode == key.mode
+                && cache.key.font == key.font
         });
+        let now = Instant::now();
+        if same_layout && len > PREVIEW_DEBOUNCE_BYTES {
+            if state.preview.deferred_rev != Some(rev) {
+                state.preview.deferred_rev = Some(rev);
+                state.preview.rebuild_at = Some(now + PREVIEW_DEBOUNCE);
+            }
+            if state.preview.rebuild_at.is_some_and(|due| now < due) {
+                // Paint the previous layout; `needs_frame` wakes us at the
+                // deadline so the pending rebuild is not lost.
+            } else {
+                rebuild(state, measurer, &theme, view, key, p, body);
+            }
+        } else {
+            rebuild(state, measurer, &theme, view, key, p, body);
+        }
+    } else {
+        state.preview.rebuild_at = None;
+        state.preview.deferred_rev = None;
     }
-    let Some((height, anchors)) = state
-        .preview
-        .cache
-        .as_ref()
-        .map(|cache| (cache.height, cache.anchors.clone()))
-    else {
+    let Some(cache) = state.preview.cache.as_ref() else {
         return;
     };
+    let height = cache.height;
     state.preview.total_h = height;
-    state.preview.anchors = anchors;
     let max_scroll = (height - view.height()).max(0.0);
     state.preview.scroll = state.preview.scroll.clamp(0.0, max_scroll);
 
-    let Some(cache) = &state.preview.cache else {
-        return;
-    };
     env.ctx.save();
     env.ctx.clip_rect(view);
     let offset = Vec2::new(view.left(), view.top() - state.preview.scroll);
+    let visible_top = state.preview.scroll;
+    let visible_bottom = visible_top + view.height();
     for prim in &cache.prims {
         match prim {
             Prim::Fill { rect, color } => {
+                if rect.bottom() < visible_top || rect.top() > visible_bottom {
+                    continue;
+                }
                 env.ctx.fill_rect(rect.translate(offset), *color);
             }
             Prim::Text {
@@ -276,6 +284,12 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                 underline,
                 strike,
             } => {
+                // Baselines are content-space; allow a generous ink margin so
+                // descenders, inline-code fills and strike/underline rules are
+                // never clipped by the cull.
+                if baseline + size * 0.6 < visible_top || baseline - size * 1.6 > visible_bottom {
+                    continue;
+                }
                 if let Some(bg) = bg {
                     env.ctx.fill_rect(bg.translate(offset), p.raised);
                 }
@@ -335,7 +349,65 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
 
 // -- layout ------------------------------------------------------------------
 
-fn layout(
+#[allow(clippy::too_many_arguments)]
+fn rebuild(
+    state: &mut AppState,
+    measurer: &dyn TextMeasurer,
+    theme: &Theme,
+    view: Rect,
+    key: CacheKey,
+    p: crate::theme::Palette,
+    body: f32,
+) {
+    let text = state
+        .ws
+        .active_doc()
+        .filter(|doc| state.preview.parsed_key != Some((doc.id(), doc.rev())))
+        .map(|doc| doc.text().to_string());
+    if let Some(text) = text {
+        let len = text.len();
+        state.preview.too_large = len > PREVIEW_LARGE_BYTES;
+        state.preview.truncated = len > PREVIEW_MAX_BYTES && !state.preview.too_large;
+        state.preview.blocks = if state.preview.too_large {
+            Vec::new()
+        } else if state.preview.truncated {
+            markdown::parse(&text[..truncate_boundary(&text, PREVIEW_MAX_BYTES)])
+        } else {
+            markdown::parse(&text)
+        };
+        state.preview.parsed_key = Some((key.doc, key.rev));
+    }
+    let (mut prims, mut height, anchors) = if state.preview.too_large {
+        (
+            vec![banner(
+                "preview disabled for files over 8 MB — use the editor",
+                p.faint,
+                0.0,
+            )],
+            44.0,
+            Vec::new(),
+        )
+    } else {
+        layout(&state.preview.blocks, measurer, view.width(), theme, body)
+    };
+    if state.preview.truncated {
+        prims.push(banner(
+            "… preview truncated at 512 KB — use the editor for the rest",
+            p.faint,
+            height,
+        ));
+        height += 28.0;
+    }
+    state.preview.anchors = Rc::new(anchors);
+    state.preview.cache = Some(Cache { key, prims, height });
+    state.preview.rebuild_at = None;
+    state.preview.deferred_rev = None;
+    state.dirty = true;
+}
+
+// -- layout ------------------------------------------------------------------
+
+pub(crate) fn layout(
     blocks: &[Block],
     measurer: &dyn TextMeasurer,
     width: f32,

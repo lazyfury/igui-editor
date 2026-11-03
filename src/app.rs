@@ -927,6 +927,21 @@ impl EditorApp {
             || self.state.borrow().hover_waiting()
             || self.state.borrow().hover_dismissing()
             || self.state.borrow().message.is_some()
+            || self.preview_rebuild_pending()
+    }
+
+    /// Whether a coalesced preview rebuild still needs frames. If the preview
+    /// pane is no longer mounted, clear the deadline instead of spinning.
+    fn preview_rebuild_pending(&self) -> bool {
+        let mut state = self.state.borrow_mut();
+        if !state.preview.rebuild_pending() {
+            return false;
+        }
+        if state.ws.active_doc().is_none() || state.view_of_active() == ViewMode::Edit {
+            state.preview.cancel_rebuild();
+            return false;
+        }
+        true
     }
 
     /// Starts a requested dialog (one at a time) and polls the open one. The

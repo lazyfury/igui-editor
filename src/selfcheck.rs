@@ -1739,6 +1739,14 @@ fn check(dir: &Path) -> Result<(), String> {
             ..Modifiers::NONE
         },
     );
+    harness.frame()?;
+    // The banner sits at the end of the truncated content; culling only paints
+    // the visible window, so scroll to the bottom before asserting it.
+    {
+        let mut state = harness.app.state_mut();
+        state.preview.scroll = f32::MAX;
+        state.dirty = true;
+    }
     let frame = harness.frame()?;
     expect(
         &texts(&frame),
@@ -1748,6 +1756,22 @@ fn check(dir: &Path) -> Result<(), String> {
     if harness.app.state().ws.active_doc().map(|doc| doc.name()) != Some("large.md") {
         return Err("the large Markdown fixture did not open".into());
     }
+    // A large Markdown edit coalesces the expensive parse + layout.
+    {
+        let mut state = harness.app.state_mut();
+        if let Some(doc) = state.ws.active_doc_mut() {
+            doc.insert_text("x");
+        }
+    }
+    harness.frame()?;
+    if !harness.app.state().preview.rebuild_pending() {
+        return Err("large Markdown edit did not schedule a coalesced preview rebuild".into());
+    }
+    std::thread::sleep(Duration::from_millis(150));
+    harness.frame()?;
+    if harness.app.state().preview.rebuild_pending() {
+        return Err("coalesced preview rebuild did not run after the debounce".into());
+    }
     harness.shortcut(
         Key::Character('w'),
         Modifiers {
@@ -1756,6 +1780,11 @@ fn check(dir: &Path) -> Result<(), String> {
         },
     );
     harness.frame()?;
+    // The edit above made the tab dirty; discard it before the next open.
+    if harness.app.state().modal.is_some() {
+        harness.app.state_mut().resolve_modal(ModalButton::Discard);
+        harness.frame()?;
+    }
     harness.dialogs.push(Some(dir.join("huge.txt")));
     harness.shortcut(
         Key::Character('o'),
