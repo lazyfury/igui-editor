@@ -7,9 +7,9 @@ use igui_ui::TextMeasurer;
 use crate::kit::{self, RectExt};
 use crate::state::AppState;
 
-const WIDTH: f32 = 540.0;
-const ROW_H: f32 = 22.0;
-const PAD: f32 = 16.0;
+const WIDTH: f32 = 600.0;
+const ROW_H: f32 = 28.0;
+const PAD: f32 = 18.0;
 const MAX_ROWS: usize = 6;
 
 pub struct Layout {
@@ -21,11 +21,11 @@ pub struct Layout {
 
 pub fn layout(viewport: Rect, count: usize) -> Layout {
     let rows = count.clamp(1, MAX_ROWS);
-    let height = PAD + 30.0 + 10.0 + rows as f32 * ROW_H + 16.0 + 28.0 + PAD;
+    let height = PAD + 34.0 + 12.0 + rows as f32 * ROW_H + 18.0 + 32.0 + PAD;
     let width = WIDTH.min(viewport.width() - 48.0).max(300.0);
     let panel = Rect::from_center_size(viewport.center(), Size::new(width, height));
     let mut rows_rect = Vec::with_capacity(rows);
-    let mut y = panel.top() + PAD + 40.0;
+    let mut y = panel.top() + PAD + 46.0;
     for _ in 0..rows {
         rows_rect.push(Rect::from_min_size(
             Vec2::new(panel.left() + PAD, y),
@@ -33,14 +33,14 @@ pub fn layout(viewport: Rect, count: usize) -> Layout {
         ));
         y += ROW_H;
     }
-    let button_y = panel.bottom() - PAD - 28.0;
+    let button_y = panel.bottom() - PAD - 32.0;
     let restore = Rect::from_min_size(
-        Vec2::new(panel.right() - PAD - 104.0, button_y),
-        Size::new(104.0, 28.0),
+        Vec2::new(panel.right() - PAD - 112.0, button_y),
+        Size::new(112.0, 32.0),
     );
     let discard = Rect::from_min_size(
-        Vec2::new(restore.left() - 8.0 - 104.0, button_y),
-        Size::new(104.0, 28.0),
+        Vec2::new(restore.left() - 10.0 - 112.0, button_y),
+        Size::new(112.0, 32.0),
     );
     Layout {
         panel,
@@ -75,15 +75,15 @@ pub fn paint(state: &AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintConte
         ctx,
         "Recover unsaved changes?",
         layout.panel.left() + PAD,
-        layout.panel.top() + PAD + 20.0,
-        14.0,
+        layout.panel.top() + PAD + 22.0,
+        m.font_ui,
         p.text,
     );
     kit::text(
         ctx,
         "these buffers were open when the app last exited unexpectedly",
         layout.panel.left() + PAD,
-        layout.panel.top() + PAD + 38.0,
+        layout.panel.top() + PAD + 44.0,
         m.font_small,
         p.dim,
     );
@@ -122,7 +122,7 @@ pub fn paint(state: &AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintConte
             ctx,
             &format!("… and {} more", entries.len() - MAX_ROWS),
             layout.rows[MAX_ROWS - 1].left() + 4.0,
-            layout.rows[MAX_ROWS - 1].bottom() + 14.0,
+            layout.rows[MAX_ROWS - 1].bottom() + 16.0,
             m.font_small,
             p.faint,
         );

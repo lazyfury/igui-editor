@@ -12,13 +12,13 @@ use crate::kit::{self, RectExt};
 use crate::model::lsp::{byte_for_position, Diagnostic, LspStatus};
 use crate::state::{AppState, Focus};
 
-const WIDTH: f32 = 680.0;
+const WIDTH: f32 = 720.0;
 const MAX_ROWS: usize = 14;
-const HEADER_H: f32 = 30.0;
-const ROW_H: f32 = 25.0;
-const FOOTER_H: f32 = 16.0;
-const PAD: f32 = 10.0;
-const GAP: f32 = 8.0;
+const HEADER_H: f32 = 34.0;
+const ROW_H: f32 = 28.0;
+const FOOTER_H: f32 = 20.0;
+const PAD: f32 = 12.0;
+const GAP: f32 = 10.0;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Click {
@@ -158,7 +158,7 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
         ctx,
         "PROBLEMS",
         rect.left() + PAD,
-        header.bottom() - 9.0,
+        header.bottom() - 11.0,
         m.font_small,
         p.dim,
     );
@@ -167,7 +167,7 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
         measurer,
         &count,
         rect.right() - PAD,
-        header.bottom() - 9.0,
+        header.bottom() - 11.0,
         m.font_small,
         p.faint,
     );
@@ -232,7 +232,7 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
         ctx,
         "click a row to jump · Esc close",
         footer.left(),
-        footer.bottom() - 4.0,
+        footer.bottom() - 5.0,
         m.font_small,
         p.faint,
     );

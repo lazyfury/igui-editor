@@ -7,16 +7,16 @@ use igui_ui::{TextEdit, TextMeasurer};
 use crate::kit::{self, RectExt};
 use crate::state::{AppState, SearchFocus};
 
-const WIDTH: f32 = 780.0;
-const ROW_H: f32 = 26.0;
-const QUERY_H: f32 = 34.0;
-const REPLACE_H: f32 = 30.0;
-const REPLACE_BUTTON_W: f32 = 168.0;
-const PAD: f32 = 8.0;
-const FOOTER_H: f32 = 24.0;
+const WIDTH: f32 = 800.0;
+const ROW_H: f32 = 28.0;
+const QUERY_H: f32 = 38.0;
+const REPLACE_H: f32 = 32.0;
+const REPLACE_BUTTON_W: f32 = 180.0;
+const PAD: f32 = 10.0;
+const FOOTER_H: f32 = 28.0;
 const MAX_ROWS: usize = 12;
-const TOGGLE: f32 = 26.0;
-const LINE_W: f32 = 46.0;
+const TOGGLE: f32 = 30.0;
+const LINE_W: f32 = 50.0;
 
 pub struct Layout {
     pub panel: Rect,
@@ -31,7 +31,7 @@ pub struct Layout {
 
 pub fn layout(viewport: Rect, hit_count: usize) -> Layout {
     let visible = hit_count.clamp(1, MAX_ROWS);
-    let height = PAD + QUERY_H + 6.0 + REPLACE_H + 6.0 + visible as f32 * ROW_H + FOOTER_H + PAD;
+    let height = PAD + QUERY_H + 8.0 + REPLACE_H + 8.0 + visible as f32 * ROW_H + FOOTER_H + PAD;
     let width = WIDTH.min(viewport.width() - 48.0).max(320.0);
     let panel = Rect::from_center_size(viewport.center(), Size::new(width, height));
     let case_rect = Rect::from_min_size(
@@ -50,18 +50,18 @@ pub fn layout(viewport: Rect, hit_count: usize) -> Layout {
         ),
     );
     let replace_button = Rect::from_min_size(
-        Vec2::new(panel.right() - PAD - REPLACE_BUTTON_W, query.bottom() + 6.0),
+        Vec2::new(panel.right() - PAD - REPLACE_BUTTON_W, query.bottom() + 8.0),
         Size::new(REPLACE_BUTTON_W, REPLACE_H),
     );
     let replace_rect = Rect::from_min_size(
-        Vec2::new(panel.left() + PAD, query.bottom() + 6.0),
+        Vec2::new(panel.left() + PAD, query.bottom() + 8.0),
         Size::new(
             (replace_button.left() - 8.0 - (panel.left() + PAD)).max(80.0),
             REPLACE_H,
         ),
     );
     let mut rows = Vec::with_capacity(visible);
-    let mut y = replace_rect.bottom() + 6.0;
+    let mut y = replace_rect.bottom() + 8.0;
     for _ in 0..visible {
         rows.push(Rect::from_min_size(
             Vec2::new(panel.left() + PAD, y),

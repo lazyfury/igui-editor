@@ -10,12 +10,12 @@ use igui_ui::TextMeasurer;
 use crate::kit::{self, RectExt};
 use crate::state::AppState;
 
-const HOVER_W: f32 = 460.0;
+const HOVER_W: f32 = 480.0;
 const HOVER_MAX_H: f32 = 300.0;
-const COMPLETION_W: f32 = 380.0;
-const COMPLETION_ROW_H: f32 = 22.0;
+const COMPLETION_W: f32 = 400.0;
+const COMPLETION_ROW_H: f32 = 26.0;
 const COMPLETION_MAX_ROWS: usize = 10;
-const COMPLETION_PREVIEW_W: f32 = 360.0;
+const COMPLETION_PREVIEW_W: f32 = 380.0;
 const COMPLETION_PREVIEW_MAX_H: f32 = 230.0;
 
 pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintContext) {
@@ -67,7 +67,7 @@ fn paint_hover(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut Pain
     if lines.is_empty() {
         return;
     }
-    let docs_h = if has_docs { 24.0 } else { 0.0 };
+    let docs_h = if has_docs { 26.0 } else { 0.0 };
     let height = (lines.len() as f32 * line_h + 16.0 + docs_h).min(HOVER_MAX_H);
     let caret = state.editor.caret_rect;
     let anchor = state
@@ -136,7 +136,7 @@ fn paint_completion(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut
         return;
     }
     let width = COMPLETION_W.min(viewport.width() - 32.0);
-    let height = 8.0 + rows as f32 * COMPLETION_ROW_H + 24.0;
+    let height = 10.0 + rows as f32 * COMPLETION_ROW_H + 28.0;
     let caret = state.editor.caret_rect;
     let mut origin = Vec2::new(caret.right() + 4.0, caret.bottom() + 4.0);
     if origin.x + width > viewport.right() - 8.0 {
@@ -155,7 +155,7 @@ fn paint_completion(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut
     if selected >= COMPLETION_MAX_ROWS {
         first = selected + 1 - COMPLETION_MAX_ROWS;
     }
-    let mut y = panel.top() + 6.0;
+    let mut y = panel.top() + 8.0;
     for (slot, item) in completion
         .items
         .iter()
@@ -206,8 +206,8 @@ fn paint_completion(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut
         y += COMPLETION_ROW_H;
     }
     let footer = Rect::from_min_size(
-        Vec2::new(panel.left() + 10.0, panel.bottom() - 22.0),
-        Size::new(panel.width() - 20.0, 20.0),
+        Vec2::new(panel.left() + 10.0, panel.bottom() - 26.0),
+        Size::new(panel.width() - 20.0, 22.0),
     );
     kit::text(
         ctx,
@@ -276,7 +276,7 @@ fn paint_completion_preview(
         lines.push(text.lines().next().unwrap_or("").to_string());
     }
     let has_docs = completion.preview.is_some();
-    let docs_h = if has_docs { 24.0 } else { 0.0 };
+    let docs_h = if has_docs { 26.0 } else { 0.0 };
     let height =
         (lines.len() as f32 * line_h + 16.0 + docs_h).clamp(34.0, COMPLETION_PREVIEW_MAX_H);
     let mut x = completion_panel.right() + 8.0;

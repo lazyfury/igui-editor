@@ -1172,12 +1172,10 @@ fn check(dir: &Path) -> Result<(), String> {
         let state = harness.app.state();
         let rect = state.editor.text_rect;
         let m = state.theme.m;
+        let line_h = state.editor_metrics().line_h;
         (
-            Vec2::new(rect.left() + m.text_pad + 2.0, rect.top() + m.line_h),
-            Vec2::new(
-                rect.left() + m.text_pad + 120.0,
-                rect.top() + m.line_h * 2.0,
-            ),
+            Vec2::new(rect.left() + m.text_pad + 2.0, rect.top() + line_h * 0.5),
+            Vec2::new(rect.left() + m.text_pad + 120.0, rect.top() + line_h * 1.5),
         )
     };
     harness.event(InputEvent::PointerDown {

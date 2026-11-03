@@ -231,7 +231,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         ] {
             let row = Rect::from_min_size(
                 Vec2::new(rect.left() + 8.0, y),
-                Size::new((rect.width() - 16.0).max(40.0), 26.0),
+                Size::new((rect.width() - 16.0).max(40.0), 28.0),
             );
             kit::text(
                 env.ctx,
@@ -252,7 +252,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                 p.faint,
             );
             state.sidebar.actions.push((action, row));
-            y += 28.0;
+            y += 30.0;
         }
         let hint = kit::truncate(
             measurer,

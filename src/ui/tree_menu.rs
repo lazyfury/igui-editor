@@ -10,9 +10,9 @@ use igui_ui::TextMeasurer;
 use crate::kit;
 use crate::state::{AppState, TreeMenuAction, TreeMenuUi};
 
-const WIDTH: f32 = 220.0;
-const ITEM_H: f32 = 24.0;
-const PAD: f32 = 4.0;
+const WIDTH: f32 = 240.0;
+const ITEM_H: f32 = 28.0;
+const PAD: f32 = 6.0;
 
 pub fn open(state: &mut AppState, path: std::path::PathBuf, name: String, is_dir: bool, at: Vec2) {
     state.tree_menu = Some(TreeMenuUi {

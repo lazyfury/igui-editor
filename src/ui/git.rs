@@ -10,7 +10,7 @@ use igui_ui::{PaintEnv, TextMeasurer};
 use crate::kit::{self, RectExt};
 use crate::state::AppState;
 
-pub const ROW_H: f32 = 22.0;
+pub const ROW_H: f32 = 28.0;
 
 pub fn paint_sidebar(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     let theme = state.theme;
@@ -48,7 +48,7 @@ pub fn paint_sidebar(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     let status = &state.git.status;
     let header = Rect::from_min_size(
         Vec2::new(content.left(), content.top()),
-        Size::new(content.width(), 30.0),
+        Size::new(content.width(), 34.0),
     );
     let branch = if status.branch.is_empty() {
         "(no branch)"
@@ -74,8 +74,8 @@ pub fn paint_sidebar(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         p.faint,
     );
     let refresh = Rect::from_min_size(
-        Vec2::new(header.right() - 26.0, header.top() + 5.0),
-        Size::new(20.0, 20.0),
+        Vec2::new(header.right() - 30.0, header.top() + 6.0),
+        Size::new(22.0, 22.0),
     );
     if state.git.hover == Some(refresh) {
         kit::fill(env.ctx, refresh, p.hover);
@@ -94,11 +94,11 @@ pub fn paint_sidebar(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     let tabs_y = header.bottom() + 2.0;
     let changes_tab = Rect::from_min_size(
         Vec2::new(content.left() + 10.0, tabs_y),
-        Size::new(72.0, 20.0),
+        Size::new(78.0, 24.0),
     );
     let history_tab = Rect::from_min_size(
         Vec2::new(changes_tab.right() + 4.0, tabs_y),
-        Size::new(72.0, 20.0),
+        Size::new(78.0, 24.0),
     );
     for (rect, label, active) in [
         (
@@ -132,10 +132,10 @@ pub fn paint_sidebar(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     }
     state.git.changes_rect = changes_tab;
     state.git.history_rect = history_tab;
-    let mut y = tabs_y + 24.0;
+    let mut y = tabs_y + 30.0;
     if state.git.mode == crate::state::GitMode::History {
         state.git.history_rows.clear();
-        let max_scroll = (state.git.commits.len() as f32 * 36.0 + 24.0 - content.height()).max(0.0);
+        let max_scroll = (state.git.commits.len() as f32 * 40.0 + 28.0 - content.height()).max(0.0);
         state.git.scroll_max = max_scroll;
         crate::ui::scroll::clamp(&mut state.git.scroll, max_scroll);
         env.ctx.save();
@@ -143,7 +143,7 @@ pub fn paint_sidebar(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         for commit in state.git.commits.iter() {
             let row = Rect::from_min_size(
                 Vec2::new(content.left(), y - state.git.scroll),
-                Size::new(content.width() - 1.0, 34.0),
+                Size::new(content.width() - 1.0, 38.0),
             );
             if state.git.hover == Some(row) {
                 kit::fill(env.ctx, row, p.hover);
@@ -153,7 +153,7 @@ pub fn paint_sidebar(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                     env.ctx,
                     &commit.short,
                     row.left() + 12.0,
-                    row.top() + 14.0,
+                    row.top() + 16.0,
                     m.font_small,
                     p.accent,
                 );
@@ -161,7 +161,7 @@ pub fn paint_sidebar(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                     env.ctx,
                     &kit::truncate(measurer, &commit.subject, m.font_ui, row.width() - 92.0),
                     row.left() + 72.0,
-                    row.top() + 14.0,
+                    row.top() + 16.0,
                     m.font_ui,
                     p.text,
                 );
@@ -169,13 +169,13 @@ pub fn paint_sidebar(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                     env.ctx,
                     &format!("{} · {}", commit.author, commit.date),
                     row.left() + 12.0,
-                    row.top() + 27.0,
+                    row.top() + 31.0,
                     m.font_small,
                     p.faint,
                 );
             }
             state.git.history_rows.push((commit.hash.clone(), row));
-            y += 36.0;
+            y += 40.0;
         }
         if state.git.commits.is_empty() {
             kit::text(
@@ -197,7 +197,7 @@ pub fn paint_sidebar(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         ("Changes", &status.changes),
         ("Conflicts", &status.conflicts),
     ];
-    let content_h = content.height() - 34.0;
+    let content_h = content.height() - 40.0;
     let max_scroll = (sections
         .iter()
         .map(|(_, entries)| entries.len() + 1)
@@ -261,7 +261,7 @@ pub fn paint_sidebar(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             kit::text(
                 env.ctx,
                 &name,
-                row.left() + 28.0,
+                row.left() + 30.0,
                 kit::baseline(measurer, row, m.font_ui),
                 m.font_ui,
                 if selected { p.text } else { p.dim },
@@ -288,13 +288,13 @@ pub fn paint_sidebar(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
 
     // Bottom actions: Stage all + Commit.
     let bottom = Rect::from_min_size(
-        Vec2::new(content.left() + 8.0, content.bottom() - 30.0),
-        Size::new(content.width() - 16.0, 24.0),
+        Vec2::new(content.left() + 8.0, content.bottom() - 34.0),
+        Size::new(content.width() - 16.0, 28.0),
     );
-    let stage_all = Rect::from_min_size(bottom.origin, Size::new(bottom.width() * 0.48, 24.0));
+    let stage_all = Rect::from_min_size(bottom.origin, Size::new(bottom.width() * 0.48, 28.0));
     let commit = Rect::from_min_size(
         Vec2::new(bottom.right() - bottom.width() * 0.56, bottom.top()),
-        Size::new(bottom.width() * 0.56, 24.0),
+        Size::new(bottom.width() * 0.56, 28.0),
     );
     if state.git.hover == Some(stage_all) {
         kit::fill(env.ctx, stage_all, p.hover);

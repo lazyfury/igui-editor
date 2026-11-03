@@ -14,11 +14,11 @@ use crate::kit::{self, RectExt};
 use crate::settings::{Row, ROWS};
 use crate::state::AppState;
 
-const ROW_H: f32 = 30.0;
-const PANEL_W: f32 = 520.0;
-const HEADER_H: f32 = 52.0;
-const FOOTER_H: f32 = 34.0;
-const BUTTON: f32 = 22.0;
+const ROW_H: f32 = 34.0;
+const PANEL_W: f32 = 560.0;
+const HEADER_H: f32 = 56.0;
+const FOOTER_H: f32 = 36.0;
+const BUTTON: f32 = 26.0;
 
 /// Panel + row + button geometry (one function for paint and hit tests).
 pub struct Layout {
@@ -102,15 +102,15 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
         ctx,
         "Settings",
         layout.panel.left() + 16.0,
-        layout.panel.top() + 26.0,
-        14.0,
+        layout.panel.top() + 28.0,
+        m.font_ui,
         p.text,
     );
     kit::text(
         ctx,
         "changes apply immediately",
         layout.panel.left() + 16.0,
-        layout.panel.top() + 44.0,
+        layout.panel.top() + 48.0,
         m.font_small,
         p.faint,
     );
@@ -193,8 +193,8 @@ fn paint_step(ctx: &mut PaintContext, theme: &crate::theme::Theme, rect: Rect, l
         ctx,
         label,
         rect.center().x - 3.0,
-        rect.center().y + 4.0,
-        12.0,
+        rect.center().y + 5.0,
+        theme.m.font_ui,
         p.text,
     );
 }

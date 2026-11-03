@@ -8,11 +8,11 @@ use crate::kit::{self, RectExt};
 use crate::model::workspace_index::MAX_RESULTS;
 use crate::state::AppState;
 
-const WIDTH: f32 = 620.0;
-const ROW_H: f32 = 24.0;
-const QUERY_H: f32 = 34.0;
-const PAD: f32 = 8.0;
-const FOOTER_H: f32 = 24.0;
+const WIDTH: f32 = 680.0;
+const ROW_H: f32 = 28.0;
+const QUERY_H: f32 = 38.0;
+const PAD: f32 = 10.0;
+const FOOTER_H: f32 = 28.0;
 const MAX_ROWS: usize = 10;
 
 /// Panel/query/row geometry (one function for paint and hit tests).
@@ -25,7 +25,7 @@ pub struct Layout {
 
 pub fn layout(viewport: Rect, result_count: usize) -> Layout {
     let visible = result_count.clamp(1, MAX_ROWS);
-    let height = PAD + QUERY_H + 6.0 + visible as f32 * ROW_H + FOOTER_H + PAD;
+    let height = PAD + QUERY_H + 8.0 + visible as f32 * ROW_H + FOOTER_H + PAD;
     let width = WIDTH.min(viewport.width() - 48.0).max(260.0);
     let panel = Rect::from_center_size(viewport.center(), Size::new(width, height));
     let query = Rect::from_min_size(
@@ -33,7 +33,7 @@ pub fn layout(viewport: Rect, result_count: usize) -> Layout {
         Size::new(panel.width() - PAD * 2.0, QUERY_H),
     );
     let mut rows = Vec::with_capacity(visible);
-    let mut y = query.bottom() + 6.0;
+    let mut y = query.bottom() + 8.0;
     for _ in 0..visible {
         rows.push(Rect::from_min_size(
             Vec2::new(panel.left() + PAD, y),

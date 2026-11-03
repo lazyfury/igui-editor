@@ -2,8 +2,9 @@
 //!
 //! This is deliberately *not* `igui_theme::DefaultTheme`. The editor paints
 //! every surface itself (`igui_ui` only), so it owns the palette and the
-//! metrics: no radius anywhere, one 22 px row rhythm, 19 px editor lines, and
-//! a phosphor-green accent on a near-black background.
+//! metrics: no radius anywhere, one 28 px row rhythm and a phosphor-green
+//! accent on a near-black background. Editor line height comes from the
+//! editor settings, not from this chrome rhythm.
 
 use igui_core::Color;
 
@@ -156,8 +157,6 @@ pub struct Metrics {
     pub font_ui: f32,
     pub font_small: f32,
     pub font_editor: f32,
-    /// Editor line box height.
-    pub line_h: f32,
     /// Sidebar / menu row height.
     pub row_h: f32,
     pub menubar_h: f32,
@@ -176,24 +175,23 @@ pub struct Metrics {
 }
 
 impl Metrics {
-    /// Sizes are **em pixels** (see `host::font_config`), so these match CSS
-    /// sizes: `13` for chrome, `10` for secondary text. (They used to be
-    /// 18/14 while ab_glyph measured ascent+descent, i.e. 13/10 em.)
+    /// Sizes are **em pixels** (see `host::font_config`): `14` for chrome,
+    /// `12` for secondary text. Chrome heights leave room around the larger
+    /// faces; editor line height is derived from `Settings::font_size`.
     pub const COMPACT: Self = Self {
-        font_ui: 13.0,
-        font_small: 10.0,
+        font_ui: 14.0,
+        font_small: 12.0,
         font_editor: 14.0,
-        line_h: 19.0,
-        row_h: 22.0,
-        menubar_h: 26.0,
+        row_h: 28.0,
+        menubar_h: 32.0,
         tabbar_h: 28.0,
-        status_h: 22.0,
+        status_h: 24.0,
         sidebar_w: 232.0,
-        scrollbar: 8.0,
-        text_pad: 8.0,
-        gutter_pad: 8.0,
+        scrollbar: 10.0,
+        text_pad: 10.0,
+        gutter_pad: 10.0,
         tab: 4.0,
-        tab_w: 168.0,
+        tab_w: 180.0,
     };
 }
 

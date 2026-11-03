@@ -15,7 +15,7 @@ use crate::kit::{self, RectExt};
 use crate::model::wrap::{self, WrapKey, WrapLayout};
 use crate::state::{AppState, Focus};
 
-const PAD: f32 = 16.0;
+const PAD: f32 = 18.0;
 const SCROLLBAR: f32 = 8.0;
 
 pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>) -> NodeId {

@@ -236,7 +236,7 @@ the active document. Rust files inside a Cargo project get functions, methods,
 structs/enums, fields, variables and nested items from `rust-analyzer`; GDScript
 files get functions, classes, signals, constants and variables from Godot's
 server. The list updates after edits. Rows use the Explorer's tree rhythm
-(22 px rows, 13 px labels, shared marker/hover/selection painting), and the
+(28 px rows, 14 px labels, shared marker/hover/selection painting), and the
 nearest preceding symbol to the caret is highlighted. Clicking a row moves the
 caret to the symbol and reveals it in the editor. The left edge is a shared drag
 handle: drag it to resize (160–420 px), double-click resets to 224 px. The panel
@@ -602,9 +602,9 @@ Not `igui_theme::DefaultTheme`. The app owns its palette and metrics
   so Chinese renders with real glyphs instead of the engine's box-shaped symbol
   fallback, the system default elsewhere. Other hosts prefer JetBrains Mono /
   Fira Code / DejaVu Sans Mono.
-- **Compact rhythm** — 13 px UI text / 10 px secondary text, 26 px menu bar,
-  22 px rows, 22 px status bar, 8 px scrollbars; the editor defaults to 14 px
-  text and scales with the font setting (11–18 px).
+- **Compact rhythm** — 14 px UI text / 12 px secondary text, 32 px menu bar,
+  28 px rows, 28 px tab strip, 24 px status bar, 10 px scrollbars; the editor
+  font comes from the font setting (11–18 px, default 13).
 - **Sizes are em pixels** — `FontConfig::em_size` makes every family treat the
   requested size as its em (CSS semantics), so `14` is a 14 px em for PingFang,
   Menlo and the terminal's mono face alike. That matches VS Code's

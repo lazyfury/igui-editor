@@ -12,10 +12,10 @@ use igui_ui::TextMeasurer;
 use crate::kit::{self, RectExt};
 use crate::state::{AppState, Modal, ModalButton};
 
-const PANEL_W: f32 = 460.0;
-const PANEL_H: f32 = 172.0;
-const BUTTON_W: f32 = 100.0;
-const BUTTON_H: f32 = 28.0;
+const PANEL_W: f32 = 480.0;
+const PANEL_H: f32 = 190.0;
+const BUTTON_W: f32 = 108.0;
+const BUTTON_H: f32 = 32.0;
 
 /// Buttons for the dirty-close modal.
 pub const CLOSE_BUTTONS: [ModalButton; 3] =
@@ -151,20 +151,20 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
         }
     };
 
-    let title_baseline = panel.top() + 40.0;
+    let title_baseline = panel.top() + 44.0;
     kit::text(
         ctx,
         &title,
         panel.left() + 18.0,
         title_baseline,
-        14.0,
+        m.font_ui,
         p.text,
     );
     kit::text(
         ctx,
         &kit::truncate(measurer, &body, m.font_ui, panel.width() - 36.0),
         panel.left() + 18.0,
-        title_baseline + 28.0,
+        title_baseline + 30.0,
         m.font_ui,
         p.dim,
     );

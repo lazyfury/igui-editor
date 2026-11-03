@@ -1445,19 +1445,19 @@ fn paint_welcome(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         actions.push(Action::QuickOpen);
         actions.push(Action::ProjectSearch);
     }
-    let row_h = 26.0;
+    let row_h = 28.0;
     let row_w = 380.0_f32.min((rect.width() - 48.0).max(220.0));
-    let total_h = 64.0 + actions.len() as f32 * (row_h + 6.0) + 34.0;
+    let total_h = 70.0 + actions.len() as f32 * (row_h + 6.0) + 36.0;
     let left = rect.center().x - row_w * 0.5;
     let top = (rect.center().y - total_h * 0.5).max(rect.top() + 24.0);
 
-    let title = Rect::from_min_size(Vec2::new(left, top), Size::new(row_w, 24.0));
+    let title = Rect::from_min_size(Vec2::new(left, top), Size::new(row_w, 28.0));
     kit::text_center(
         env.ctx,
         measurer,
         "igui-editor",
         title,
-        top + 18.0,
+        top + 20.0,
         18.0,
         p.text,
     );
@@ -1470,13 +1470,13 @@ fn paint_welcome(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         env.ctx,
         measurer,
         subtitle,
-        Rect::from_min_size(Vec2::new(left, top + 26.0), Size::new(row_w, 20.0)),
-        top + 44.0,
+        Rect::from_min_size(Vec2::new(left, top + 30.0), Size::new(row_w, 22.0)),
+        top + 48.0,
         m.font_ui,
         p.dim,
     );
 
-    let mut y = top + 60.0;
+    let mut y = top + 66.0;
     for action in actions {
         let row = Rect::from_min_size(Vec2::new(left, y), Size::new(row_w, row_h));
         env.ctx.stroke_rect(row, 1.0, p.border);

@@ -16,10 +16,10 @@ use crate::kit::{self, RectExt};
 use crate::state::{AppState, FindHit, Focus};
 use crate::theme::Theme;
 
-pub const BAR_H: f32 = 62.0;
-const ROW_H: f32 = 22.0;
-const FIELD_W: f32 = 260.0;
-const PAD: f32 = 8.0;
+pub const BAR_H: f32 = 74.0;
+const ROW_H: f32 = 28.0;
+const FIELD_W: f32 = 280.0;
+const PAD: f32 = 10.0;
 
 pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>) -> NodeId {
     let id = kit::node(tree, parent, "find");
@@ -60,38 +60,38 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     );
 
     let row1 = Rect::from_min_size(
-        Vec2::new(rect.left() + PAD, rect.top() + 5.0),
+        Vec2::new(rect.left() + PAD, rect.top() + 6.0),
         Size::new(rect.width() - PAD * 2.0, ROW_H),
     );
     let row2 = Rect::from_min_size(
-        Vec2::new(rect.left() + PAD, rect.top() + 5.0 + ROW_H + 5.0),
+        Vec2::new(rect.left() + PAD, rect.top() + 6.0 + ROW_H + 6.0),
         Size::new(rect.width() - PAD * 2.0, ROW_H),
     );
 
     // Row 1: query, toggles, count, prev/next, close.
     // Shrink the fields on narrow windows so the buttons never leave the bar.
-    let controls_w = 26.0 * 4.0 + 120.0;
+    let controls_w = 30.0 * 4.0 + 140.0;
     let field_w = FIELD_W.min((row1.width() - controls_w).max(80.0));
     let find_rect = Rect::from_min_size(row1.origin, Size::new(field_w, ROW_H));
     let case_rect = Rect::from_min_size(
         Vec2::new(find_rect.right() + 6.0, row1.top()),
-        Size::new(26.0, ROW_H),
+        Size::new(30.0, ROW_H),
     );
     let word_rect = Rect::from_min_size(
         Vec2::new(case_rect.right() + 4.0, row1.top()),
-        Size::new(26.0, ROW_H),
+        Size::new(30.0, ROW_H),
     );
     let close_rect = Rect::from_min_size(
-        Vec2::new(row1.right() - 26.0, row1.top()),
-        Size::new(26.0, ROW_H),
+        Vec2::new(row1.right() - 30.0, row1.top()),
+        Size::new(30.0, ROW_H),
     );
     let next_rect = Rect::from_min_size(
-        Vec2::new(close_rect.left() - 30.0, row1.top()),
-        Size::new(26.0, ROW_H),
+        Vec2::new(close_rect.left() - 34.0, row1.top()),
+        Size::new(30.0, ROW_H),
     );
     let prev_rect = Rect::from_min_size(
-        Vec2::new(next_rect.left() - 26.0, row1.top()),
-        Size::new(26.0, ROW_H),
+        Vec2::new(next_rect.left() - 30.0, row1.top()),
+        Size::new(30.0, ROW_H),
     );
 
     let mut hits: Vec<(FindHit, Rect)> = vec![
@@ -107,11 +107,11 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     let replace_rect = Rect::from_min_size(row2.origin, Size::new(field_w, ROW_H));
     let replace_one = Rect::from_min_size(
         Vec2::new(replace_rect.right() + 6.0, row2.top()),
-        Size::new(76.0, ROW_H),
+        Size::new(84.0, ROW_H),
     );
     let replace_all = Rect::from_min_size(
         Vec2::new(replace_one.right() + 4.0, row2.top()),
-        Size::new(94.0, ROW_H),
+        Size::new(104.0, ROW_H),
     );
     hits.push((FindHit::ReplaceField, replace_rect));
     hits.push((FindHit::ReplaceOne, replace_one));

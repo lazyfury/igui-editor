@@ -16,10 +16,10 @@ use crate::kit::{self, RectExt};
 use crate::state::{self, Action, AppState, Menu};
 
 /// Drop-down geometry.
-pub const POPUP_W: f32 = 260.0;
-pub const ITEM_H: f32 = 24.0;
-pub const SEP_H: f32 = 7.0;
-pub const POPUP_PAD: f32 = 4.0;
+pub const POPUP_W: f32 = 300.0;
+pub const ITEM_H: f32 = 28.0;
+pub const SEP_H: f32 = 9.0;
+pub const POPUP_PAD: f32 = 6.0;
 
 pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>) -> NodeId {
     let id = kit::node(tree, parent, "menubar");
@@ -135,13 +135,10 @@ pub fn popup_layout(
 
     let mut widest = POPUP_W;
     for item in items.iter().flatten() {
-        let label = kit::width(measurer, &item.label(), 12.0);
-        let hint = kit::width(
-            measurer,
-            &state.keymap.shortcut_label(item).unwrap_or_default(),
-            11.0,
-        );
-        widest = widest.max(label + hint + 64.0);
+        let hint = state.keymap.shortcut_label(item).unwrap_or_default();
+        let label = kit::width(measurer, &item.label(), state.theme.m.font_ui);
+        let hint = kit::width(measurer, &hint, state.theme.m.font_small);
+        widest = widest.max(label + hint + 72.0);
     }
     let mut height = POPUP_PAD * 2.0;
     for item in &items {

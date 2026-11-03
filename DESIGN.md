@@ -269,12 +269,13 @@ Metrics (`theme::Metrics::COMPACT`):
 
 | token | value |
 |---|---|
-| UI font / small / editor | 13 / 10 / 14 px em (editor configurable 11–18) |
-| editor line / sidebar row | 19 / 22 px (default font; scales with settings) |
-| menu bar / tab strip / status | 26 / 28 / 22 px |
-| sidebar width | 232 px |
-| scrollbar | 8 px (4 px thumb inset) |
-| text padding / gutter padding | 8 / 8 px |
+| UI font / small | 14 / 12 px em |
+| editor font / line height | from settings (11–18 px; 13 px → 19 px line at default) |
+| sidebar row | 28 px |
+| menu bar / tab strip / status | 32 / 28 / 24 px |
+| sidebar width | 232 px (settings) |
+| scrollbar | 10 px |
+| text padding / gutter padding | 10 / 10 px |
 | tab width (displayed) | 4 spaces |
 
 Palette:

@@ -10,11 +10,11 @@ use igui_ui::TextMeasurer;
 use crate::kit::{self, RectExt};
 use crate::state::AppState;
 
-const WIDTH: f32 = 480.0;
-const HEIGHT: f32 = 190.0;
-const PAD: f32 = 18.0;
-const FIELD_H: f32 = 34.0;
-const FOOTER_H: f32 = 28.0;
+const WIDTH: f32 = 520.0;
+const HEIGHT: f32 = 210.0;
+const PAD: f32 = 20.0;
+const FIELD_H: f32 = 38.0;
+const FOOTER_H: f32 = 30.0;
 
 pub struct Layout {
     pub panel: Rect,
@@ -30,11 +30,11 @@ pub fn layout(viewport: Rect) -> Layout {
     let panel = Rect::from_center_size(viewport.center(), Size::new(width, HEIGHT));
     let title = Rect::from_min_size(
         Vec2::new(panel.left() + PAD, panel.top() + PAD),
-        Size::new(panel.width() - PAD * 2.0, 22.0),
+        Size::new(panel.width() - PAD * 2.0, 24.0),
     );
     let directory = Rect::from_min_size(
         Vec2::new(title.left(), title.bottom() + 4.0),
-        Size::new(title.width(), 20.0),
+        Size::new(title.width(), 22.0),
     );
     let field = Rect::from_min_size(
         Vec2::new(title.left(), directory.bottom() + 10.0),
@@ -42,7 +42,7 @@ pub fn layout(viewport: Rect) -> Layout {
     );
     let error = Rect::from_min_size(
         Vec2::new(title.left(), field.bottom() + 8.0),
-        Size::new(title.width(), 20.0),
+        Size::new(title.width(), 22.0),
     );
     let footer = Rect::from_min_size(
         Vec2::new(title.left(), panel.bottom() - PAD - FOOTER_H),
@@ -82,8 +82,8 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
         ctx,
         "New File",
         layout.title.left(),
-        kit::baseline(measurer, layout.title, 14.0),
-        14.0,
+        kit::baseline(measurer, layout.title, m.font_ui),
+        m.font_ui,
         p.text,
     );
     let dir = state.new_file.dir.display().to_string();

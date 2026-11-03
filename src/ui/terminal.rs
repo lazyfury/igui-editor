@@ -11,7 +11,7 @@ use crate::kit::{self, RectExt};
 use crate::state::{AppState, Focus};
 
 pub const HEIGHT: f32 = 220.0;
-const HEADER: f32 = 22.0;
+const HEADER: f32 = 28.0;
 
 pub fn build_handle(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>) -> NodeId {
     let id = kit::node(tree, parent, "terminal-handle");
@@ -183,7 +183,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         env.ctx,
         "TERMINAL",
         rect.left() + 10.0,
-        rect.top() + 15.0,
+        rect.top() + 18.0,
         m.font_small,
         if focused { p.accent } else { p.faint },
     );
@@ -193,7 +193,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         env.measurer,
         &kit::truncate_left(env.measurer, &cwd, m.font_small, rect.width() - 120.0),
         rect.right() - 10.0,
-        rect.top() + 15.0,
+        rect.top() + 18.0,
         m.font_small,
         p.faint,
     );

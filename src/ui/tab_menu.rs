@@ -10,9 +10,9 @@ use igui_ui::TextMeasurer;
 use crate::kit;
 use crate::state::{AppState, TabMenuAction, TabMenuUi};
 
-const WIDTH: f32 = 220.0;
-const ITEM_H: f32 = 24.0;
-const PAD: f32 = 4.0;
+const WIDTH: f32 = 240.0;
+const ITEM_H: f32 = 28.0;
+const PAD: f32 = 6.0;
 
 /// Opens the context menu for `tab` at the pointer position.
 pub fn open(state: &mut AppState, tab: usize, at: Vec2) {
