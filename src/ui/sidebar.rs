@@ -333,11 +333,16 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         }
 
         let name_x = indent + 12.0;
+        let git = if row.is_dir {
+            None
+        } else {
+            state.git_entry_for(&row.path)
+        };
         let name = kit::truncate(
             measurer,
             &row.name,
             m.font_ui,
-            row_rect.right() - name_x - 8.0,
+            row_rect.right() - name_x - if git.is_some() { 24.0 } else { 8.0 },
         );
         let baseline = kit::baseline(measurer, row_rect, m.font_ui);
         let color: Color = if selected {
@@ -348,6 +353,23 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             p.text
         };
         kit::text(env.ctx, &name, name_x, baseline, m.font_ui, color);
+        if let Some(entry) = git {
+            kit::text_right(
+                env.ctx,
+                measurer,
+                &entry.kind.code().to_string(),
+                row_rect.right() - 8.0,
+                baseline,
+                m.font_small,
+                if entry.conflict {
+                    p.error
+                } else if entry.staged {
+                    p.accent
+                } else {
+                    p.dim
+                },
+            );
+        }
     }
     env.ctx.restore();
 

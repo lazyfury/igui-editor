@@ -310,13 +310,16 @@ impl Action {
             | Action::ToggleTerminal => true,
             Action::CloseFolder => state.ws.folder_open,
             Action::QuickOpen | Action::ProjectSearch => state.ws.folder_open,
-            Action::Save => doc.is_some(),
-            Action::SaveAs => doc.is_some(),
+            Action::Save => doc.is_some_and(|doc| !doc.is_read_only()),
+            Action::SaveAs => doc.is_some_and(|doc| !doc.is_read_only()),
             Action::CloseTab => doc.is_some(),
-            Action::Undo => doc.is_some_and(|doc| doc.can_undo()),
-            Action::Redo => doc.is_some_and(|doc| doc.can_redo()),
-            Action::Cut | Action::Copy => doc.is_some_and(|doc| doc.has_selection()),
-            Action::Paste => doc.is_some() && state.clipboard.is_some(),
+            Action::Undo => doc.is_some_and(|doc| !doc.is_read_only() && doc.can_undo()),
+            Action::Redo => doc.is_some_and(|doc| !doc.is_read_only() && doc.can_redo()),
+            Action::Cut => doc.is_some_and(|doc| !doc.is_read_only() && doc.has_selection()),
+            Action::Copy => doc.is_some_and(|doc| doc.has_selection()),
+            Action::Paste => {
+                doc.is_some_and(|doc| !doc.is_read_only()) && state.clipboard.is_some()
+            }
             Action::SelectAll => doc.is_some(),
             Action::SetView(_) => doc.is_some(),
             Action::ToggleSoftWrap => doc.is_some(),
@@ -1247,6 +1250,18 @@ impl AppState {
         }
     }
 
+    pub fn git_entry_for(&self, path: &Path) -> Option<&crate::model::git::GitEntry> {
+        let root = self.git.status.root.as_ref()?;
+        let relative = path.strip_prefix(root).ok()?;
+        self.git
+            .status
+            .conflicts
+            .iter()
+            .chain(self.git.status.changes.iter())
+            .chain(self.git.status.staged.iter())
+            .find(|entry| entry.path == relative)
+    }
+
     fn git_cwd(&self) -> Option<PathBuf> {
         self.ws
             .active_doc()
@@ -1309,8 +1324,9 @@ impl AppState {
             .unwrap_or_else(|| PathBuf::from("."));
         self.git.detail = None;
         self.git.detail_loading = true;
-        self.git.detail_visible = true;
+        self.git.detail_visible = false;
         self.git.detail_scroll = 0.0;
+        self.status("reading commit…");
         if let Some(worker) = &self.git.worker {
             worker.send(GitRequest::ShowCommit {
                 generation,
@@ -1452,13 +1468,26 @@ impl AppState {
         self.dirty = true;
     }
 
+    fn show_git_view(&mut self, key: String, name: String, text: String) {
+        let index = self.ws.show_view(key, name, text);
+        self.ws.select(index);
+        self.tabs.reveal_active = true;
+        self.focus = Focus::Editor;
+        self.editor.preedit = None;
+        self.editor.drag = Drag::None;
+        self.sync_layout();
+        self.find.dirty = true;
+        self.dirty = true;
+    }
+
     pub fn open_git_diff(&mut self, path: PathBuf, staged: bool) {
         self.ensure_git_worker();
         self.git.selected = Some(path.clone());
         self.git.diff = None;
         self.git.diff_loading = true;
-        self.git.diff_visible = true;
+        self.git.diff_visible = false;
         self.git.diff_scroll = 0.0;
+        self.status("reading diff…");
         self.focus = Focus::Editor;
         self.terminal.focused = false;
         self.git.diff_generation += 1;
@@ -1508,9 +1537,21 @@ impl AppState {
                     self.dirty = true;
                 }
                 GitEvent::Diff { generation, diff } if generation == self.git.diff_generation => {
+                    let staged = diff.staged;
+                    let path = diff.path.clone();
+                    let text = format!(
+                        "diff --git a/{} b/{}\n{}\n{}",
+                        path.display(),
+                        path.display(),
+                        if staged { "staged" } else { "worktree" },
+                        diff.text
+                    );
+                    let name = format!("Diff: {}", path.display());
+                    let key = format!("git:diff:{}:{staged}", path.display());
                     self.git.diff = Some(diff);
                     self.git.diff_loading = false;
-                    self.dirty = true;
+                    self.show_git_view(key, name, text);
+                    self.status("git diff");
                 }
                 GitEvent::Log {
                     generation,
@@ -1524,7 +1565,26 @@ impl AppState {
                 {
                     self.git.detail = detail.ok();
                     self.git.detail_loading = false;
-                    self.dirty = true;
+                    if let Some(detail) = self.git.detail.as_ref() {
+                        let mut text = format!(
+                            "commit {}\nAuthor: {}\nDate: {}\n\n    {}\n\nFiles:\n",
+                            detail.commit.hash,
+                            detail.commit.author,
+                            detail.commit.date,
+                            detail.commit.subject
+                        );
+                        for file in &detail.files {
+                            text.push_str(&format!("  {file}\n"));
+                        }
+                        text.push('\n');
+                        text.push_str(&detail.diff);
+                        let name = format!("Commit {}", detail.commit.short);
+                        let key = format!("git:commit:{}", detail.commit.hash);
+                        self.show_git_view(key, name, text);
+                        self.status("git commit");
+                    } else {
+                        self.error("could not load commit");
+                    }
                 }
                 GitEvent::Write { generation, result }
                     if generation == self.git.write_generation =>
@@ -2691,6 +2751,10 @@ impl AppState {
     }
 
     pub fn save_active(&mut self) {
+        if self.ws.active_doc().is_some_and(|doc| doc.is_read_only()) {
+            self.status("read-only Git view");
+            return;
+        }
         match self.ws.save_active() {
             Ok(message) => {
                 self.note_saved();
@@ -2890,6 +2954,10 @@ impl AppState {
 
     /// Replaces the current match with the replace text.
     pub fn replace_one(&mut self) {
+        if self.ws.active_doc().is_some_and(|doc| doc.is_read_only()) {
+            self.status("read-only Git view");
+            return;
+        }
         self.refresh_find();
         let Some(index) = self.find.current else {
             self.status("no matches");
@@ -2911,6 +2979,10 @@ impl AppState {
 
     /// Replaces every match.
     pub fn replace_all(&mut self) {
+        if self.ws.active_doc().is_some_and(|doc| doc.is_read_only()) {
+            self.status("read-only Git view");
+            return;
+        }
         self.refresh_find();
         if self.find.matches.is_empty() {
             self.status("no matches");
@@ -3266,6 +3338,20 @@ impl AppState {
     /// Runs `action` and reports the outcome in the status bar.
     pub fn run(&mut self, action: Action) {
         self.tab_menu = None;
+        if self.ws.active_doc().is_some_and(|doc| doc.is_read_only())
+            && matches!(
+                action,
+                Action::Save
+                    | Action::SaveAs
+                    | Action::Cut
+                    | Action::Paste
+                    | Action::Undo
+                    | Action::Redo
+            )
+        {
+            self.status("read-only Git view");
+            return;
+        }
         match action {
             Action::New => {
                 self.ws.new_tab();

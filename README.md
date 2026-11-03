@@ -50,13 +50,17 @@ result is applied on the first frame after it closes.
 
 ## Git panel
 
-The sidebar has `EXPLORER / GIT` tabs. GIT shows the repository branch,
+The file tree marks modified/untracked files with their Git status letter, and
+the status bar shows `GIT <branch> ↑ahead ↓behind`. The sidebar has
+`EXPLORER / GIT` tabs. GIT shows the repository branch,
 ahead/behind, and staged/changes/conflicts sections from `git status
 --porcelain=v2 -z`. Click a file for a read-only unified diff overlay; `Esc` or
 the overlay ✕ closes it. `+` / `−` stage or unstage a row, `Stage all` stages the
 worktree, and `Commit` opens a one-line message prompt. `Changes / History`
 switches to the last 50 commits; clicking one opens a read-only commit detail
-with author/date/subject, changed files and patch. Refreshes happen on
+with author/date/subject, changed files and patch. Diff and commit details open
+as read-only tabs in the main editor (never persisted, never editable; the status
+bar shows `READ-ONLY`). Refreshes happen on
 open/save/tab/folder changes, commit and via the panel button. Discard and
 network operations are intentionally not exposed.
 

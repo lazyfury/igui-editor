@@ -125,6 +125,9 @@ pub struct Document {
     /// Per-document scroll (kept across tab switches).
     pub scroll_y: f32,
     pub scroll_x: f32,
+    /// Git diff/commit views are read-only and are never persisted/saved.
+    read_only: bool,
+    view_key: Option<String>,
 }
 
 impl Document {
@@ -144,6 +147,8 @@ impl Document {
             undo: UndoStack::default(),
             scroll_y: 0.0,
             scroll_x: 0.0,
+            read_only: false,
+            view_key: None,
         }
     }
 
@@ -170,6 +175,8 @@ impl Document {
             undo: UndoStack::default(),
             scroll_y: 0.0,
             scroll_x: 0.0,
+            read_only: false,
+            view_key: None,
         };
         doc.caret = floor_boundary(&doc.text, caret);
         doc.anchor = floor_boundary(&doc.text, anchor);
@@ -213,6 +220,8 @@ impl Document {
             undo: UndoStack::default(),
             scroll_y: 0.0,
             scroll_x: 0.0,
+            read_only: false,
+            view_key: None,
         };
         doc.rebuild_lines();
         Ok(doc)
@@ -220,6 +229,44 @@ impl Document {
 
     pub fn id(&self) -> u64 {
         self.id
+    }
+
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
+    pub fn view_key(&self) -> Option<&str> {
+        self.view_key.as_deref()
+    }
+
+    /// A synthetic, read-only document used for Git diff/commit views.
+    pub fn view(
+        id: u64,
+        name: impl Into<String>,
+        text: impl Into<String>,
+        key: impl Into<String>,
+    ) -> Self {
+        let mut doc = Self::untitled(id, 1);
+        doc.name = name.into();
+        doc.text = normalize(&text.into());
+        doc.caret = 0;
+        doc.anchor = 0;
+        doc.dirty = false;
+        doc.read_only = true;
+        doc.view_key = Some(key.into());
+        doc.rebuild_lines();
+        doc
+    }
+
+    pub fn restore_view(&mut self, text: impl Into<String>) {
+        self.text = normalize(&text.into());
+        self.caret = 0;
+        self.anchor = 0;
+        self.dirty = false;
+        self.rev += 1;
+        self.edit_span = None;
+        self.undo = UndoStack::default();
+        self.rebuild_lines();
     }
 
     pub fn rev(&self) -> u64 {
@@ -289,6 +336,12 @@ impl Document {
 
     /// Writes the buffer back to its file. Untitled buffers have no path.
     pub fn save(&mut self) -> std::io::Result<()> {
+        if self.read_only {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "read-only Git view cannot be saved",
+            ));
+        }
         let Some(path) = self.path.clone() else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,

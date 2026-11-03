@@ -129,14 +129,27 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     } else {
         "EDITOR"
     };
-    let mut facts = vec![
-        theme.name(),
-        mode.as_str(),
-        focus,
-        size.as_str(),
-        "UTF-8",
-        spaces.as_str(),
-    ];
+    let branch = state
+        .git
+        .status
+        .root
+        .as_ref()
+        .map(|_| {
+            format!(
+                "GIT {} ↑{} ↓{}",
+                state.git.status.branch, state.git.status.ahead, state.git.status.behind
+            )
+        })
+        .unwrap_or_default();
+    let read_only = state.ws.active_doc().is_some_and(|doc| doc.is_read_only());
+    let mut facts = vec![theme.name(), mode.as_str(), focus];
+    if !branch.is_empty() {
+        facts.push(branch.as_str());
+    }
+    if read_only {
+        facts.push("READ-ONLY");
+    }
+    facts.extend([size.as_str(), "UTF-8", spaces.as_str()]);
     let wrap_effective = state.session.soft_wrap
         && state.ws.active_doc().is_some_and(|doc| {
             doc.text().len() <= crate::model::wrap::MAX_WRAP_BYTES

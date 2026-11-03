@@ -2893,29 +2893,34 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
     }
     {
         let state = harness.app.state();
-        if !state.git.diff_visible {
-            return Err("clicking a Git file did not open the diff".into());
+        let doc = state.ws.active_doc().ok_or("no Git diff view")?;
+        if !doc.is_read_only() || !doc.text().contains("+changed line 0") {
+            return Err("Git diff did not open as a read-only editor view".into());
         }
-        let diff = state.git.diff.as_ref().ok_or("Git diff did not load")?;
-        if !diff.text.contains("+changed line 0") {
-            return Err(format!("Git diff is missing the change: {:?}", diff.text));
+        if !doc
+            .view_key()
+            .is_some_and(|key| key.starts_with("git:diff:"))
+        {
+            return Err("Git diff view has the wrong view key".into());
         }
     }
-    let diff_panel = crate::ui::git::diff_layout(&harness.app.state()).0;
-    let before = harness.app.state().git.diff_scroll;
-    harness.event(InputEvent::Wheel {
-        position: diff_panel.center(),
-        delta: Vec2::new(0.0, 40.0),
-        phase: igui_core::TouchPhase::Moved,
-        device: igui_core::ScrollDevice::Wheel,
-    });
+    let before_edit = harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .map_or(0, |doc| doc.text().len());
+    harness.type_text("x");
     harness.frame()?;
-    if harness.app.state().git.diff_scroll <= before {
-        return Err("Git diff wheel direction is reversed".into());
-    }
-    harness.key(Key::Escape);
-    if harness.app.state().git.diff_visible {
-        return Err("Esc did not close the Git diff".into());
+    if harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .map_or(0, |doc| doc.text().len())
+        != before_edit
+    {
+        return Err("Git diff view accepted text input".into());
     }
     // Stage all, then commit through the in-app prompt.
     harness.frame()?;
@@ -2996,21 +3001,24 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    {
+    let first_commit = {
         let state = harness.app.state();
         let detail = state
             .git
             .detail
             .as_ref()
             .ok_or("Git commit detail did not load")?;
-        if !detail.diff.contains("diff --git") && !detail.diff.is_empty() {
-            return Err("Git commit detail has no patch".into());
+        let doc = state.ws.active_doc().ok_or("no Git commit view")?;
+        if !doc.is_read_only()
+            || !doc
+                .view_key()
+                .is_some_and(|key| key == format!("git:commit:{}", detail.commit.hash))
+            || !doc.text().contains(&detail.commit.hash)
+        {
+            return Err("Git commit detail did not open as a read-only editor view".into());
         }
-    }
-    harness.key(Key::Escape);
-    if harness.app.state().git.detail_visible {
-        return Err("Esc did not close the Git commit detail".into());
-    }
+        detail.commit.hash.clone()
+    };
     // Hover follows the painted Commit button exactly.
     harness.frame()?;
     let commit_hover = harness.app.state().git.commit_rect;
@@ -3040,19 +3048,14 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
     }
     {
         let state = harness.app.state();
-        let detail = state
-            .git
-            .detail
-            .as_ref()
-            .ok_or("second Git commit detail did not load")?;
-        if detail.commit.hash != second.0 {
+        let doc = state.ws.active_doc().ok_or("no second Git commit view")?;
+        if !doc.is_read_only() || !doc.text().contains(&second.0) || first_commit == second.0 {
             return Err(format!(
-                "second Git commit detail has the wrong commit: {} vs {}",
-                detail.commit.hash, second.0
+                "second Git commit view has the wrong content: expected {}",
+                second.0
             ));
         }
     }
-    harness.key(Key::Escape);
 
     // Terminal service: PTY, vt100 screen, panel and close.
     harness.shortcut(

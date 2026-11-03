@@ -134,6 +134,31 @@ impl Workspace {
         Ok(self.active)
     }
 
+    /// Opens or refreshes a read-only Git view tab.
+    pub fn show_view(
+        &mut self,
+        key: impl Into<String>,
+        name: impl Into<String>,
+        text: impl Into<String>,
+    ) -> usize {
+        let key = key.into();
+        if let Some(index) = self
+            .tabs
+            .iter()
+            .position(|doc| doc.view_key() == Some(key.as_str()))
+        {
+            if let Some(doc) = self.tabs.get_mut(index) {
+                doc.restore_view(text);
+            }
+            self.active = index;
+            return index;
+        }
+        let id = self.take_id();
+        self.tabs.push(Document::view(id, name, text, key));
+        self.active = self.tabs.len() - 1;
+        self.active
+    }
+
     /// Adds a recovered buffer from a crash snapshot.
     pub fn add_recovered(&mut self, entry: &super::recovery::RecoveryEntry) -> usize {
         let id = self.take_id();

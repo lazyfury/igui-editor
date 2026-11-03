@@ -132,7 +132,9 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
             let Some(doc) = state.ws.active_doc_mut() else {
                 return EventResult::Ignored;
             };
+            let read_only = doc.is_read_only();
             let handled = match key {
+                Key::Backspace | Key::Delete | Key::Enter | Key::Tab if read_only => false,
                 Key::Backspace => {
                     doc.backspace();
                     true
@@ -200,7 +202,9 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
             }
             let mut state = state.borrow_mut();
             if let Some(doc) = state.ws.active_doc_mut() {
-                doc.insert_text(text);
+                if !doc.is_read_only() {
+                    doc.insert_text(text);
+                }
             }
             state.editor.preedit = None;
             state.editor.reveal = true;
@@ -221,7 +225,9 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
                 ImeEvent::Commit(text) => {
                     state.editor.preedit = None;
                     if let Some(doc) = state.ws.active_doc_mut() {
-                        doc.insert_text(text);
+                        if !doc.is_read_only() {
+                            doc.insert_text(text);
+                        }
                     }
                     state.editor.reveal = true;
                     state.find.dirty = true;
