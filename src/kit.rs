@@ -104,9 +104,28 @@ pub fn width_weighted(
     measurer.measure_run_weighted(value, font_size, weight)
 }
 
+/// Optical descender used when centering a single line.
+///
+/// `TextMeasurer` exposes ascent but not descent. A 0.30 em descender matches
+/// the mono faces used for code and is a good compromise for the UI/CJK face;
+/// ignoring it pushed text slightly below the geometric center.
+pub const OPTICAL_DESCENT: f32 = 0.30;
+
+/// Baseline that centers the ink box (`ascent + OPTICAL_DESCENT`) inside a
+/// line box starting at `top` with height `line_h`.
+pub fn line_baseline_with_ascent(top: f32, line_h: f32, font_size: f32, ascent: f32) -> f32 {
+    let descent = font_size * OPTICAL_DESCENT;
+    top + (line_h - (ascent + descent)) * 0.5 + ascent
+}
+
+/// [`line_baseline_with_ascent`] using the measurer's default family ascent.
+pub fn line_baseline(measurer: &dyn TextMeasurer, top: f32, line_h: f32, font_size: f32) -> f32 {
+    line_baseline_with_ascent(top, line_h, font_size, measurer.ascent(font_size))
+}
+
 /// Baseline that vertically centers one line of `font_size` inside `rect`.
 pub fn baseline(measurer: &dyn TextMeasurer, rect: Rect, font_size: f32) -> f32 {
-    rect.center().y + measurer.ascent(font_size) * 0.5 - font_size * 0.08
+    line_baseline(measurer, rect.top(), rect.height(), font_size)
 }
 
 /// `value` cut to at most `max_width`, with a trailing `…` when truncated.
@@ -333,5 +352,52 @@ pub fn set_caret_provider(
 pub fn set_cursor(tree: &mut SceneTree, id: NodeId, cursor: igui_core::Cursor) {
     if let Some(control) = tree.data_mut::<Control>(id) {
         control.data.cursor = cursor;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Fake;
+
+    impl TextMeasurer for Fake {
+        fn advance(&self, ch: char, font_size: f32) -> f32 {
+            if ch == ' ' {
+                font_size * 0.25
+            } else {
+                font_size * 0.6
+            }
+        }
+
+        fn line_height(&self, font_size: f32) -> f32 {
+            font_size * 1.4
+        }
+    }
+
+    #[test]
+    fn baseline_centers_the_optical_ink_box() {
+        let rect = Rect::from_min_size(Vec2::new(10.0, 20.0), Size::new(200.0, 28.0));
+        let font = 14.0;
+        let ascent = Fake.ascent(font);
+        let descent = font * OPTICAL_DESCENT;
+        let baseline = baseline(&Fake, rect, font);
+        let ink_top = baseline - ascent;
+        let ink_bottom = baseline + descent;
+        let ink_center = (ink_top + ink_bottom) * 0.5;
+        assert!(
+            (ink_center - rect.center().y).abs() < 0.01,
+            "ink center {ink_center} vs row center {}",
+            rect.center().y
+        );
+    }
+
+    #[test]
+    fn line_baseline_matches_rect_baseline() {
+        let rect = Rect::from_min_size(Vec2::new(0.0, 10.0), Size::new(100.0, 24.0));
+        assert_eq!(
+            line_baseline(&Fake, rect.top(), rect.height(), 12.0),
+            baseline(&Fake, rect, 12.0)
+        );
     }
 }

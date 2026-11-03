@@ -530,7 +530,7 @@ fn layout(
 }
 
 fn baseline(top: f32, line_h: f32, size: f32, measurer: &dyn TextMeasurer) -> f32 {
-    top + (line_h - size) * 0.5 + measurer.ascent(size)
+    kit::line_baseline(measurer, top, line_h, size)
 }
 
 #[derive(Debug)]
@@ -744,7 +744,7 @@ fn place_runs(
             TextAlign::Center => ((max_w - total) * 0.5).max(0.0),
             TextAlign::Right => (max_w - total).max(0.0),
         };
-        let baseline = y + (line_h - size) * 0.5 + ascent;
+        let baseline = kit::line_baseline_with_ascent(y, line_h, size, ascent);
         let mut x = x0 + offset;
         for (index, token) in line.iter().enumerate() {
             if index > 0 && token.space_before {

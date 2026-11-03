@@ -977,7 +977,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         }
         let row_start_x = x_in_line(measurer, line_text, vis.start_byte, font, tab, family);
         let y = row_y(vis.row);
-        let baseline = y + (line_h - font) * 0.5 + ascent;
+        let baseline = kit::line_baseline_with_ascent(y, line_h, font, ascent);
         let color = if git_view && preview_start.is_none_or(|start| vis.line < start) {
             diff_line_color(segment, &p)
         } else {
@@ -1008,7 +1008,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             let line_text = doc.line(vis.line);
             let row_start_x = x_in_line(measurer, line_text, vis.start_byte, font, tab, family);
             let y = row_y(vis.row);
-            let baseline = y + (line_h - font) * 0.5 + ascent;
+            let baseline = kit::line_baseline_with_ascent(y, line_h, font, ascent);
             for token in tokens {
                 let from = token.start.max(vis.start_byte);
                 let to = token.end.min(vis.end_byte);
@@ -1097,7 +1097,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                     let x = x_in_line(measurer, line_text, from - line_start, font, tab, family)
                         - row_start_x;
                     let y = row_y(vis.row);
-                    let baseline = y + (line_h - font) * 0.5 + ascent;
+                    let baseline = kit::line_baseline_with_ascent(y, line_h, font, ascent);
                     draw_text_mixed(
                         env.ctx,
                         measurer,
@@ -1218,7 +1218,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             family,
         ) - row_start_x;
         let y = row_y(row);
-        let baseline = y + (line_h - font) * 0.5 + ascent;
+        let baseline = kit::line_baseline_with_ascent(y, line_h, font, ascent);
         env.ctx.save();
         env.ctx.clip_rect(text_rect);
         draw_text_mixed(
@@ -1350,7 +1350,8 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                 continue;
             }
             let y = row_y(vis.row);
-            let baseline = y + (line_h - number_font) * 0.5 + ascent;
+            let number_ascent = measurer.ascent_in(number_font, family);
+            let baseline = kit::line_baseline_with_ascent(y, line_h, number_font, number_ascent);
             let label = (vis.line + 1).to_string();
             let label_w =
                 measurer.measure_run_weighted_in(&label, number_font, FontWeight::NORMAL, family);

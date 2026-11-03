@@ -110,7 +110,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         let line_start = doc.line_start(row.line);
         let segment = &line[row.start_byte..row.end_byte];
         let drawn = wrap::expand_tabs(segment, tab);
-        let baseline = y + (line_h - font) * 0.5 + measurer.ascent(font);
+        let baseline = kit::line_baseline(measurer, y, line_h, font);
         let x = body.left();
         let color = if row.first && is_heading(segment) {
             p.accent

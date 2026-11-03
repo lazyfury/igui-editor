@@ -259,8 +259,10 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     let cols = cols.min(screen.size().1.get());
     env.ctx.save();
     env.ctx.clip_rect(body);
+    let text_ascent = env.measurer.ascent_in(font, family);
     for row in 0..rows {
         let y = body.top() + row as f32 * line_h;
+        let baseline = kit::line_baseline_with_ascent(y, line_h, font, text_ascent);
         for col in 0..cols {
             let Some(cell) = screen.cell(row, col) else {
                 continue;
@@ -295,7 +297,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                 };
                 env.ctx.draw_text_in(
                     text,
-                    Vec2::new(draw_x, y + line_h - 4.0),
+                    Vec2::new(draw_x, baseline),
                     font,
                     igui_core::FontWeight::NORMAL,
                     igui_render::TextAlign::Left,
