@@ -321,23 +321,6 @@ impl EditorApp {
                     }
                     return EventResult::Handled;
                 }
-                if state.ws.active_doc().is_some_and(|doc| doc.is_docs_view())
-                    && state.editor.text_rect.contains(*position)
-                {
-                    if let Some(byte) = ui::editor::byte_at(&state, *position, measurer.as_ref()) {
-                        if let Some(link) = state.docs_link_at(byte) {
-                            match link {
-                                crate::model::bbcode::DocLink::Native { class, symbol } => {
-                                    state.open_native_docs_at(class, symbol);
-                                }
-                                crate::model::bbcode::DocLink::Url(url) => {
-                                    state.open_external_url(&url);
-                                }
-                            }
-                            return EventResult::Handled;
-                        }
-                    }
-                }
                 if state.problems.open {
                     match ui::problems::click(&mut state, *position) {
                         ui::problems::Click::Jump(_) => return EventResult::Handled,
@@ -1253,56 +1236,75 @@ fn build_shell(tree: &mut SceneTree, state: &Rc<RefCell<AppState>>) -> (NodeId, 
         kit::min_size(tree, bar, 0.0, ui::find_bar::BAR_H);
     }
 
-    let editor = match view {
-        ViewMode::Edit => {
-            {
-                let mut state = state.borrow_mut();
-                state.split_editor = None;
-                state.split_preview = None;
-                state.split_dragging = false;
-            }
-            let editor = ui::editor::build(tree, main, state.clone());
-            kit::flex(tree, editor, 1.0, None, 1.0);
-            kit::min_size(tree, editor, 0.0, 0.0);
-            state.borrow_mut().content_node = Some(editor);
-            Some(editor)
+    let docs_view = state
+        .borrow()
+        .ws
+        .active_doc()
+        .is_some_and(|doc| doc.is_docs_view());
+    let editor = if docs_view {
+        {
+            let mut state = state.borrow_mut();
+            state.split_editor = None;
+            state.split_preview = None;
+            state.split_dragging = false;
         }
-        ViewMode::Preview => {
-            {
-                let mut state = state.borrow_mut();
-                state.split_editor = None;
-                state.split_preview = None;
-                state.split_dragging = false;
+        let docs = ui::docs_view::build(tree, main, state.clone());
+        kit::flex(tree, docs, 1.0, None, 1.0);
+        kit::min_size(tree, docs, 0.0, 0.0);
+        state.borrow_mut().content_node = Some(docs);
+        Some(docs)
+    } else {
+        match view {
+            ViewMode::Edit => {
+                {
+                    let mut state = state.borrow_mut();
+                    state.split_editor = None;
+                    state.split_preview = None;
+                    state.split_dragging = false;
+                }
+                let editor = ui::editor::build(tree, main, state.clone());
+                kit::flex(tree, editor, 1.0, None, 1.0);
+                kit::min_size(tree, editor, 0.0, 0.0);
+                state.borrow_mut().content_node = Some(editor);
+                Some(editor)
             }
-            let preview = ui::preview::build(tree, main, state.clone());
-            kit::flex(tree, preview, 1.0, None, 1.0);
-            kit::min_size(tree, preview, 0.0, 0.0);
-            state.borrow_mut().content_node = Some(preview);
-            None
-        }
-        ViewMode::Split => {
-            let split = kit::node(tree, main, "split");
-            kit::set_container(tree, split, kit::tight_row());
-            kit::flex(tree, split, 1.0, None, 1.0);
-            let ratio = state.borrow().split_of_active();
-            let editor = ui::editor::build(tree, split, state.clone());
-            kit::flex_percent(tree, editor, ratio);
-            kit::min_size(tree, editor, 0.0, 0.0);
-            let divider = ui::split::build(tree, split, state.clone());
-            kit::flex(tree, divider, 0.0, Some(ui::handle::HANDLE_WIDTH), 0.0);
-            kit::min_size(tree, divider, ui::handle::HANDLE_WIDTH, 0.0);
-            let preview = ui::preview::build(tree, split, state.clone());
-            kit::flex(tree, preview, 1.0, None, 1.0);
-            kit::min_size(tree, preview, 0.0, 0.0);
-            {
-                let mut state = state.borrow_mut();
-                state.content_node = Some(editor);
-                state.split_editor = Some(editor);
-                state.split_preview = Some(preview);
-                state.split_dragging = false;
-                state.split_divider = Rect::ZERO;
+            ViewMode::Preview => {
+                {
+                    let mut state = state.borrow_mut();
+                    state.split_editor = None;
+                    state.split_preview = None;
+                    state.split_dragging = false;
+                }
+                let preview = ui::preview::build(tree, main, state.clone());
+                kit::flex(tree, preview, 1.0, None, 1.0);
+                kit::min_size(tree, preview, 0.0, 0.0);
+                state.borrow_mut().content_node = Some(preview);
+                None
             }
-            Some(editor)
+            ViewMode::Split => {
+                let split = kit::node(tree, main, "split");
+                kit::set_container(tree, split, kit::tight_row());
+                kit::flex(tree, split, 1.0, None, 1.0);
+                let ratio = state.borrow().split_of_active();
+                let editor = ui::editor::build(tree, split, state.clone());
+                kit::flex_percent(tree, editor, ratio);
+                kit::min_size(tree, editor, 0.0, 0.0);
+                let divider = ui::split::build(tree, split, state.clone());
+                kit::flex(tree, divider, 0.0, Some(ui::handle::HANDLE_WIDTH), 0.0);
+                kit::min_size(tree, divider, ui::handle::HANDLE_WIDTH, 0.0);
+                let preview = ui::preview::build(tree, split, state.clone());
+                kit::flex(tree, preview, 1.0, None, 1.0);
+                kit::min_size(tree, preview, 0.0, 0.0);
+                {
+                    let mut state = state.borrow_mut();
+                    state.content_node = Some(editor);
+                    state.split_editor = Some(editor);
+                    state.split_preview = Some(preview);
+                    state.split_dragging = false;
+                    state.split_divider = Rect::ZERO;
+                }
+                Some(editor)
+            }
         }
     };
 
@@ -1339,6 +1341,7 @@ fn build_shell(tree: &mut SceneTree, state: &Rc<RefCell<AppState>>) -> (NodeId, 
     {
         let mut state = state.borrow_mut();
         state.built_view = view;
+        state.built_docs = docs_view;
         if view == ViewMode::Split {
             state.built_split = state.split_of_active();
         }

@@ -124,7 +124,7 @@ PluginHost
   server hover. Godot native hovers expose an **OPEN GODOT DOCS** action built
   from the LSP declaration (`<Native> class ...` / `func Class.member`); the
   `gdscript/capabilities` notification supplies native class names for
-  Ctrl/Cmd-click documentation. The docs panel requests
+  Ctrl/Cmd-click documentation. The docs view requests
   `textDocument/nativeSymbol`, caches the response, and renders it as a normal
   read-only editor tab (`model/docs.rs` + `Document::ViewKind::Docs`). BBCode
   links become byte ranges on the tab text; clicking one updates the docs tab.

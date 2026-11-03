@@ -686,6 +686,16 @@ pub struct DocsUi {
     pub links: HashMap<u64, Vec<(usize, usize, crate::model::bbcode::DocLink)>>,
 }
 
+/// Geometry/scroll state for the dedicated documentation view control.
+#[derive(Clone, Debug, Default)]
+pub struct DocsViewUi {
+    pub rect: Rect,
+    pub body: Rect,
+    pub scroll: f32,
+    pub scroll_max: f32,
+    pub wrap: crate::model::wrap::WrapLayout,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum GitMode {
     Changes,
@@ -1046,6 +1056,7 @@ pub struct AppState {
     pub outline: OutlineUi,
     pub problems: ProblemsUi,
     pub docs: DocsUi,
+    pub docs_view: DocsViewUi,
     pub outline_node: Option<NodeId>,
     pub outline_drag: Option<(f32, f32)>,
     pub hover_target: Option<HoverTarget>,
@@ -1071,6 +1082,8 @@ pub struct AppState {
     pub needs_rebuild: bool,
     /// View mode the shell was last built for.
     pub built_view: ViewMode,
+    /// Whether the shell currently mounts the documentation view.
+    pub built_docs: bool,
     /// Split ratio the shell was last built for.
     pub built_split: f32,
     /// Set when the next frame should repaint (paint cache invalidation).
@@ -1190,6 +1203,7 @@ impl AppState {
             outline: OutlineUi::default(),
             problems: ProblemsUi::default(),
             docs: DocsUi::default(),
+            docs_view: DocsViewUi::default(),
             outline_node: None,
             outline_drag: None,
             hover_target: None,
@@ -1218,6 +1232,7 @@ impl AppState {
             clipboard: None,
             needs_rebuild: false,
             built_view: ViewMode::Edit,
+            built_docs: false,
             built_split: 0.5,
             dirty: true,
             focus: Focus::Editor,
@@ -3330,8 +3345,10 @@ impl AppState {
     /// differs from the one currently mounted.
     pub fn sync_layout(&mut self) {
         let view = self.view_of_active();
+        let docs = self.ws.active_doc().is_some_and(|doc| doc.is_docs_view());
         let ratio = self.split_of_active();
-        let needs = view != self.built_view
+        let needs = docs != self.built_docs
+            || view != self.built_view
             || (view == ViewMode::Split && (ratio - self.built_split).abs() > 0.001);
         if needs {
             self.needs_rebuild = true;
