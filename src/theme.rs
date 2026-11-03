@@ -7,6 +7,8 @@
 
 use igui_core::Color;
 
+use crate::syntax::TokenKind;
+
 /// `0xRRGGBB` -> opaque [`Color`] (const so palette tables stay literal).
 pub const fn hex(v: u32) -> Color {
     Color::new(
@@ -54,6 +56,23 @@ pub struct Palette {
     /// Pressed / selected fill for rows.
     pub active: Color,
     pub error: Color,
+    /// Syntax token colors (see [`Theme::token_color`]).
+    pub syntax: SyntaxPalette,
+}
+
+/// Colors for syntax tokens. `Plain` is not stored: the renderer uses the
+/// editor's base text color for it.
+#[derive(Clone, Copy, Debug)]
+pub struct SyntaxPalette {
+    pub keyword: Color,
+    pub type_name: Color,
+    pub function: Color,
+    pub string: Color,
+    pub number: Color,
+    pub comment: Color,
+    pub constant: Color,
+    pub macro_: Color,
+    pub punctuation: Color,
 }
 
 impl Palette {
@@ -74,6 +93,17 @@ impl Palette {
             hover: hex(0x151C26),
             active: hex(0x19222E),
             error: hex(0xF07178),
+            syntax: SyntaxPalette {
+                keyword: hex(0xC792EA),
+                type_name: hex(0x7DD3FC),
+                function: hex(0x82E2A6),
+                string: hex(0xE6C889),
+                number: hex(0xF78C6C),
+                comment: hex(0x55637A),
+                constant: hex(0xFF9E64),
+                macro_: hex(0x39E0AE),
+                punctuation: hex(0x8494A8),
+            },
         }
     }
 
@@ -94,6 +124,17 @@ impl Palette {
             hover: hex(0xE3EAF2),
             active: hex(0xDCE6F1),
             error: hex(0xC0392B),
+            syntax: SyntaxPalette {
+                keyword: hex(0x8B3FA8),
+                type_name: hex(0x0369A1),
+                function: hex(0x0F7B4F),
+                string: hex(0x956400),
+                number: hex(0xB45309),
+                comment: hex(0x93A1B1),
+                constant: hex(0xC2410C),
+                macro_: hex(0x0A8F6F),
+                punctuation: hex(0x5C6C7E),
+            },
         }
     }
 }
@@ -172,6 +213,22 @@ impl Theme {
             Mode::Dark => Mode::Light,
             Mode::Light => Mode::Dark,
         });
+    }
+
+    /// Color for a syntax token (`Plain` maps to the primary text color).
+    pub fn token_color(&self, kind: TokenKind) -> Color {
+        match kind {
+            TokenKind::Plain => self.p.text,
+            TokenKind::Keyword => self.p.syntax.keyword,
+            TokenKind::TypeName => self.p.syntax.type_name,
+            TokenKind::Function => self.p.syntax.function,
+            TokenKind::String => self.p.syntax.string,
+            TokenKind::Number => self.p.syntax.number,
+            TokenKind::Comment => self.p.syntax.comment,
+            TokenKind::Constant => self.p.syntax.constant,
+            TokenKind::Macro => self.p.syntax.macro_,
+            TokenKind::Punctuation => self.p.syntax.punctuation,
+        }
     }
 
     /// Name shown in the status bar.

@@ -7,6 +7,10 @@ rust-version = "1.85"
 publish = false
 description = "A compact, square-cornered text/Markdown editor built on igui"
 
+[lib]
+name = "igui_editor"
+path = "src/lib.rs"
+
 [[bin]]
 name = "igui-editor"
 path = "src/main.rs"

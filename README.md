@@ -4,8 +4,9 @@ A compact, square-cornered **text / Markdown editor** built on the
 [`igui`](../igui) engine (Rust). Native window: `winit` + `wgpu`, UI painted
 through `igui_ui` / `igui_render` only.
 
-Tabs · undo/redo · find & replace · Markdown split preview (tables included) ·
-native file dialogs · recent files · session restore.
+Tabs · undo/redo · find & replace · syntax highlighting · Markdown split preview
+(tables included) · settings panel · native file dialogs · recent files ·
+session restore · large-file guards.
 
 This checkout is **outside** the igui repository: it consumes the engine through
 path dependencies and never modifies it.
@@ -39,6 +40,7 @@ result is applied on the first frame after it closes.
 | `⌘Z` / `⇧⌘Z` | undo / redo (typing runs coalesce) |
 | `⌘X` / `⌘C` / `⌘V` | cut / copy / paste |
 | `⌘A` | select all |
+| `⌘,` | settings panel |
 | `⌘F` / `⌥⌘F` | find / jump to the replace field |
 | `⌘G` / `⇧⌘G` | next / previous match |
 | `⌘B` | toggle sidebar |
@@ -53,11 +55,17 @@ result is applied on the first frame after it closes.
 | double click | select word |
 | `Enter` / `⇧Enter` in find | next / previous match |
 | `Esc` | close find · cancel modal |
-| wheel / trackpad | vertical scroll, `⇧`+wheel horizontal |
+| wheel / trackpad | vertical scroll, `⇧`+wheel horizontal; over the tab strip it scrolls overflowing tabs |
 
 Find bar: query and replacement fields, `Aa` (case) and `W` (whole word)
 toggles, `Replace` / `Replace All`, match counter, prev/next/close. All matches
 are tinted in the editor, the current one strongly.
+
+Drag the 4 px divider between the sidebar and the editor to resize the sidebar
+(180–420 px, persisted). It draws the **only** separator line (the sidebar has
+no border of its own) plus a centered light grip bar; hover brightens both, and
+dragging tints the handle and turns line + grip accent. Tabs shrink to 96 px and then scroll horizontally; the
+active tab is always kept visible.
 
 Markdown preview (`.md` opens in Split; `⇧⌘M` cycles): headings, paragraphs,
 bold / italic / strikethrough, inline code, fenced code blocks with a language
@@ -70,6 +78,68 @@ tab (unsaved tabs open a Save / Discard / Cancel modal), `+` for a new buffer,
 drag the editor scrollbars, drag in the text to select, wheel-scroll the
 preview.
 
+## Syntax highlighting
+
+Built-in providers: **Rust, C, C++, JavaScript, TypeScript, Go, GDScript, JSON,
+TOML, Markdown**. Highlighting is line based with carried state (block comments,
+raw/template strings, fences), so multi-line constructs color correctly. The
+cache re-tokenizes from the first edited line and stops when the carried state
+converges, budgeted per frame.
+
+The provider API is public (`igui_editor::syntax`) so a future plugin host can
+add languages without touching the editor core:
+
+```rust
+use std::sync::Arc;
+use igui_editor::syntax::{Highlight, SyntaxProvider, SyntaxRegistry, TokenKind};
+
+struct MyLang;
+impl SyntaxProvider for MyLang {
+    fn name(&self) -> &'static str { "mylang" }
+    fn extensions(&self) -> &'static [&'static str] { &["mylang"] }
+    fn highlight_line(&self, line: &str, state: u32) -> (Vec<Highlight>, u32) {
+        // encode multi-line constructs in `state`; 0 is the neutral state
+        let _ = (line, state);
+        (vec![], 0)
+    }
+}
+
+let mut registry = SyntaxRegistry::with_builtins();
+registry.register(Arc::new(MyLang));
+
+// In the app, the host calls the same registration through `EditorApp`:
+// app.register_syntax(Arc::new(MyLang));
+```
+
+Plugin **loading** is not implemented; the trait, the registry and
+`EditorApp::register_syntax` are the extension seam only.
+
+## Settings (`⌘,` or View → Settings…)
+
+| Row | Values |
+|---|---|
+| Theme | Dark / Light |
+| Font Size | 11–18 px |
+| Tab Width | 2 / 4 / 8 |
+| Line Numbers | on / off |
+| Indent Guides | on / off |
+| Syntax Highlight | on / off |
+| Sidebar Width | 180–420 px |
+| Reset to Defaults | — |
+
+Changes apply immediately and are stored in the session file. `↑↓` select,
+`←→` change, `Enter` toggles, `Esc` closes; the `−`/`+` boxes and rows are
+clickable.
+
+## Large files
+
+| Limit | Behavior |
+|---|---|
+| > 2 MB or > 20k lines | syntax highlighting off |
+| > 8 MB | preview disabled (banner); editing continues |
+| > 32 MB | opening refused with a status-bar error |
+| preview > 512 KB | first 512 KB rendered + "truncated" banner |
+
 ## Theme: "geek", compact, no corners
 
 Not `igui_theme::DefaultTheme`. The app owns its palette and metrics
@@ -80,12 +150,16 @@ Not `igui_theme::DefaultTheme`. The app owns its palette and metrics
 - **One monospace grid** — the host seeds `FontServer` with the first installed
   monospace face (SF Mono / Menlo / JetBrains Mono / Fira Code / DejaVu Sans
   Mono); the whole UI uses it.
-- **Compact rhythm** — 26 px menu bar, 22 px rows, 22 px status bar, 19 px
-  editor lines, 8 px scrollbars, 4-space indents.
+- **Compact rhythm** — 26 px menu bar, 22 px rows, 22 px status bar, 8 px
+  scrollbars; the editor defaults to 13 px text / 19 px lines and scales with the
+  font setting (11–18 px).
 - **Palette** — dark: `#0B0E13` canvas, `#0E1218` panels, `#39E0AE` phosphor
   accent, `#16362F` selection; light: `#F7F9FC` canvas, `#0A8F6F` teal accent.
 - Dark and light are separate hand-tuned palettes, not an inversion; switching
   is a value swap (no rebuild, no second code path).
+- Syntax colors (dark): keyword `#C792EA`, type `#7DD3FC`, function `#82E2A6`,
+  string `#E6C889`, number `#F78C6C`, comment `#55637A`, constant `#FF9E64`,
+  macro `#39E0AE`, punctuation `#8494A8`; the light palette has equivalents.
 
 ## Verify (no screenshots)
 
@@ -117,8 +191,14 @@ file**, then asserts:
 9. a sidebar click opens a file **and returns keyboard focus**; drag selection
    and wheel scrolling work,
 10. `⇧⌘L` repaints with the light palette, `⇧⌘O` retargets the sidebar root,
-    and a fresh app restores the theme, the open tab and the recent list from
-    the session file.
+    and a fresh app restores the theme, the open tab, the recent list and every
+    editor setting from the session file.
+
+M3 checks: syntax token colors (keyword/function/string/comment), incremental
+re-highlight after an edit, indent guides on/off, caret bracket matching, the
+settings panel (font, tab width, gutter, guides, syntax, sidebar width), sidebar
+drag-resize, the large-preview truncation banner, the >32 MB open refusal, tab
+overflow scrolling, and settings restored from the session.
 
 No OS capture of any kind is used.
 
@@ -160,9 +240,16 @@ case/whole-word and match highlighting, Markdown edit/split/preview with a
 block renderer, dirty-close confirmation, recent files, session persistence
 (theme, sidebar, open tabs), window title, centralized key dispatch.
 
-Deferred (M3): syntax highlighting, indent guides, bracket matching, settings
-panel (font size / tab width / wrap), large-file measurement cache, sidebar
-resize, tab overflow scrolling.
+Delivered (M3): syntax highlighting (10 languages + public provider API),
+incremental highlight cache with per-frame budget, indent guides, bracket
+matching, settings panel with persisted values, sidebar drag-resize, tab
+overflow scrolling, large-file guards (highlight/preview/open limits), the
+library split (`igui_editor::syntax` etc.).
+
+Next candidates: plugin/language-pack loading on top of `SyntaxRegistry`, a
+recovery buffer for unsaved tabs, incremental preview layout for very large
+documents, and soft wrap (still needs a design: it breaks the line/column
+mapping).
 
 Notes:
 

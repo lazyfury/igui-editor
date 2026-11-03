@@ -117,8 +117,10 @@ pub struct Document {
     line_starts: Vec<usize>,
     dirty: bool,
     /// Bumped by every text mutation (edit / undo / redo); caches keyed by it
-    /// (find matches, Markdown layout, M3 highlighting) know when to rebuild.
+    /// (find matches, Markdown layout, highlighting) know when to rebuild.
     rev: u64,
+    /// Line range touched by the last mutation, for incremental highlighting.
+    edit_span: Option<(usize, usize)>,
     undo: UndoStack,
     /// Per-document scroll (kept across tab switches).
     pub scroll_y: f32,
@@ -138,6 +140,7 @@ impl Document {
             line_starts: vec![0],
             dirty: false,
             rev: 0,
+            edit_span: None,
             undo: UndoStack::default(),
             scroll_y: 0.0,
             scroll_x: 0.0,
@@ -163,6 +166,7 @@ impl Document {
             line_starts: Vec::new(),
             dirty: false,
             rev: 0,
+            edit_span: None,
             undo: UndoStack::default(),
             scroll_y: 0.0,
             scroll_x: 0.0,
@@ -177,6 +181,12 @@ impl Document {
 
     pub fn rev(&self) -> u64 {
         self.rev
+    }
+
+    /// First/last line touched by the latest mutation (`None` after a fresh
+    /// load). Consumers use it to start incremental work.
+    pub fn edit_span(&self) -> Option<(usize, usize)> {
+        self.edit_span
     }
 
     pub fn path(&self) -> Option<&Path> {
@@ -474,8 +484,11 @@ impl Document {
         }
         self.undo.cursor -= 1;
         let edit = self.undo.edits[self.undo.cursor].clone();
+        let first_line = self.line_of(edit.start);
         let end = edit.start + edit.inserted.len();
         self.text.replace_range(edit.start..end, &edit.removed);
+        let last_line = self.line_of((edit.start + edit.removed.len()).min(self.text.len()));
+        self.edit_span = Some((first_line, last_line));
         self.caret = edit.before.caret.min(self.text.len());
         self.anchor = edit.before.anchor.min(self.text.len());
         self.rebuild_lines();
@@ -489,8 +502,11 @@ impl Document {
             return false;
         }
         let edit = self.undo.edits[self.undo.cursor].clone();
+        let first_line = self.line_of(edit.start);
         let end = edit.start + edit.removed.len();
         self.text.replace_range(edit.start..end, &edit.inserted);
+        let last_line = self.line_of((edit.start + edit.inserted.len()).min(self.text.len()));
+        self.edit_span = Some((first_line, last_line));
         self.caret = edit.after.caret.min(self.text.len());
         self.anchor = edit.after.anchor.min(self.text.len());
         self.rebuild_lines();
@@ -637,7 +653,11 @@ impl Document {
             caret: self.caret,
             anchor: self.anchor,
         };
+        let first_line = self.line_of(start);
         self.text.replace_range(start..end, insert);
+        let after_end = start + insert.len();
+        let last_line = self.line_of(after_end.min(self.text.len()));
+        self.edit_span = Some((first_line, last_line));
         self.caret = floor_boundary(&self.text, after.caret);
         self.anchor = floor_boundary(&self.text, after.anchor);
         self.rebuild_lines();

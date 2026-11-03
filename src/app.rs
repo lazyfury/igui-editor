@@ -32,6 +32,8 @@ pub struct EditorApp {
     editor_id: Option<NodeId>,
     dialogs: Box<dyn Dialogs>,
     window: Option<SharedWindow>,
+    /// Set while syntax highlighting is still catching up (drives `needs_frame`).
+    analysis_behind: bool,
     /// The dialog currently open (native sheet / portal / scripted).
     pending: Option<PendingDialog>,
 }
@@ -95,11 +97,29 @@ impl EditorApp {
             dialogs,
             window: None,
             pending: None,
+            analysis_behind: false,
         }
     }
 
     pub fn state(&self) -> Ref<'_, AppState> {
         self.state.borrow()
+    }
+
+    /// Mutable state for wiring tests (the self-check drives caret/settings
+    /// through it when a pointer/keys would be overkill).
+    #[doc(hidden)]
+    pub fn state_mut(&mut self) -> std::cell::RefMut<'_, AppState> {
+        self.state.borrow_mut()
+    }
+
+    /// Registers an additional syntax provider (the plugin seam). Re-registering
+    /// a name keeps the existing provider; cached highlighting is dropped so a
+    /// newly covered file re-tokenizes immediately.
+    pub fn register_syntax(&mut self, provider: std::sync::Arc<dyn crate::syntax::SyntaxProvider>) {
+        let mut state = self.state.borrow_mut();
+        state.syntax.register(provider);
+        state.highlight.reset();
+        state.dirty = true;
     }
 
     /// The built tree (diagnostics / self-check geometry dumps).
@@ -118,6 +138,25 @@ impl EditorApp {
         // Dialogs run first: opening a Markdown file can change the pane
         // structure, and the same frame must rebuild for it.
         self.pump_dialog();
+        // A settings panel change (or a sidebar drag) may need the flex basis
+        // updated without rebuilding the shell.
+        let (pending, width, sidebar) = {
+            let state = self.state.borrow();
+            (
+                state.pending_sidebar_sync,
+                state.settings.sidebar_width,
+                state.sidebar_node,
+            )
+        };
+        if pending {
+            if let Some(sidebar) = sidebar {
+                kit::flex(&mut self.tree, sidebar, 0.0, Some(width), 0.0);
+                kit::min_size(&mut self.tree, sidebar, width, 0.0);
+                igui_ui::mark_dirty(&mut self.tree, sidebar);
+            }
+            self.state.borrow_mut().pending_sidebar_sync = false;
+        }
+        self.analysis_behind = self.state.borrow_mut().tick_analysis();
         let needs_rebuild = self.state.borrow().needs_rebuild;
         if needs_rebuild {
             self.rebuild();
@@ -150,10 +189,11 @@ impl EditorApp {
 
     pub fn paint(&mut self, ctx: &mut PaintContext) {
         igui_ui::paint(&self.tree, ctx);
-        // Overlays, in stacking order: menu drop-down, then the modal.
+        // Overlays, in stacking order: menu drop-down, settings, modal.
         let measurer = igui_ui::text_measurer(&self.tree);
         let mut state = self.state.borrow_mut();
         ui::menu::paint_popup(&mut state, measurer.as_ref(), ctx);
+        ui::settings::paint(&mut state, measurer.as_ref(), ctx);
         ui::modal::paint(&mut state, measurer.as_ref(), ctx);
     }
 
@@ -179,6 +219,10 @@ impl EditorApp {
                 }
                 // The bar sits above the drop-down: a press on a bar item
                 // toggles that menu (including closing the open one).
+                if state.settings_open {
+                    ui::settings::click(&mut state, *position);
+                    return EventResult::Handled;
+                }
                 if ui::menu::handle_bar_click(&mut state, *position) {
                     return EventResult::Handled;
                 }
@@ -240,6 +284,9 @@ impl EditorApp {
                 if state.modal.is_some() {
                     return input::modal_key(&mut state, *key);
                 }
+                if state.settings_open && ui::settings::on_key(&mut state, *key, modifiers) {
+                    return EventResult::Handled;
+                }
                 if state.menu_open.is_some() && *key == Key::Escape {
                     state.menu_open = None;
                     state.menu_hover = None;
@@ -266,6 +313,9 @@ impl EditorApp {
             }
             InputEvent::TextInput { text } => {
                 let mut state = self.state.borrow_mut();
+                if state.settings_open {
+                    return EventResult::Handled;
+                }
                 if state.find.open && matches!(state.focus, Focus::Find | Focus::Replace) {
                     input::find_text(&mut state, text);
                     return EventResult::Handled;
@@ -275,6 +325,9 @@ impl EditorApp {
             }
             InputEvent::Ime(ime) => {
                 let mut state = self.state.borrow_mut();
+                if state.settings_open {
+                    return EventResult::Handled;
+                }
                 if state.find.open && matches!(state.focus, Focus::Find | Focus::Replace) {
                     input::find_ime(&mut state, ime);
                     return EventResult::Handled;
@@ -295,7 +348,7 @@ impl EditorApp {
     }
 
     pub fn needs_frame(&self) -> bool {
-        self.pending.is_some() || self.state.borrow().message.is_some()
+        self.pending.is_some() || self.analysis_behind || self.state.borrow().message.is_some()
     }
 
     /// Starts a requested dialog (one at a time) and polls the open one. The
@@ -451,11 +504,18 @@ fn build_shell(tree: &mut SceneTree, state: &Rc<RefCell<AppState>>) -> (NodeId, 
     kit::set_container(tree, body, kit::tight_row());
     kit::flex(tree, body, 1.0, None, 1.0);
 
+    let sidebar_width = state.borrow().settings.sidebar_width;
+    let mut sidebar_node = None;
     if show_sidebar {
         let sidebar = ui::sidebar::build(tree, body, state.clone());
-        kit::flex(tree, sidebar, 0.0, Some(m.sidebar_w), 0.0);
-        kit::min_size(tree, sidebar, m.sidebar_w, 0.0);
+        kit::flex(tree, sidebar, 0.0, Some(sidebar_width), 0.0);
+        kit::min_size(tree, sidebar, sidebar_width, 0.0);
+        let divider = ui::sidebar::build_divider(tree, body, state.clone());
+        kit::flex(tree, divider, 0.0, Some(4.0), 0.0);
+        kit::min_size(tree, divider, 4.0, 0.0);
+        sidebar_node = Some(sidebar);
     }
+    state.borrow_mut().sidebar_node = sidebar_node;
 
     let main = kit::node(tree, body, "main");
     kit::set_container(tree, main, kit::tight_column());

@@ -9,6 +9,9 @@ use super::doc::Document;
 use super::fs_tree::FsTree;
 
 /// The open tabs and the directory they live in.
+/// Files above this size are refused (the editor is not built for them).
+pub const MAX_OPEN_BYTES: u64 = 32 * 1024 * 1024;
+
 #[derive(Debug)]
 pub struct Workspace {
     pub root: PathBuf,
@@ -58,6 +61,15 @@ impl Workspace {
         {
             self.active = index;
             return Ok(index);
+        }
+        if let Ok(metadata) = std::fs::metadata(&path) {
+            if metadata.len() > MAX_OPEN_BYTES {
+                return Err(format!(
+                    "{} is too large ({} MB limit)",
+                    path.display(),
+                    MAX_OPEN_BYTES / (1024 * 1024)
+                ));
+            }
         }
         let id = self.take_id();
         let doc =

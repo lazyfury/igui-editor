@@ -24,7 +24,6 @@ use igui_ui::{Container, PaintEnv, PointerPhase, TextMeasurer};
 
 use crate::kit::{self, RectExt};
 use crate::state::{AppState, Drag, Focus};
-use crate::theme::Metrics;
 
 pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>) -> NodeId {
     let id = kit::node(tree, parent, "editor");
@@ -216,9 +215,9 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
 
 // -- geometry ----------------------------------------------------------------
 
-fn gutter_width(line_count: usize, measurer: &dyn TextMeasurer, m: &Metrics) -> f32 {
+fn gutter_width(line_count: usize, measurer: &dyn TextMeasurer, font: f32, pad: f32) -> f32 {
     let digits = line_count.to_string().len().max(2) as f32;
-    m.gutter_pad * 2.0 + digits * measurer.advance('0', m.font_editor) + 4.0
+    pad * 2.0 + digits * measurer.advance('0', font) + 4.0
 }
 
 fn expand_tabs(line: &str, tab: usize) -> String {
@@ -274,13 +273,21 @@ fn hit(state: &AppState, pos: Vec2, measurer: &dyn TextMeasurer) -> Option<(usiz
     let doc = state.ws.active_doc()?;
     let editor = &state.editor;
     let m = state.theme.m;
+    let metrics = state.editor_metrics();
     if pos.y < editor.text_rect.top() || pos.x < editor.text_rect.left() {
         return None;
     }
-    let line = (((pos.y - editor.text_rect.top()) + doc.scroll_y) / m.line_h).floor() as usize;
+    let line =
+        (((pos.y - editor.text_rect.top()) + doc.scroll_y) / metrics.line_h).floor() as usize;
     let line = line.min(doc.line_count().saturating_sub(1));
     let x = pos.x - editor.text_rect.left() - m.text_pad + doc.scroll_x;
-    let column = column_at_x(measurer, doc.line(line), x, m.font_editor, m.tab as usize);
+    let column = column_at_x(
+        measurer,
+        doc.line(line),
+        x,
+        metrics.font,
+        metrics.tab_columns(),
+    );
     Some((line, column))
 }
 
@@ -389,15 +396,21 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         return;
     }
 
-    let line_h = m.line_h;
-    let font = m.font_editor;
-    let tab = m.tab as usize;
+    let metrics = state.editor_metrics();
+    let line_h = metrics.line_h;
+    let font = metrics.font;
+    let tab = metrics.tab_columns();
     let sb = m.scrollbar;
+    let show_gutter = state.settings.line_numbers;
 
     let (gutter_w, line_count, scroll_x, scroll_y, caret, selection, preedit) = {
         let doc = state.ws.active_doc().expect("checked above");
         (
-            gutter_width(doc.line_count(), measurer, &m),
+            if show_gutter {
+                gutter_width(doc.line_count(), measurer, font, m.gutter_pad)
+            } else {
+                0.0
+            },
             doc.line_count(),
             doc.scroll_x,
             doc.scroll_y,
@@ -476,14 +489,16 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     editor.content_w = content_w;
 
     let gutter_rect = Rect::from_min_size(rect.origin, Size::new(gutter_w, text_rect.height()));
-    kit::fill(env.ctx, gutter_rect, p.gutter);
-    kit::vline(
-        env.ctx,
-        gutter_rect.right() - 1.0,
-        gutter_rect.top(),
-        gutter_rect.bottom(),
-        p.border,
-    );
+    if show_gutter {
+        kit::fill(env.ctx, gutter_rect, p.gutter);
+        kit::vline(
+            env.ctx,
+            gutter_rect.right() - 1.0,
+            gutter_rect.top(),
+            gutter_rect.bottom(),
+            p.border,
+        );
+    }
 
     let first = (scroll_y / line_h).floor() as usize;
     let last = (first + visible_count).min(line_count.saturating_sub(1));
@@ -503,6 +518,40 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             ),
             p.current_line,
         );
+    }
+
+    // Indent guides: one 1 px rule per indentation level of each visible line.
+    if state.settings.indent_guides {
+        let space = measurer.advance(' ', font);
+        env.ctx.save();
+        env.ctx.clip_rect(text_rect);
+        let doc = state.ws.active_doc().expect("checked above");
+        for line in first..=last {
+            let text = doc.line(line);
+            let mut columns = 0usize;
+            for ch in text.chars() {
+                match ch {
+                    ' ' => columns += 1,
+                    '\t' => columns += tab,
+                    _ => break,
+                }
+            }
+            if columns == 0 {
+                continue;
+            }
+            let y = text_rect.top() + (line - first) as f32 * line_h
+                - (scroll_y - first as f32 * line_h);
+            let mut column = tab;
+            while column <= columns {
+                let x = text_rect.left() + pad + column as f32 * space - scroll_x;
+                env.ctx.fill_rect(
+                    Rect::from_min_size(Vec2::new(x, y), Size::new(1.0, line_h)),
+                    p.border.alpha_mul(0.55),
+                );
+                column += tab;
+            }
+        }
+        env.ctx.restore();
     }
 
     // Selection rectangles, per visible line.
@@ -618,6 +667,40 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             p.text,
         );
     }
+
+    // Syntax tokens are painted over the base text (same glyphs, token color),
+    // which keeps tab expansion and horizontal metrics identical to the caret.
+    if state.settings.syntax {
+        let doc = state.ws.active_doc().expect("checked above");
+        for line in first..=last {
+            let Some(tokens) = state.highlight.tokens(line) else {
+                continue;
+            };
+            if tokens.is_empty() {
+                continue;
+            }
+            let line_text = doc.line(line);
+            let y = text_rect.top() + (line - first) as f32 * line_h
+                - (scroll_y - first as f32 * line_h);
+            let baseline = y + (line_h - font) * 0.5 + ascent;
+            for token in tokens {
+                if token.end <= token.start || token.end > line_text.len() {
+                    continue;
+                }
+                let text = &line_text[token.start..token.end];
+                let x = x_in_line(measurer, line_text, token.start, font, tab);
+                let drawn = expand_tabs(text, tab);
+                env.ctx.draw_text_weighted(
+                    drawn.as_str(),
+                    Vec2::new(text_rect.left() + pad + x - scroll_x, baseline),
+                    font,
+                    FontWeight::NORMAL,
+                    TextAlign::Left,
+                    theme.token_color(token.kind),
+                );
+            }
+        }
+    }
     env.ctx.restore();
 
     // IME preedit at the caret (composition text is not committed yet).
@@ -676,13 +759,44 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         env.ctx.restore();
     }
 
+    // Matched bracket underlines.
+    if let Some((open, close)) = state.bracket {
+        let doc = state.ws.active_doc().expect("checked above");
+        let text = doc.text();
+        env.ctx.save();
+        env.ctx.clip_rect(text_rect);
+        for byte in [open, close] {
+            if byte >= text.len() {
+                continue;
+            }
+            let line = doc.line_of(byte);
+            if line < first || line > last {
+                continue;
+            }
+            let offset = byte - doc.line_start(line);
+            let x = x_in_line(measurer, doc.line(line), offset, font, tab);
+            let ch = text[byte..].chars().next().unwrap_or(' ');
+            let width = measurer.advance(ch, font).max(2.0);
+            let y = text_rect.top() + line as f32 * line_h - scroll_y;
+            env.ctx.fill_rect(
+                Rect::from_min_size(
+                    Vec2::new(text_rect.left() + pad + x - scroll_x, y + line_h - 2.0),
+                    Size::new(width, 1.5),
+                ),
+                p.accent,
+            );
+        }
+        env.ctx.restore();
+    }
+
     // Gutter numbers (active line in accent, the rest dim).
-    {
+    if show_gutter {
+        let number_font = (font - 1.0).max(9.0);
         let right = gutter_rect.right() - m.gutter_pad;
         for line in first..=last {
             let y = text_rect.top() + (line - first) as f32 * line_h
                 - (scroll_y - first as f32 * line_h);
-            let baseline = y + (line_h - font) * 0.5 + ascent;
+            let baseline = y + (line_h - number_font) * 0.5 + ascent;
             let label = (line + 1).to_string();
             kit::text_right(
                 env.ctx,
@@ -690,7 +804,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                 &label,
                 right,
                 baseline,
-                m.font_small,
+                number_font,
                 if line == caret_line {
                     p.accent
                 } else {

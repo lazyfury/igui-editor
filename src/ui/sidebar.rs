@@ -15,6 +15,97 @@ use crate::kit::{self, RectExt};
 use crate::state::AppState;
 
 pub const HEADER_H: f32 = 28.0;
+/// Resize grip: a 2 x 28 bar centered in the 4 px handle.
+pub const GRIP_WIDTH: f32 = 2.0;
+pub const GRIP_HEIGHT: f32 = 28.0;
+
+/// The 4 px divider that resizes the sidebar (drag, column-resize cursor).
+pub fn build_divider(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>) -> NodeId {
+    let id = kit::node(tree, parent, "sidebar-divider");
+    kit::set_container(tree, id, Container::Leaf);
+    kit::set_cursor(tree, id, igui_core::Cursor::ColResize);
+    kit::draw(tree, id, {
+        let state = state.clone();
+        move |env, rect, interact| {
+            let state = state.borrow();
+            let theme = state.theme;
+            let p = theme.p;
+            let dragging = state.sidebar_drag.is_some();
+            // One centered divider line (the sidebar no longer draws its own
+            // border) plus a light grip bar that signals "drag me".
+            let background = if dragging {
+                p.accent.alpha_mul(0.16)
+            } else if interact.hovered {
+                p.hover
+            } else {
+                p.bg
+            };
+            kit::fill(env.ctx, rect, background);
+            let line_color = if dragging {
+                p.accent
+            } else if interact.hovered {
+                p.dim
+            } else {
+                p.border
+            };
+            kit::vline(
+                env.ctx,
+                (rect.center().x - 0.5).round(),
+                rect.top(),
+                rect.bottom(),
+                line_color,
+            );
+            let grip_height = GRIP_HEIGHT.min(rect.height() * 0.5);
+            // The 1 px divider line lands on the right half of the 4 px handle,
+            // so nudge the grip 1 px right to read as centered on the line.
+            let grip = Rect::from_center_size(
+                Vec2::new(rect.center().x + 1.0, rect.center().y),
+                Size::new(GRIP_WIDTH, grip_height),
+            );
+            let grip_color = if dragging {
+                p.accent
+            } else if interact.hovered {
+                p.text
+            } else {
+                p.faint
+            };
+            kit::fill(env.ctx, grip, grip_color);
+        }
+    });
+    kit::on_pointer(tree, id, {
+        let state = state.clone();
+        move |tree, _id, phase, _rect, pos| {
+            let mut state = state.borrow_mut();
+            match phase {
+                PointerPhase::Down => {
+                    state.sidebar_drag = Some((pos.x, state.settings.sidebar_width));
+                }
+                PointerPhase::Move => {
+                    if let Some((start_x, start_width)) = state.sidebar_drag {
+                        let width = crate::settings::clamp_sidebar(start_width + (pos.x - start_x));
+                        if (width - state.settings.sidebar_width).abs() > 0.5 {
+                            state.settings.sidebar_width = width;
+                            if let Some(sidebar) = state.sidebar_node {
+                                kit::flex(tree, sidebar, 0.0, Some(width), 0.0);
+                                kit::min_size(tree, sidebar, width, 0.0);
+                                igui_ui::mark_dirty(tree, sidebar);
+                            }
+                            state.dirty = true;
+                        }
+                    }
+                }
+                PointerPhase::Up => {
+                    if state.sidebar_drag.take().is_some() {
+                        state.persist_settings();
+                    }
+                }
+                PointerPhase::DoubleClick => {}
+            }
+            igui_ui::request_paint(tree);
+        }
+    });
+    id
+}
 
 pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>) -> NodeId {
     let id = kit::node(tree, parent, "sidebar");
@@ -63,14 +154,8 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     let measurer = env.measurer;
     state.sidebar.rect = rect;
 
+    // No right border here: the resize handle's single line is the separator.
     kit::fill(env.ctx, rect, p.panel);
-    kit::vline(
-        env.ctx,
-        rect.right() - 1.0,
-        rect.top(),
-        rect.bottom(),
-        p.border,
-    );
 
     // Header: "EXPLORER" + the root directory, dim.
     let header = Rect::from_min_size(rect.origin, Size::new(rect.width(), HEADER_H));

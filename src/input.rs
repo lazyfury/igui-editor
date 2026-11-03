@@ -52,6 +52,10 @@ pub fn shortcut(state: &mut AppState, key: Key, modifiers: Modifiers) -> Option<
             'c' => Action::Copy,
             'v' => Action::Paste,
             'a' => Action::SelectAll,
+            ',' => {
+                state.toggle_settings();
+                return Some(EventResult::Handled);
+            }
             'f' => {
                 let replace = modifiers.alt;
                 if state.find.open {

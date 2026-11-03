@@ -11,13 +11,17 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Instant;
 
-use igui_core::{Rect, ViewportSize};
+use igui_core::{NodeId, Rect, ViewportSize};
 use igui_ui::{Clipboard, TextEdit};
 
+use crate::model::brackets::match_bracket;
 use crate::model::find::{find_all, Matcher};
 use crate::model::fs_tree::FsTree;
+use crate::model::highlight::HighlightCache;
 use crate::model::session::Session;
 use crate::model::Workspace;
+use crate::settings::{EditorMetrics, Row, Settings};
+use crate::syntax::{SyntaxRegistry, TokenKind};
 use crate::theme::{Mode, Theme};
 use crate::ui::preview::PreviewUi;
 
@@ -109,6 +113,7 @@ pub enum Action {
     Paste,
     SelectAll,
     Find,
+    Settings,
     ToggleSidebar,
     ToggleTheme,
     SetView(ViewMode),
@@ -138,6 +143,7 @@ impl Action {
             Action::Paste => "Paste".into(),
             Action::SelectAll => "Select All".into(),
             Action::Find => "Find…".into(),
+            Action::Settings => "Settings…".into(),
             Action::ToggleSidebar => "Toggle Sidebar".into(),
             Action::ToggleTheme => "Toggle Theme".into(),
             Action::SetView(mode) => mode.label().into(),
@@ -205,6 +211,10 @@ impl Action {
                 "⌘" => "⌘F",
                 _ => "Ctrl+F",
             },
+            Action::Settings => match ACCEL {
+                "⌘" => "⌘,",
+                _ => "Ctrl+,",
+            },
             Action::ToggleSidebar => match ACCEL {
                 "⌘" => "⌘B",
                 _ => "Ctrl+B",
@@ -229,7 +239,8 @@ impl Action {
             | Action::OpenFolder
             | Action::ToggleSidebar
             | Action::ToggleTheme
-            | Action::Find => true,
+            | Action::Find
+            | Action::Settings => true,
             Action::Save => doc.is_some(),
             Action::SaveAs => doc.is_some(),
             Action::CloseTab => doc.is_some(),
@@ -291,6 +302,8 @@ pub fn items(menu: Menu, state: &AppState) -> Vec<Option<Action>> {
             Some(Action::SetView(ViewMode::Edit)),
             Some(Action::SetView(ViewMode::Split)),
             Some(Action::SetView(ViewMode::Preview)),
+            None,
+            Some(Action::Settings),
         ],
     }
 }
@@ -444,6 +457,10 @@ pub struct TabsUi {
     pub hover: Option<usize>,
     /// The `+` (new tab) button.
     pub plus: Rect,
+    /// Horizontal scroll offset when the tabs do not fit.
+    pub scroll: f32,
+    /// The strip rectangle (scroll/hit diagnostics).
+    pub strip: Rect,
 }
 
 /// The single shared state. Callbacks hold an `Rc<RefCell<AppState>>`.
@@ -485,11 +502,27 @@ pub struct AppState {
     pub preview: PreviewUi,
     /// Window title last pushed to the platform.
     pub title: String,
+    // -- M3 --------------------------------------------------------------
+    pub settings: Settings,
+    pub syntax: SyntaxRegistry,
+    pub highlight: HighlightCache,
+    /// Matched bracket byte positions for the caret (`open`, `close`).
+    pub bracket: Option<(usize, usize)>,
+    bracket_key: Option<(u64, u64, usize, bool)>,
+    pub settings_open: bool,
+    pub settings_row: usize,
+    /// Node ids captured by the shell for live layout tweaks.
+    pub sidebar_node: Option<NodeId>,
+    /// Sidebar resize drag: `(start_pointer_x, start_width)`.
+    pub sidebar_drag: Option<(f32, f32)>,
+    /// Set when a settings change needs the sidebar's flex basis updated.
+    pub pending_sidebar_sync: bool,
 }
 
 impl AppState {
     pub fn new(theme: Theme, ws: Workspace, session: Session, config_path: PathBuf) -> Self {
         let title = String::new();
+        let settings = settings_from_session(&session);
         Self {
             theme,
             ws,
@@ -523,6 +556,16 @@ impl AppState {
             config_dirty: false,
             preview: PreviewUi::default(),
             title,
+            settings,
+            syntax: SyntaxRegistry::with_builtins(),
+            highlight: HighlightCache::new(),
+            bracket: None,
+            bracket_key: None,
+            settings_open: false,
+            settings_row: 0,
+            sidebar_node: None,
+            sidebar_drag: None,
+            pending_sidebar_sync: false,
         }
     }
 
@@ -539,6 +582,188 @@ impl AppState {
         self.message
             .as_ref()
             .map(|(text, error, _)| (text.as_str(), *error))
+    }
+
+    // -- settings --------------------------------------------------------
+
+    /// Editor typography derived from the current settings.
+    pub fn editor_metrics(&self) -> EditorMetrics {
+        self.settings.editor()
+    }
+
+    /// Provider name for the active document (shown in the status bar), even
+    /// when highlighting is disabled by a size limit.
+    pub fn language_name(&self) -> Option<&'static str> {
+        self.syntax
+            .for_path(self.ws.active_doc().and_then(|doc| doc.path()))
+            .map(|provider| provider.name())
+    }
+
+    pub fn open_settings(&mut self) {
+        self.settings_open = true;
+        self.menu_open = None;
+        self.settings_row = self.settings_row.min(Row::Reset as usize);
+        self.dirty = true;
+    }
+
+    pub fn close_settings(&mut self) {
+        self.settings_open = false;
+        self.dirty = true;
+    }
+
+    pub fn toggle_settings(&mut self) {
+        if self.settings_open {
+            self.close_settings();
+        } else {
+            self.open_settings();
+        }
+    }
+
+    /// Display value of a settings row.
+    pub fn settings_value(&self, row: Row) -> String {
+        match row {
+            Row::Theme => self.theme.name().to_string(),
+            Row::FontSize => format!("{} px", self.settings.font_size as i32),
+            Row::TabWidth => format!("{} spaces", self.settings.tab_width),
+            Row::LineNumbers => on_off(self.settings.line_numbers),
+            Row::IndentGuides => on_off(self.settings.indent_guides),
+            Row::Syntax => on_off(self.settings.syntax),
+            Row::SidebarWidth => format!("{} px", self.settings.sidebar_width as i32),
+            Row::Reset => "DEFAULT".into(),
+        }
+    }
+
+    /// Steps a row (`delta` is -1 or +1). Returns whether anything changed.
+    pub fn adjust_setting(&mut self, row: Row, delta: i32) -> bool {
+        match row {
+            Row::Theme => {
+                if delta != 0 {
+                    self.theme.toggle();
+                    self.settings_changed();
+                }
+            }
+            Row::FontSize => {
+                self.settings.step_font(delta);
+                self.settings_changed();
+            }
+            Row::TabWidth => {
+                self.settings.step_tab(delta);
+                self.settings_changed();
+            }
+            Row::LineNumbers => {
+                self.settings.line_numbers = !self.settings.line_numbers;
+                self.settings_changed();
+            }
+            Row::IndentGuides => {
+                self.settings.indent_guides = !self.settings.indent_guides;
+                self.settings_changed();
+            }
+            Row::Syntax => {
+                self.settings.syntax = !self.settings.syntax;
+                self.settings_changed();
+            }
+            Row::SidebarWidth => {
+                self.settings.step_sidebar(delta as f32 * 8.0);
+                self.settings_changed();
+                self.pending_sidebar_sync = true;
+            }
+            Row::Reset => self.reset_settings(),
+        }
+        self.dirty = true;
+        true
+    }
+
+    /// Enter/Space on a row: toggles booleans, resets, or steps other rows.
+    pub fn activate_setting(&mut self, row: Row) {
+        self.adjust_setting(row, 1);
+    }
+
+    pub fn reset_settings(&mut self) {
+        self.settings = Settings::default();
+        self.settings_changed();
+        self.pending_sidebar_sync = true;
+        self.status("settings reset");
+    }
+
+    /// Writes the current settings into the session (call after a live drag).
+    pub fn persist_settings(&mut self) {
+        self.settings_changed();
+    }
+
+    fn settings_changed(&mut self) {
+        self.session.font = self.settings.font_size;
+        self.session.tab = self.settings.tab_width;
+        self.session.line_numbers = self.settings.line_numbers;
+        self.session.indent_guides = self.settings.indent_guides;
+        self.session.syntax = self.settings.syntax;
+        self.session.sidebar_width = self.settings.sidebar_width;
+        self.session.theme = match self.theme.mode {
+            Mode::Dark => "dark".into(),
+            Mode::Light => "light".into(),
+        };
+        self.config_dirty = true;
+        self.find.dirty = true;
+        self.editor.reveal = true;
+        self.dirty = true;
+    }
+
+    /// Applies settings-driven work for this frame: incremental highlighting and
+    /// bracket matching. Returns whether more highlight work remains.
+    pub fn tick_analysis(&mut self) -> bool {
+        if self.pending_sidebar_sync {
+            self.pending_sidebar_sync = false;
+        }
+        let behind = {
+            let AppState {
+                ws,
+                settings,
+                syntax,
+                highlight,
+                ..
+            } = self;
+            match ws.active_doc() {
+                Some(doc) => {
+                    highlight.sync(
+                        doc,
+                        syntax,
+                        settings,
+                        crate::model::highlight::FRAME_LINE_BUDGET,
+                    );
+                    highlight.is_behind()
+                }
+                None => {
+                    highlight.reset();
+                    false
+                }
+            }
+        };
+
+        let key = self.ws.active_doc().map(|doc| {
+            (
+                doc.id(),
+                doc.rev(),
+                doc.caret(),
+                self.settings.syntax && self.highlight.is_active(),
+            )
+        });
+        if key != self.bracket_key {
+            self.bracket_key = key;
+            self.bracket = self.ws.active_doc().and_then(|doc| {
+                match_bracket(doc.text(), doc.caret(), |byte| {
+                    let line = doc.line_of(byte);
+                    let offset = byte - doc.line_start(line);
+                    match self.highlight.tokens(line) {
+                        Some(tokens) => !tokens.iter().any(|token| {
+                            token.start <= offset
+                                && offset < token.end
+                                && matches!(token.kind, TokenKind::Comment | TokenKind::String)
+                        }),
+                        None => true,
+                    }
+                })
+            });
+        }
+        behind
     }
 
     // -- view mode -------------------------------------------------------
@@ -1006,6 +1231,7 @@ impl AppState {
                 }
             }
             Action::Find => self.open_find(false),
+            Action::Settings => self.toggle_settings(),
             Action::ToggleSidebar => {
                 self.show_sidebar = !self.show_sidebar;
                 self.session.sidebar = self.show_sidebar;
@@ -1053,6 +1279,26 @@ impl AppState {
         if let Err(error) = self.session.save(&self.config_path) {
             self.error(format!("session save failed: {error}"));
         }
+    }
+}
+
+fn settings_from_session(session: &Session) -> Settings {
+    Settings {
+        font_size: session.font,
+        tab_width: session.tab,
+        line_numbers: session.line_numbers,
+        indent_guides: session.indent_guides,
+        syntax: session.syntax,
+        sidebar_width: session.sidebar_width,
+    }
+    .normalized()
+}
+
+fn on_off(value: bool) -> String {
+    if value {
+        "ON".into()
+    } else {
+        "OFF".into()
     }
 }
 

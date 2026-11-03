@@ -18,22 +18,41 @@ use std::path::{Path, PathBuf};
 const MAX_RECENT: usize = 8;
 
 /// Persisted application state. Missing/corrupt files fall back to defaults.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Session {
+    /// Format version (`1`); unknown keys are ignored so older/newer files keep
+    /// loading.
+    pub version: u32,
     /// `"dark"` or `"light"`.
     pub theme: String,
     pub sidebar: bool,
     pub recent: Vec<PathBuf>,
     pub tabs: Vec<PathBuf>,
+    /// Editor font size.
+    pub font: f32,
+    /// Tab width in spaces.
+    pub tab: usize,
+    pub line_numbers: bool,
+    pub indent_guides: bool,
+    pub syntax: bool,
+    /// Sidebar width.
+    pub sidebar_width: f32,
 }
 
 impl Default for Session {
     fn default() -> Self {
         Self {
+            version: 1,
             theme: "dark".into(),
             sidebar: true,
             recent: Vec::new(),
             tabs: Vec::new(),
+            font: 13.0,
+            tab: 4,
+            line_numbers: true,
+            indent_guides: true,
+            syntax: true,
+            sidebar_width: 232.0,
         }
     }
 }
@@ -63,6 +82,15 @@ impl Session {
                     }
                 }
                 "sidebar" => session.sidebar = value == "1",
+                "font" => session.font = value.parse().unwrap_or(session.font),
+                "tab" => session.tab = value.parse().unwrap_or(session.tab),
+                "gutter" | "line_numbers" => session.line_numbers = value == "1",
+                "guides" | "indent_guides" => session.indent_guides = value == "1",
+                "highlight" | "syntax" => session.syntax = value == "1",
+                "sidebar_width" => {
+                    session.sidebar_width = value.parse().unwrap_or(session.sidebar_width)
+                }
+                "version" => {}
                 key if key.starts_with("recent.") => {
                     if let Ok(index) = key["recent.".len()..].parse::<usize>() {
                         recent.insert(index, PathBuf::from(value));
@@ -83,8 +111,15 @@ impl Session {
 
     pub fn render(&self) -> String {
         let mut out = String::new();
+        out.push_str(&format!("version={}\n", self.version));
         out.push_str(&format!("theme={}\n", self.theme));
         out.push_str(&format!("sidebar={}\n", u8::from(self.sidebar)));
+        out.push_str(&format!("font={}\n", self.font));
+        out.push_str(&format!("tab={}\n", self.tab));
+        out.push_str(&format!("gutter={}\n", u8::from(self.line_numbers)));
+        out.push_str(&format!("guides={}\n", u8::from(self.indent_guides)));
+        out.push_str(&format!("syntax={}\n", u8::from(self.syntax)));
+        out.push_str(&format!("sidebar_width={}\n", self.sidebar_width));
         for (index, path) in self.recent.iter().take(MAX_RECENT).enumerate() {
             out.push_str(&format!(
                 "recent.{index}={}\n",
@@ -202,6 +237,13 @@ mod tests {
             sidebar: false,
             recent: vec![PathBuf::from("/tmp/a=b.rs"), PathBuf::from("/tmp/c d.md")],
             tabs: vec![PathBuf::from("/tmp/a=b.rs")],
+            font: 15.0,
+            tab: 2,
+            line_numbers: false,
+            indent_guides: false,
+            syntax: false,
+            sidebar_width: 260.0,
+            ..Session::default()
         };
         session.save(&path).unwrap();
         let loaded = Session::load(&path);

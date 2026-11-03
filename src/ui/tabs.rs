@@ -35,6 +35,15 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
             igui_ui::request_paint(tree);
         }
     });
+    kit::on_scroll(tree, id, {
+        let state = state.clone();
+        move |tree, _id, delta| {
+            let mut state = state.borrow_mut();
+            state.tabs.scroll += delta.y + delta.x;
+            state.dirty = true;
+            igui_ui::request_paint(tree);
+        }
+    });
     id
 }
 
@@ -60,13 +69,25 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     } else {
         (available / count as f32).min(m.tab_w).max(96.0)
     };
+    let total = tab_w * count as f32;
+    let max_scroll = (total - available).max(0.0);
+    let mut scroll = state.tabs.scroll.clamp(0.0, max_scroll);
+    // Keep the active tab visible after a switch or a resize.
+    let active_left = state.ws.active as f32 * tab_w;
+    if active_left < scroll {
+        scroll = active_left;
+    } else if active_left + tab_w > scroll + available {
+        scroll = active_left + tab_w - available;
+    }
+    scroll = scroll.clamp(0.0, max_scroll);
+    state.tabs.scroll = scroll;
 
     let mut hits: Vec<(usize, Rect, Rect)> = Vec::with_capacity(count);
     for index in 0..count {
-        let x = rect.left() + index as f32 * tab_w;
+        let x = rect.left() + index as f32 * tab_w - scroll;
         let tab = Rect::from_min_size(Vec2::new(x, rect.top()), Size::new(tab_w, rect.height()));
-        if tab.left() >= rect.right() - plus_w {
-            break;
+        if tab.right() <= rect.left() || tab.left() >= rect.right() - plus_w {
+            continue;
         }
         let active = index == state.ws.active;
         let hovered = state.tabs.hover == Some(index);
@@ -153,6 +174,8 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         hits,
         hover: state.tabs.hover,
         plus,
+        scroll: state.tabs.scroll,
+        strip: rect,
     };
 }
 

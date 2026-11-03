@@ -11,20 +11,10 @@
 //! - `host.rs`: winit + wgpu plugins (native only).
 //! - `selfcheck.rs`: headless pipeline assertions (`--selfcheck`), no screenshots.
 
-mod app;
-mod dialogs;
-mod host;
-mod input;
-mod kit;
-mod model;
-mod selfcheck;
-mod state;
-mod theme;
-mod ui;
-
 use std::path::PathBuf;
 
-use theme::Mode;
+use igui_editor::theme::Mode;
+use igui_editor::{host, selfcheck};
 
 const HELP: &str = "\
 igui-editor — a compact text/Markdown editor built on igui

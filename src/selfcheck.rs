@@ -17,7 +17,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use igui_backend_recording::{RecordedFrame, RecordingBackend};
-use igui_core::{InputEvent, Key, Modifiers, PointerButton, Size, Vec2, ViewportSize};
+use igui_core::{InputEvent, Key, Modifiers, PointerButton, Rect, Size, Vec2, ViewportSize};
 use igui_profile::{inspect, FrameCounters, FrameStats, Severity};
 use igui_render::{DrawCommand, PaintContext, RenderBackend};
 
@@ -30,7 +30,8 @@ use crate::theme::Mode;
 const WIDTH: f32 = 1200.0;
 const HEIGHT: f32 = 800.0;
 
-const MAIN_RS: &str = "fn main() {\n    println!(\"hello\");\n}\n";
+const MAIN_RS: &str =
+    "// header comment\nfn main() {\n    let s = \"hello\";\n    println!(s);\n}\n";
 const NOTES_MD: &str = "# Notes\n\n## Notes\n\n- square corners\n- compact rows\n\n\
                         | Key | Meaning |\n|:----|--------:|\n| a   | alpha   |\n| b   | **beta** |\n\n\
                         ```rust\nfn preview() {}\n```\n";
@@ -127,6 +128,38 @@ fn check(dir: &Path) -> Result<(), String> {
         ScriptedDialogs::new(vec![]),
     );
 
+    // -- plugin seam: a provider can be registered at runtime -------------
+    {
+        struct NoopProvider;
+        impl crate::syntax::SyntaxProvider for NoopProvider {
+            fn name(&self) -> &'static str {
+                "selfcheck-noop"
+            }
+            fn extensions(&self) -> &'static [&'static str] {
+                &["noop"]
+            }
+            fn highlight_line(
+                &self,
+                _line: &str,
+                state: u32,
+            ) -> (Vec<crate::syntax::Highlight>, u32) {
+                (Vec::new(), state)
+            }
+        }
+        harness
+            .app
+            .register_syntax(std::sync::Arc::new(NoopProvider));
+        if harness
+            .app
+            .state()
+            .syntax
+            .by_name("selfcheck-noop")
+            .is_none()
+        {
+            return Err("register_syntax did not add the provider".into());
+        }
+    }
+
     // -- startup ---------------------------------------------------------
     let frame = harness.frame()?;
     let painted = texts(&frame);
@@ -183,7 +216,9 @@ fn check(dir: &Path) -> Result<(), String> {
             ..Modifiers::NONE
         },
     );
-    harness.frame()?;
+    let frame = harness.frame()?;
+    let measurer = igui_ui::text_measurer(harness.app.tree());
+    check_status_overlap(&frame, measurer.as_ref())?;
     let saved = fs::read_to_string(&main_path).map_err(|error| format!("read back: {error}"))?;
     if !saved.starts_with("// typed by selfcheck") {
         return Err("⌘S did not write the buffer to disk".into());
@@ -741,6 +776,436 @@ fn check(dir: &Path) -> Result<(), String> {
         return Err("modal Save should close the untitled tab after saving".into());
     }
 
+    // ================= M3: syntax, guides, brackets, settings =========
+    harness.dialogs.push(Some(main_path.clone()));
+    harness.shortcut(
+        Key::Character('o'),
+        Modifiers {
+            meta: true,
+            ..Modifiers::NONE
+        },
+    );
+    let frame = harness.frame()?;
+    {
+        let state = harness.app.state();
+        if state.ws.active_doc().map(|doc| doc.name()) != Some("main.rs") {
+            return Err("syntax fixture did not open".into());
+        }
+        if !state.highlight.is_active() {
+            return Err("highlighting is inactive for a Rust file".into());
+        }
+    }
+    let theme = crate::theme::Theme::new(Mode::Dark);
+    let keyword = theme
+        .token_color(crate::syntax::TokenKind::Keyword)
+        .to_rgba8();
+    let function = theme
+        .token_color(crate::syntax::TokenKind::Function)
+        .to_rgba8();
+    let string_color = theme
+        .token_color(crate::syntax::TokenKind::String)
+        .to_rgba8();
+    let comment = theme
+        .token_color(crate::syntax::TokenKind::Comment)
+        .to_rgba8();
+    if !draw_text_has_color(&frame, "fn", keyword) {
+        return Err("keyword `fn` is not painted with the keyword color".into());
+    }
+    if !draw_text_has_color(&frame, "main", function) {
+        return Err("function `main` is not painted with the function color".into());
+    }
+    if !draw_text_has_color(&frame, "\"hello\"", string_color) {
+        return Err("the string literal is not painted with the string color".into());
+    }
+    if !draw_text_has_color(&frame, "// header comment", comment) {
+        return Err("the comment is not painted with the comment color".into());
+    }
+    let guides_on = count_guides(&frame, harness.app.state().editor_metrics().line_h);
+    if guides_on == 0 {
+        return Err("indent guides were not painted for the indented lines".into());
+    }
+
+    // Incremental highlighting: type a new comment at the end of the file.
+    harness.shortcut(
+        Key::ArrowDown,
+        Modifiers {
+            meta: true,
+            ..Modifiers::NONE
+        },
+    );
+    harness.key(Key::Enter);
+    harness.type_text("// tail comment");
+    let frame = harness.frame()?;
+    if !draw_text_has_color(&frame, "// tail comment", comment) {
+        return Err("the edited line was not re-highlighted as a comment".into());
+    }
+    {
+        let state = harness.app.state();
+        let line = state.ws.active_doc().map_or(0, |doc| doc.line_count() - 1);
+        if state.highlight.tokens(line).is_none() {
+            return Err("the highlight cache did not catch up after the edit".into());
+        }
+    }
+
+    // Bracket matching for the caret on `{`.
+    {
+        let brace = harness
+            .app
+            .state()
+            .ws
+            .active_doc()
+            .and_then(|doc| doc.text().find('{'))
+            .ok_or("no brace in the fixture")?;
+        let close = harness
+            .app
+            .state()
+            .ws
+            .active_doc()
+            .and_then(|doc| doc.text().rfind('}'))
+            .ok_or("no closing brace in the fixture")?;
+        harness
+            .app
+            .state_mut()
+            .ws
+            .active_doc_mut()
+            .ok_or("no active document")?
+            .set_caret(brace);
+        harness.frame()?;
+        if harness.app.state().bracket != Some((brace, close)) {
+            return Err(format!(
+                "bracket matching failed (got {:?})",
+                harness.app.state().bracket
+            ));
+        }
+    }
+
+    // Settings panel: fonts, tabs, gutter, guides, syntax, sidebar width.
+    harness.shortcut(
+        Key::Character(','),
+        Modifiers {
+            meta: true,
+            ..Modifiers::NONE
+        },
+    );
+    let frame = harness.frame()?;
+    expect(&texts(&frame), "Settings", "settings panel title")?;
+    expect(&texts(&frame), "Font Size", "settings panel rows")?;
+    expect(&texts(&frame), "13 px", "current font value")?;
+    harness.key(Key::ArrowDown); // Theme -> Font Size
+    harness.key(Key::ArrowRight);
+    let frame = harness.frame()?;
+    {
+        let state = harness.app.state();
+        if state.settings.font_size != 14.0 || state.session.font != 14.0 {
+            return Err("the settings panel did not change the font size".into());
+        }
+        if state.editor_metrics().font != 14.0 {
+            return Err("the editor did not pick up the new font size".into());
+        }
+    }
+    expect(&texts(&frame), "14 px", "updated font value")?;
+    harness.key(Key::ArrowDown); // Tab Width
+    harness.key(Key::ArrowRight);
+    if harness.app.state().settings.tab_width != 8 {
+        return Err("the settings panel did not cycle the tab width".into());
+    }
+    // Back to 4 spaces for the indent-guide check (the fixture indents by 4).
+    harness.key(Key::ArrowLeft);
+    harness.key(Key::ArrowDown); // Line Numbers
+    harness.key(Key::Enter);
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        if state.settings.line_numbers || state.editor.gutter_w != 0.0 {
+            return Err("turning line numbers off did not collapse the gutter".into());
+        }
+    }
+    let frame_before = harness.frame()?;
+    harness.key(Key::ArrowDown); // Indent Guides
+    harness.key(Key::Enter);
+    let frame_after = harness.frame()?;
+    let line_h = harness.app.state().editor_metrics().line_h;
+    let guides_before = count_guides(&frame_before, line_h);
+    let guides_after = count_guides(&frame_after, line_h);
+    if guides_before == 0 || guides_after != 0 {
+        return Err(format!(
+            "the indent-guide toggle did not take effect (before={guides_before} after={guides_after} line_h={line_h} on={})",
+            harness.app.state().settings.indent_guides
+        ));
+    }
+    harness.key(Key::ArrowDown); // Syntax
+    harness.key(Key::Enter);
+    harness.frame()?;
+    if harness.app.state().highlight.is_active() {
+        return Err("turning syntax highlighting off did not deactivate it".into());
+    }
+    harness.key(Key::Enter);
+    harness.frame()?;
+    if !harness.app.state().highlight.is_active() {
+        return Err("turning syntax highlighting back on failed".into());
+    }
+    harness.key(Key::ArrowDown); // Sidebar Width
+    harness.key(Key::ArrowRight);
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        if (state.sidebar.rect.width() - 240.0).abs() > 1.5 {
+            return Err(format!(
+                "sidebar width setting did not resize the sidebar (got {})",
+                state.sidebar.rect.width()
+            ));
+        }
+    }
+    // Persist an 8-space tab width for the session-restore assertion.
+    for _ in 0..4 {
+        harness.key(Key::ArrowUp); // -> Tab Width row
+    }
+    harness.key(Key::ArrowRight);
+    if harness.app.state().settings.tab_width != 8 {
+        return Err("tab width navigation did not land on the Tab Width row".into());
+    }
+    harness.key(Key::Escape);
+    if harness.app.state().settings_open {
+        return Err("Esc did not close the settings panel".into());
+    }
+
+    // Discoverability: View > Settings… opens the same panel.
+    let view_item = harness
+        .app
+        .state()
+        .menubar_hits
+        .iter()
+        .find(|(menu, _)| *menu == Menu::View)
+        .map(|(_, rect)| rect.center())
+        .ok_or("no View menu hit rect")?;
+    harness.click(view_item);
+    harness.frame()?;
+    let measurer = igui_ui::text_measurer(harness.app.tree());
+    let settings_item = {
+        let state = harness.app.state();
+        let (_, items) = crate::ui::menu::popup_layout(&state, measurer.as_ref());
+        items
+            .iter()
+            .find(|(action, _)| *action == Some(Action::Settings))
+            .map(|(_, rect)| rect.center())
+            .ok_or("View menu has no Settings item")?
+    };
+    harness.click(settings_item);
+    harness.frame()?;
+    if !harness.app.state().settings_open {
+        return Err("View > Settings… did not open the settings panel".into());
+    }
+    harness.key(Key::Escape);
+    harness.frame()?;
+
+    // Sidebar drag: one centered divider line plus a light grip bar. The
+    // sidebar no longer draws its own border, so there is exactly one line.
+    let dark = crate::theme::Theme::new(Mode::Dark);
+    let (drag_from, drag_to, width_before, divider_height) = {
+        let state = harness.app.state();
+        let rect = state.sidebar.rect;
+        (
+            Vec2::new(rect.right() + 2.0, rect.center().y),
+            Vec2::new(rect.right() + 42.0, rect.center().y),
+            state.settings.sidebar_width,
+            rect.height(),
+        )
+    };
+    let frame = harness.frame()?;
+    let idle_line = find_fill(&frame, dark.p.border.to_rgba8(), 1.0, divider_height)
+        .ok_or("the sidebar handle has no idle divider line")?;
+    if (idle_line.center().x - drag_from.x).abs() > 3.0 {
+        return Err("the divider line is not centered on the handle".into());
+    }
+    let idle_grip = find_fill(
+        &frame,
+        dark.p.faint.to_rgba8(),
+        crate::ui::sidebar::GRIP_WIDTH,
+        crate::ui::sidebar::GRIP_HEIGHT,
+    )
+    .ok_or("the sidebar handle has no idle grip bar")?;
+    if (idle_grip.center().x - (drag_from.x + 1.0)).abs() > 1.5 {
+        return Err("the grip bar is not centered on the divider line".into());
+    }
+    if count_vertical_lines(&frame, drag_from.x - 4.0, drag_from.x + 5.0, divider_height) != 1 {
+        return Err("the sidebar shows more than one divider line".into());
+    }
+    harness.event(InputEvent::PointerDown {
+        position: drag_from,
+        button: PointerButton::Left,
+    });
+    if harness.app.state().sidebar_drag.is_none() {
+        return Err("pressing the divider did not start a drag".into());
+    }
+    let frame = harness.frame()?;
+    if find_fill(&frame, dark.p.accent.to_rgba8(), 1.0, divider_height).is_none() {
+        return Err("the divider line did not turn accent while dragging".into());
+    }
+    if find_fill(
+        &frame,
+        dark.p.accent.to_rgba8(),
+        crate::ui::sidebar::GRIP_WIDTH,
+        crate::ui::sidebar::GRIP_HEIGHT,
+    )
+    .is_none()
+    {
+        return Err("the grip bar did not highlight while dragging".into());
+    }
+    if find_fill(
+        &frame,
+        dark.p.accent.alpha_mul(0.16).to_rgba8(),
+        4.0,
+        divider_height,
+    )
+    .is_none()
+    {
+        return Err("the divider strip is not tinted while dragging".into());
+    }
+    harness.event(InputEvent::PointerMove { position: drag_to });
+    harness.event(InputEvent::PointerUp {
+        position: drag_to,
+        button: PointerButton::Left,
+    });
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        let expected = crate::settings::clamp_sidebar(width_before + 40.0);
+        if (state.settings.sidebar_width - expected).abs() > 1.0 {
+            return Err(format!(
+                "sidebar drag did not apply (expected {expected}, got {})",
+                state.settings.sidebar_width
+            ));
+        }
+        if (state.sidebar.rect.width() - expected).abs() > 1.5 {
+            return Err("the sidebar did not relayout during/after the drag".into());
+        }
+        if (state.session.sidebar_width - expected).abs() > 1.0 {
+            return Err("the sidebar width was not persisted".into());
+        }
+    }
+    // Hovering brightens the same single line and the grip.
+    let (hover, hover_height) = {
+        let state = harness.app.state();
+        (
+            Vec2::new(
+                state.sidebar.rect.right() + 2.0,
+                state.sidebar.rect.center().y,
+            ),
+            state.sidebar.rect.height(),
+        )
+    };
+    harness.event(InputEvent::PointerMove { position: hover });
+    let frame = harness.frame()?;
+    if find_fill(&frame, dark.p.dim.to_rgba8(), 1.0, hover_height).is_none() {
+        return Err("hovering the divider did not brighten the line".into());
+    }
+    if find_fill(
+        &frame,
+        dark.p.text.to_rgba8(),
+        crate::ui::sidebar::GRIP_WIDTH,
+        crate::ui::sidebar::GRIP_HEIGHT,
+    )
+    .is_none()
+    {
+        return Err("hovering the divider did not brighten the grip".into());
+    }
+
+    // Large-file behavior: preview truncation and the open guard.
+    harness.dialogs.push(Some(dir.join("large.md")));
+    harness.shortcut(
+        Key::Character('o'),
+        Modifiers {
+            meta: true,
+            ..Modifiers::NONE
+        },
+    );
+    let frame = harness.frame()?;
+    expect(
+        &texts(&frame),
+        "preview truncated at 512 KB",
+        "large preview banner",
+    )?;
+    if harness.app.state().ws.active_doc().map(|doc| doc.name()) != Some("large.md") {
+        return Err("the large Markdown fixture did not open".into());
+    }
+    harness.shortcut(
+        Key::Character('w'),
+        Modifiers {
+            meta: true,
+            ..Modifiers::NONE
+        },
+    );
+    harness.frame()?;
+    harness.dialogs.push(Some(dir.join("huge.txt")));
+    harness.shortcut(
+        Key::Character('o'),
+        Modifiers {
+            meta: true,
+            ..Modifiers::NONE
+        },
+    );
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        if state.ws.tabs.iter().any(|doc| doc.name() == "huge.txt") {
+            return Err("a >32 MB file must be refused".into());
+        }
+        if !state
+            .message()
+            .is_some_and(|(message, _)| message.contains("too large"))
+        {
+            return Err("the oversize-open refusal was not reported".into());
+        }
+    }
+
+    // Tab overflow: many tabs force a scroll offset and keep the active visible.
+    for _ in 0..12 {
+        harness.shortcut(
+            Key::Character('n'),
+            Modifiers {
+                meta: true,
+                ..Modifiers::NONE
+            },
+        );
+    }
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        if state.tabs.scroll <= 0.0 {
+            return Err("many tabs did not scroll the strip".into());
+        }
+        let active = state.ws.active;
+        let Some((_, tab, _)) = state
+            .tabs
+            .hits
+            .iter()
+            .find(|(index, _, _)| *index == active)
+        else {
+            return Err("the active tab is not visible in the strip".into());
+        };
+        if tab.left() < 0.0 || tab.right() > WIDTH {
+            return Err("the active tab escaped the window".into());
+        }
+        let strip = state.tabs.strip;
+        let target = state
+            .tabs
+            .hits
+            .iter()
+            .find(|(index, tab, _)| {
+                *index != active
+                    && tab.left() >= strip.left()
+                    && tab.right() <= strip.right() - 28.0
+            })
+            .map(|(index, tab, _)| (*index, tab.center()));
+        if let Some((index, center)) = target {
+            drop(state);
+            harness.click(center);
+            if harness.app.state().ws.active != index {
+                return Err("clicking an overflowed tab did not select it".into());
+            }
+        }
+    }
+
     // -- theme toggle (persisted) ---------------------------------------
     harness.shortcut(
         Key::Character('l'),
@@ -790,6 +1255,7 @@ fn check(dir: &Path) -> Result<(), String> {
     if !config.is_file() {
         return Err("the session file was not written".into());
     }
+    let final_settings = harness.app.state().settings;
     let restored_dialogs = ScriptedDialogs::new(vec![]);
     let restored = EditorApp::with_config(
         None,
@@ -827,6 +1293,12 @@ fn check(dir: &Path) -> Result<(), String> {
         {
             return Err("session restore lost the recent files".into());
         }
+        if state.settings != final_settings {
+            return Err(format!(
+                "session restore lost the editor settings (restored {:?}, expected {:?})",
+                state.settings, final_settings
+            ));
+        }
     }
 
     let _ = restored_dialogs;
@@ -849,6 +1321,17 @@ fn fixture() -> Result<PathBuf, String> {
     }
     fs::write(dir.join("notes.md"), notes).map_err(|error| format!("fixture: {error}"))?;
     fs::write(dir.join("src").join("lib.rs"), "pub fn lib() {}\n")
+        .map_err(|error| format!("fixture: {error}"))?;
+    let mut large = String::new();
+    for index in 0..6_000 {
+        large.push_str(&format!(
+            "- large markdown line {index} with enough padding text to reach the truncation limit quickly\n"
+        ));
+    }
+    fs::write(dir.join("large.md"), large).map_err(|error| format!("fixture: {error}"))?;
+    let huge =
+        fs::File::create(dir.join("huge.txt")).map_err(|error| format!("fixture: {error}"))?;
+    huge.set_len(33 * 1024 * 1024)
         .map_err(|error| format!("fixture: {error}"))?;
     Ok(dir)
 }
@@ -879,6 +1362,101 @@ fn record(app: &mut EditorApp, viewport: ViewportSize) -> Result<RecordedFrame, 
         .last_frame()
         .cloned()
         .ok_or_else(|| "nothing was recorded".to_string())
+}
+
+fn draw_text_has_color(frame: &RecordedFrame, needle: &str, color: [u8; 4]) -> bool {
+    frame.commands().iter().any(|command| match command {
+        DrawCommand::DrawText { text, paint, .. } => {
+            text == needle && paint.color.to_rgba8() == color
+        }
+        _ => false,
+    })
+}
+
+fn find_fill(frame: &RecordedFrame, color: [u8; 4], width: f32, height: f32) -> Option<Rect> {
+    frame.commands().iter().find_map(|command| match command {
+        DrawCommand::FillRect { rect, paint }
+            if paint.color.to_rgba8() == color
+                && (rect.size.width - width).abs() < 0.01
+                && (rect.size.height - height).abs() < 0.01 =>
+        {
+            Some(*rect)
+        }
+        _ => None,
+    })
+}
+
+fn count_vertical_lines(frame: &RecordedFrame, x_from: f32, x_to: f32, height: f32) -> usize {
+    frame
+        .commands()
+        .iter()
+        .filter(|command| {
+            matches!(
+                command,
+                DrawCommand::FillRect { rect, .. }
+                    if (rect.size.width - 1.0).abs() < 0.01
+                        && (rect.size.height - height).abs() < 0.01
+                        && rect.left() >= x_from
+                        && rect.left() <= x_to
+            )
+        })
+        .count()
+}
+
+fn count_guides(frame: &RecordedFrame, line_h: f32) -> usize {
+    frame
+        .commands()
+        .iter()
+        .filter(|command| {
+            matches!(
+                command,
+                DrawCommand::FillRect { rect, .. }
+                    if (rect.size.width - 1.0).abs() < 0.01
+                        && (rect.size.height - line_h).abs() < 0.01
+            )
+        })
+        .count()
+}
+
+/// Status-bar runs must never overlap (the transient message used to sit on
+/// top of the directory hint).
+fn check_status_overlap(
+    frame: &RecordedFrame,
+    measurer: &dyn igui_ui::TextMeasurer,
+) -> Result<(), String> {
+    let Some(baseline) = frame.commands().iter().find_map(|command| match command {
+        DrawCommand::DrawText { text, position, .. } if text == "UTF-8" => Some(position.y),
+        _ => None,
+    }) else {
+        return Ok(());
+    };
+    let mut runs: Vec<(String, f32, f32)> = frame
+        .commands()
+        .iter()
+        .filter_map(|command| match command {
+            DrawCommand::DrawText {
+                text,
+                position,
+                font_size,
+                ..
+            } if (position.y - baseline).abs() < 0.01 => {
+                let width =
+                    measurer.measure_run_weighted(text, *font_size, igui_core::FontWeight::NORMAL);
+                Some((text.clone(), position.x, position.x + width))
+            }
+            _ => None,
+        })
+        .collect();
+    runs.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    for pair in runs.windows(2) {
+        if pair[0].2 > pair[1].1 + 0.6 {
+            return Err(format!(
+                "status bar runs overlap: {:?} [{:.1}..{:.1}] and {:?} [{:.1}..{:.1}]",
+                pair[0].0, pair[0].1, pair[0].2, pair[1].0, pair[1].1, pair[1].2
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn draw_position(frame: &RecordedFrame, needle: &str) -> Option<Vec2> {

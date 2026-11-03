@@ -1,7 +1,7 @@
 # igui-editor — design
 
-Agreed direction (M1 + M2 implemented). This document records the decisions so
-M3 does not re-litigate them.
+Agreed direction (M1–M3 implemented). This document records the decisions so
+future work does not re-litigate them.
 
 ## Product
 
@@ -40,7 +40,11 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
 - `ui/` is one module per shell region; each builds exactly one control node
   and paints itself.
 - `app.rs` owns the tree, routes input, and implements `igui_app::AppLogic`.
-  The shell is rebuilt only when its structure changes (sidebar toggle).
+  The shell is rebuilt only when its structure changes (sidebar, find bar, view
+  mode); metrics/settings changes relayout without a rebuild.
+- The crate is a library + binary: `igui_editor` exposes the extension points
+  (`syntax`, `settings`, `theme`) and the app internals; `main.rs` only parses
+  arguments and starts the host.
 - `host.rs` installs the platform plugins; `selfcheck.rs` drives the same app
   headlessly.
 
@@ -108,6 +112,35 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    so it is painted after the tree like the menu and hit-tested from one layout
    function. Enter = Save, Esc = Cancel; Save on an untitled tab routes through
    the Save As dialog and closes after a successful write.
+14. **Settings are live metrics, not a second code path.** Chrome metrics
+   (menu/tab/status heights, row height) stay in `theme::Metrics`; editor
+   typography (`font`, derived `line_h`, `tab_width`), gutter/guide toggles and
+   the sidebar width come from `Settings`. Painters read
+   `state.editor_metrics()`; changing a setting only marks paint/layout dirty,
+   and nothing rebuilds the tree. Settings persist in the session file.
+15. **The syntax API is the plugin seam.** `syntax::SyntaxProvider` is a pure,
+   `Send + Sync` line tokenizer returning byte-range tokens plus a `u32` carried
+   state; `SyntaxRegistry` maps extensions to providers and built-ins register
+   through the same public `register` call. The state must encode every
+   multi-line construct so the cache can detect convergence. No plugin loading
+   exists yet — the API, the registry and the built-ins are the deliverable.
+16. **Highlighting is incremental by line, with a budget.** `Document` records
+   the line span of its last mutation; `model::highlight` re-tokenizes from the
+   first touched line and stops when the outgoing state equals the cached state
+   for the next line (and the edit is behind it). Work is capped per frame and
+   resumed next frame (`needs_frame`), so a large file cannot stall a keystroke.
+   Above 2 MB / 20k lines highlighting is off.
+17. **Large files degrade explicitly.** 2 MB/20k lines: no highlighting;
+   8 MB: no preview (banner, editing still works); 32 MB: opening is refused;
+   preview above 512 KB renders a prefix plus a truncation banner. Limits are
+   constants, documented in the README, not heuristics.
+18. **Sidebar resize and tab overflow avoid rebuilds.** The 4 px handle owns the
+   only separator line (the sidebar paints no right border) and a centered light
+   grip bar; hover brightens both and dragging tints the handle and turns line +
+   grip accent. It updates the sidebar's flex basis and calls `mark_dirty` during
+   the drag (no tree rebuild). Tabs shrink to 96 px, then scroll horizontally
+   with the active tab kept visible. Both states persist (sidebar width in the
+   session).
 
 ## Theme spec (geek / compact / no corners)
 
@@ -121,8 +154,8 @@ Metrics (`theme::Metrics::COMPACT`):
 
 | token | value |
 |---|---|
-| UI font / small / editor | 12 / 11 / 13 px |
-| editor line / sidebar row | 19 / 22 px |
+| UI font / small / editor | 12 / 11 / 13 px (editor configurable 11–18) |
+| editor line / sidebar row | 19 / 22 px (default font; scales with settings) |
 | menu bar / tab strip / status | 26 / 28 / 22 px |
 | sidebar width | 232 px |
 | scrollbar | 8 px (4 px thumb inset) |
@@ -144,6 +177,11 @@ Palette:
 | gutter | `#0D1117` | `#EEF2F7` |
 | hover / active row | `#151C26` / `#19222E` | `#E3EAF2` / `#DCE6F1` |
 | error | `#F07178` | `#C0392B` |
+| syntax keyword / type | `#C792EA` / `#7DD3FC` | `#8B3FA8` / `#0369A1` |
+| syntax function / string | `#82E2A6` / `#E6C889` | `#0F7B4F` / `#956400` |
+| syntax number / constant | `#F78C6C` / `#FF9E64` | `#B45309` / `#C2410C` |
+| syntax comment / macro | `#55637A` / `#39E0AE` | `#93A1B1` / `#0A8F6F` |
+| syntax punctuation | `#8494A8` | `#5C6C7E` |
 
 Monospace face candidates, first installed wins:
 SF Mono, Menlo, JetBrains Mono, Fira Code, DejaVu Sans Mono. CJK falls back via

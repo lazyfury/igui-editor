@@ -23,9 +23,11 @@ use crate::state::{AppState, ViewMode};
 use crate::theme::{Mode, Theme};
 
 const PAD: f32 = 18.0;
-const BODY: f32 = 13.0;
-const BODY_LINE: f32 = 20.0;
 const SCROLLBAR: f32 = 8.0;
+/// Above this size the preview parses only a prefix and shows a banner.
+pub const PREVIEW_MAX_BYTES: usize = 512 * 1024;
+/// Above this size the preview is disabled (banner only).
+pub const PREVIEW_LARGE_BYTES: usize = 8 * 1024 * 1024;
 
 /// One backend-neutral preview drawing primitive (content-space coordinates).
 #[derive(Clone, Debug, PartialEq)]
@@ -54,6 +56,7 @@ struct CacheKey {
     rev: u64,
     width: u32,
     mode: Mode,
+    font: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -78,6 +81,10 @@ pub struct PreviewUi {
     /// Parsed blocks and the `(document id, revision)` they came from.
     blocks: Vec<Block>,
     parsed_key: Option<(u64, u64)>,
+    /// The document was cut at [`PREVIEW_MAX_BYTES`].
+    truncated: bool,
+    /// The document is too large to preview at all.
+    too_large: bool,
 }
 
 impl std::fmt::Debug for PreviewUi {
@@ -176,17 +183,27 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     };
     let doc_id = doc.id();
     let rev = doc.rev();
-    let key = (doc_id, rev);
-    if state.preview.parsed_key != Some(key) {
+    if state.preview.parsed_key != Some((doc_id, rev)) {
         let text = doc.text().to_string();
-        state.preview.blocks = markdown::parse(&text);
-        state.preview.parsed_key = Some(key);
+        let len = text.len();
+        state.preview.too_large = len > PREVIEW_LARGE_BYTES;
+        state.preview.truncated = len > PREVIEW_MAX_BYTES && !state.preview.too_large;
+        state.preview.blocks = if state.preview.too_large {
+            Vec::new()
+        } else if state.preview.truncated {
+            markdown::parse(&text[..truncate_boundary(&text, PREVIEW_MAX_BYTES)])
+        } else {
+            markdown::parse(&text)
+        };
+        state.preview.parsed_key = Some((doc_id, rev));
     }
+    let body = state.settings.editor().font;
     let key = CacheKey {
         doc: doc_id,
         rev,
         width: view.width().round() as u32,
         mode: theme.mode,
+        font: body.round() as u32,
     };
     if state
         .preview
@@ -194,7 +211,26 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         .as_ref()
         .is_none_or(|cache| cache.key != key)
     {
-        let (prims, height) = layout(&state.preview.blocks, measurer, view.width(), &theme);
+        let (mut prims, mut height) = if state.preview.too_large {
+            (
+                vec![banner(
+                    "preview disabled for files over 8 MB — use the editor",
+                    p.faint,
+                    0.0,
+                )],
+                44.0,
+            )
+        } else {
+            layout(&state.preview.blocks, measurer, view.width(), &theme, body)
+        };
+        if state.preview.truncated {
+            prims.push(banner(
+                "… preview truncated at 512 KB — use the editor for the rest",
+                p.faint,
+                height,
+            ));
+            height += 28.0;
+        }
         state.preview.cache = Some(Cache { key, prims, height });
     }
     let Some(cache) = &state.preview.cache else {
@@ -287,8 +323,12 @@ fn layout(
     measurer: &dyn TextMeasurer,
     width: f32,
     theme: &Theme,
+    body: f32,
 ) -> (Vec<Prim>, f32) {
     let p = theme.p;
+    let body_line = (body * 1.54).round().max(14.0);
+    let code_font = (body - 1.0).max(9.0);
+    let code_line = (code_font * 1.5).round().max(12.0);
     let content_w = (width - PAD * 2.0).max(40.0);
     let mut prims = Vec::new();
     let mut y = PAD;
@@ -304,13 +344,13 @@ fn layout(
         match &block.kind {
             BlockKind::Heading { level, runs } => {
                 let (size, weight): (f32, FontWeight) = match level {
-                    1 => (21.0, FontWeight::BOLD),
-                    2 => (18.0, FontWeight::BOLD),
-                    3 => (16.0, FontWeight::SEMI_BOLD),
-                    4 => (14.0, FontWeight::SEMI_BOLD),
-                    _ => (13.0, FontWeight::MEDIUM),
+                    1 => (body + 8.0, FontWeight::BOLD),
+                    2 => (body + 5.0, FontWeight::BOLD),
+                    3 => (body + 3.0, FontWeight::SEMI_BOLD),
+                    4 => (body + 1.0, FontWeight::SEMI_BOLD),
+                    _ => (body, FontWeight::MEDIUM),
                 };
-                let line_h = (size * 1.4).round();
+                let line_h = (size * 1.35).round().max(body_line);
                 y = place_runs(
                     &mut prims,
                     measurer,
@@ -335,8 +375,8 @@ fn layout(
                     x,
                     max_w,
                     y,
-                    BODY,
-                    BODY_LINE,
+                    body,
+                    body_line,
                     FontWeight::NORMAL,
                     base_color,
                     theme,
@@ -354,12 +394,12 @@ fn layout(
                 } else {
                     "•".to_string()
                 };
-                let marker_w = kit::width(measurer, &marker, BODY) + 8.0;
+                let marker_w = kit::width(measurer, &marker, body) + 8.0;
                 prims.push(Prim::Text {
                     x,
-                    baseline: baseline(y, BODY_LINE, BODY, measurer),
+                    baseline: baseline(y, body_line, body, measurer),
                     text: marker,
-                    size: BODY,
+                    size: body,
                     weight: FontWeight::NORMAL,
                     color: p.faint,
                     bg: None,
@@ -373,8 +413,8 @@ fn layout(
                     x + marker_w,
                     (max_w - marker_w).max(20.0),
                     y,
-                    BODY,
-                    BODY_LINE,
+                    body,
+                    body_line,
                     FontWeight::NORMAL,
                     base_color,
                     theme,
@@ -383,7 +423,7 @@ fn layout(
                 y += 2.0;
             }
             BlockKind::Code { lang, lines } => {
-                let line_h = 18.0;
+                let line_h = code_line;
                 let height = lines.len().max(1) as f32 * line_h + 16.0;
                 prims.push(Prim::Fill {
                     rect: Rect::from_min_size(Vec2::new(PAD, y), Size::new(content_w, height)),
@@ -411,7 +451,7 @@ fn layout(
                         x: PAD + 10.0,
                         baseline: y + 8.0 + index as f32 * line_h + 13.0,
                         text: line.clone(),
-                        size: 12.0,
+                        size: code_font,
                         weight: FontWeight::NORMAL,
                         color: p.text,
                         bg: None,
@@ -431,19 +471,21 @@ fn layout(
             BlockKind::Image { alt } => {
                 prims.push(Prim::Text {
                     x,
-                    baseline: baseline(y, BODY_LINE, BODY, measurer),
+                    baseline: baseline(y, body_line, body, measurer),
                     text: format!("▢ {alt}"),
-                    size: BODY,
+                    size: body,
                     weight: FontWeight::NORMAL,
                     color: p.faint,
                     bg: None,
                     underline: false,
                     strike: false,
                 });
-                y += BODY_LINE + 4.0;
+                y += body_line + 4.0;
             }
             BlockKind::Table(table) => {
-                y = layout_table(&mut prims, measurer, table, x, max_w, y, theme);
+                y = layout_table(
+                    &mut prims, measurer, table, x, max_w, y, theme, body, body_line,
+                );
                 y += 12.0;
             }
         }
@@ -740,6 +782,7 @@ const TABLE_MAX_COL: f32 = 320.0;
 
 /// Lays out one table: natural column widths (shrunk to fit), header row with a
 /// raised background, one rule per row and square outer borders.
+#[allow(clippy::too_many_arguments)]
 fn layout_table(
     prims: &mut Vec<Prim>,
     measurer: &dyn TextMeasurer,
@@ -748,6 +791,8 @@ fn layout_table(
     max_w: f32,
     y: f32,
     theme: &Theme,
+    body: f32,
+    body_line: f32,
 ) -> f32 {
     let p = theme.p;
     let columns = table.columns();
@@ -755,11 +800,11 @@ fn layout_table(
     for (column, width) in widths.iter_mut().enumerate() {
         let mut widest: f32 = 0.0;
         if let Some(cell) = table.header.get(column) {
-            widest = widest.max(runs_width(measurer, cell, BODY, FontWeight::BOLD));
+            widest = widest.max(runs_width(measurer, cell, body, FontWeight::BOLD));
         }
         for row in &table.rows {
             if let Some(cell) = row.get(column) {
-                widest = widest.max(runs_width(measurer, cell, BODY, FontWeight::NORMAL));
+                widest = widest.max(runs_width(measurer, cell, body, FontWeight::NORMAL));
             }
         }
         *width = (widest + TABLE_PAD_X * 2.0).clamp(TABLE_MIN_COL, TABLE_MAX_COL);
@@ -785,6 +830,8 @@ fn layout_table(
         row_y,
         theme,
         true,
+        body,
+        body_line,
     );
     prims.insert(
         header_start,
@@ -800,7 +847,9 @@ fn layout_table(
     row_y += header_h;
 
     for row in &table.rows {
-        let height = layout_table_row(prims, measurer, row, &widths, table, x, row_y, theme, false);
+        let height = layout_table_row(
+            prims, measurer, row, &widths, table, x, row_y, theme, false, body, body_line,
+        );
         prims.push(Prim::Fill {
             rect: Rect::from_min_size(Vec2::new(x, row_y + height - 1.0), Size::new(total, 1.0)),
             color: p.border,
@@ -839,6 +888,8 @@ fn layout_table_row(
     y: f32,
     theme: &Theme,
     header: bool,
+    body: f32,
+    body_line: f32,
 ) -> f32 {
     let p = theme.p;
     let weight = if header {
@@ -846,7 +897,7 @@ fn layout_table_row(
     } else {
         FontWeight::NORMAL
     };
-    let mut bottom = y + BODY_LINE;
+    let mut bottom = y + body_line;
     let mut cell_x = x;
     for (column, width) in widths.iter().enumerate() {
         let runs = cells.get(column).map(Vec::as_slice).unwrap_or(&[]);
@@ -862,8 +913,8 @@ fn layout_table_row(
             cell_x + TABLE_PAD_X,
             (width - TABLE_PAD_X * 2.0).max(8.0),
             y + TABLE_PAD_Y,
-            BODY,
-            BODY_LINE,
+            body,
+            body_line,
             weight,
             p.text,
             theme,
@@ -923,5 +974,30 @@ fn run_color(style: Style, base: Color, p: crate::theme::Palette) -> Color {
         Style::Code | Style::Link => p.accent,
         Style::Strikethrough => p.dim,
         _ => base,
+    }
+}
+
+fn truncate_boundary(text: &str, max: usize) -> usize {
+    if text.len() <= max {
+        return text.len();
+    }
+    let mut index = max;
+    while index > 0 && !text.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+
+fn banner(text: &str, color: Color, y: f32) -> Prim {
+    Prim::Text {
+        x: PAD,
+        baseline: y + 20.0,
+        text: text.to_string(),
+        size: 12.0,
+        weight: FontWeight::NORMAL,
+        color,
+        bg: None,
+        underline: false,
+        strike: false,
     }
 }
