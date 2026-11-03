@@ -855,6 +855,45 @@ pub struct TabMenuUi {
     pub hover: Option<usize>,
 }
 
+/// Actions in a file-tree row's right-click menu.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TreeMenuAction {
+    Open,
+    NewFile,
+    CopyPath,
+    Reveal,
+}
+
+impl TreeMenuAction {
+    pub const ALL: [TreeMenuAction; 4] = [
+        TreeMenuAction::Open,
+        TreeMenuAction::NewFile,
+        TreeMenuAction::CopyPath,
+        TreeMenuAction::Reveal,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            TreeMenuAction::Open => "Open",
+            TreeMenuAction::NewFile => "New File…",
+            TreeMenuAction::CopyPath => "Copy Path",
+            TreeMenuAction::Reveal => "Reveal in Finder",
+        }
+    }
+}
+
+/// File-tree context-menu overlay state.
+#[derive(Clone, Debug)]
+pub struct TreeMenuUi {
+    pub path: PathBuf,
+    pub name: String,
+    pub is_dir: bool,
+    pub at: Vec2,
+    pub rect: Rect,
+    pub hits: Vec<(TreeMenuAction, Rect)>,
+    pub hover: Option<usize>,
+}
+
 /// A planned replace-in-files run (applied from the confirmation modal).
 #[derive(Clone, Debug)]
 pub struct ReplaceJob {
@@ -978,6 +1017,7 @@ pub struct AppState {
     pub tabs: TabsUi,
     pub tab_drag: Option<TabDrag>,
     pub tab_menu: Option<TabMenuUi>,
+    pub tree_menu: Option<TreeMenuUi>,
     pub menu_open: Option<Menu>,
     pub menubar_hover: Option<Menu>,
     pub menubar_hits: Vec<(Menu, Rect)>,
@@ -1120,6 +1160,7 @@ impl AppState {
             },
             tab_drag: None,
             tab_menu: None,
+            tree_menu: None,
             menu_open: None,
             menubar_hover: None,
             menubar_hits: Vec::new(),
@@ -1962,6 +2003,14 @@ impl AppState {
 
     /// Opens the quick-create-file prompt.
     pub fn open_new_file(&mut self) {
+        let (dir, _) = self.dialog_context();
+        let dir =
+            dir.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        self.open_new_file_in(dir);
+    }
+
+    /// Opens the quick-create prompt rooted at `dir` (tree context menu).
+    pub fn open_new_file_in(&mut self, dir: PathBuf) {
         if self.new_file.open || self.modal.is_some() || self.recovery_prompt.is_some() {
             return;
         }
@@ -1974,9 +2023,8 @@ impl AppState {
         self.close_find();
         self.menu_open = None;
         self.tab_menu = None;
-        let (dir, _) = self.dialog_context();
-        self.new_file.dir =
-            dir.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        self.tree_menu = None;
+        self.new_file.dir = dir;
         self.new_file.name = TextEdit::new("untitled.md");
         self.new_file.name.select_all();
         self.new_file.error = None;
@@ -2066,6 +2114,7 @@ impl AppState {
         }
         self.settings_open = false;
         self.menu_open = None;
+        self.tree_menu = None;
         self.lsp.dismiss_transient();
         if self.search.open {
             self.close_project_search();
@@ -2153,6 +2202,7 @@ impl AppState {
         self.settings_open = false;
         self.quick_open.open = false;
         self.menu_open = None;
+        self.tree_menu = None;
         self.lsp.dismiss_transient();
         self.search.open = true;
         self.search.query.select_all();
@@ -2944,6 +2994,72 @@ impl AppState {
         }
     }
 
+    /// Runs a file-tree context-menu command.
+    pub fn run_tree_menu(&mut self, path: PathBuf, is_dir: bool, action: TreeMenuAction) {
+        self.tree_menu = None;
+        match action {
+            TreeMenuAction::Open => {
+                if is_dir {
+                    self.ws.tree.toggle(&path);
+                } else {
+                    self.open_path(path);
+                }
+            }
+            TreeMenuAction::NewFile => {
+                let dir = if is_dir {
+                    path
+                } else {
+                    path.parent()
+                        .map(Path::to_path_buf)
+                        .unwrap_or_else(|| self.ws.root.clone())
+                };
+                self.open_new_file_in(dir);
+            }
+            TreeMenuAction::CopyPath => {
+                let text = path.display().to_string();
+                self.set_clipboard(&text);
+                self.status(format!("copied {text}"));
+            }
+            TreeMenuAction::Reveal => self.reveal_path(&path),
+        }
+        self.dirty = true;
+    }
+
+    fn reveal_path(&mut self, path: &Path) {
+        let result = {
+            #[cfg(target_os = "macos")]
+            {
+                std::process::Command::new("open")
+                    .arg("-R")
+                    .arg(path)
+                    .spawn()
+            }
+            #[cfg(target_os = "linux")]
+            {
+                std::process::Command::new("xdg-open")
+                    .arg(path.parent().unwrap_or(path))
+                    .spawn()
+            }
+            #[cfg(target_os = "windows")]
+            {
+                std::process::Command::new("explorer")
+                    .arg(format!("/select,{}", path.display()))
+                    .spawn()
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+            {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "reveal is unsupported on this platform",
+                ))
+            }
+        };
+        match result {
+            Ok(_) => self.status(format!("revealed {}", path.display())),
+            Err(error) => self.error(format!("reveal failed: {error}")),
+        }
+    }
+
     /// Runs a tab context-menu command.
     pub fn run_tab_menu(&mut self, action: TabMenuAction, tab: usize) {
         self.tab_menu = None;
@@ -3197,6 +3313,7 @@ impl AppState {
     pub fn open_find(&mut self, replace: bool) {
         self.settings_open = false;
         self.quick_open.open = false;
+        self.tree_menu = None;
         self.lsp.dismiss_transient();
         if self.search.open {
             self.close_project_search();

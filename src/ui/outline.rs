@@ -187,6 +187,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         let text = match (state.ws.active_doc(), state.lsp.status()) {
             (None, _) => "No document",
             (Some(_), crate::model::lsp::LspStatus::Starting) => "Indexing…",
+            (Some(_), crate::model::lsp::LspStatus::Error(_error)) => "LSP error",
             (Some(_), _) => "No symbols",
         };
         kit::text(
@@ -197,6 +198,22 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             m.font_small,
             p.faint,
         );
+        if let crate::model::lsp::LspStatus::Error(error) = state.lsp.status() {
+            let error = kit::truncate(
+                env.measurer,
+                error,
+                m.font_small,
+                (rect.width() - PAD * 2.0).max(20.0),
+            );
+            kit::text(
+                env.ctx,
+                &error,
+                rect.left() + PAD,
+                list.top() + 42.0,
+                m.font_small,
+                p.error,
+            );
+        }
         return;
     }
 

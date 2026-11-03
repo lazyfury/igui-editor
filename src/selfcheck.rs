@@ -287,6 +287,27 @@ fn check(dir: &Path) -> Result<(), String> {
         doc.set_caret(0);
     }
 
+    // -- file-tree context menu ------------------------------------------
+    let tree_pos = sidebar_click_position(&harness.app, "main.rs")?;
+    harness.right_click(tree_pos);
+    harness.frame()?;
+    if harness.app.state().tree_menu.is_none() {
+        return Err("right-clicking a file-tree row did not open its menu".into());
+    }
+    let copy_item = {
+        let state = harness.app.state();
+        let (_, hits) = crate::ui::tree_menu::layout(&state);
+        hits.iter()
+            .find(|(action, _, _)| *action == crate::state::TreeMenuAction::CopyPath)
+            .map(|(_, rect, _)| rect.center())
+            .ok_or("tree context menu has no Copy Path item")?
+    };
+    harness.click(copy_item);
+    harness.frame()?;
+    if harness.app.state().tree_menu.is_some() {
+        return Err("tree context menu did not close after Copy Path".into());
+    }
+
     // -- double-click selects the word under the pointer, without snapping
     // the selection back to the clicked caret.
     let main_at = draw_position(&frame, "main").ok_or("main token was not painted")?;

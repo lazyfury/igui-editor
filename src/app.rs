@@ -282,6 +282,7 @@ impl EditorApp {
         let mut state = self.state.borrow_mut();
         ui::menu::paint_popup(&mut state, measurer.as_ref(), ctx);
         ui::tab_menu::paint(&mut state, measurer.as_ref(), ctx);
+        ui::tree_menu::paint(&mut state, measurer.as_ref(), ctx);
         ui::settings::paint(&mut state, measurer.as_ref(), ctx);
         ui::quick_open::paint(&mut state, measurer.as_ref(), ctx);
         ui::new_file::paint(&mut state, measurer.as_ref(), ctx);
@@ -367,6 +368,23 @@ impl EditorApp {
                         }
                     }
                 }
+                if state.tree_menu.is_some() {
+                    match ui::tree_menu::click(&mut state, *position) {
+                        ui::tree_menu::Click::Outside => {
+                            state.tree_menu = None;
+                            state.dirty = true;
+                        }
+                        ui::tree_menu::Click::Consumed => return EventResult::Handled,
+                        ui::tree_menu::Click::Run(action) => {
+                            let menu = state.tree_menu.clone();
+                            state.tree_menu = None;
+                            if let Some(menu) = menu {
+                                state.run_tree_menu(menu.path, menu.is_dir, action);
+                            }
+                            return EventResult::Handled;
+                        }
+                    }
+                }
                 // Footer language selector (bottom-right): a click toggles the
                 // language popup, which opens above the status bar.
                 if state.ws.active_doc().is_some() && state.language_hit.contains(*position) {
@@ -417,9 +435,21 @@ impl EditorApp {
                 if state.settings_open || state.quick_open.open || state.search.open {
                     return EventResult::Handled;
                 }
+                if let Some(index) = ui::sidebar::hover_at(&state, *position) {
+                    if let Some(row) = state.ws.tree.rows().get(index).cloned() {
+                        state.tab_drag = None;
+                        state.tab_menu = None;
+                        state.tree_menu = None;
+                        state.menu_open = None;
+                        state.menu_hover = None;
+                        ui::tree_menu::open(&mut state, row.path, row.name, row.is_dir, *position);
+                        return EventResult::Handled;
+                    }
+                }
                 let tab = ui::tabs::hover_at(&state, *position);
                 state.tab_drag = None;
                 state.tab_menu = None;
+                state.tree_menu = None;
                 state.menu_open = None;
                 state.menu_hover = None;
                 if let Some(tab) = tab.filter(|index| *index != usize::MAX) {
@@ -454,6 +484,15 @@ impl EditorApp {
                         true
                     }
                 });
+                let tree_menu = ui::tree_menu::hover_at(&state, *position);
+                let tree_menu_changed = state.tree_menu.as_mut().is_some_and(|menu| {
+                    if menu.hover == tree_menu {
+                        false
+                    } else {
+                        menu.hover = tree_menu;
+                        true
+                    }
+                });
                 if state.menubar_hover != menubar
                     || state.menu_hover != menu_hover
                     || state.tabs.hover != tabs
@@ -467,7 +506,7 @@ impl EditorApp {
                     state.language_hover = language;
                     state.dirty = true;
                 }
-                if tab_menu_changed {
+                if tab_menu_changed || tree_menu_changed {
                     state.dirty = true;
                 }
                 ui::outline::hover_at(&mut state, *position);
@@ -586,6 +625,11 @@ impl EditorApp {
                     {
                         state.terminal_write(&bytes);
                     }
+                    return EventResult::Handled;
+                }
+                if state.tree_menu.is_some() && *key == Key::Escape {
+                    state.tree_menu = None;
+                    state.dirty = true;
                     return EventResult::Handled;
                 }
                 if state.tab_menu.is_some() && *key == Key::Escape {

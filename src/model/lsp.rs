@@ -365,7 +365,20 @@ fn resolve_command(command: &str) -> std::ffi::OsString {
         directories.push(home.join(".local/bin"));
     }
     directories.push(PathBuf::from("/opt/homebrew/bin"));
+    directories.push(PathBuf::from("/opt/homebrew/opt/rustup/bin"));
     directories.push(PathBuf::from("/usr/local/bin"));
+    directories.push(PathBuf::from("/usr/local/opt/rustup/bin"));
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        let toolchains = home.join(".rustup/toolchains");
+        if let Ok(entries) = std::fs::read_dir(&toolchains) {
+            let mut bins: Vec<PathBuf> = entries
+                .flatten()
+                .map(|entry| entry.path().join("bin"))
+                .collect();
+            bins.sort();
+            directories.extend(bins);
+        }
+    }
     for directory in directories {
         let candidate = directory.join(command);
         if candidate.is_file() {

@@ -117,6 +117,10 @@ is no server for loose files or non-project buffers.
 - Semantic tokens refine the syntax pass: variables, parameters, fields,
   functions/methods, types, macros, keywords and literals get server-aware
   colors. Tokens the server does not classify keep their syntax color.
+- Packaged apps launched from Finder also search `~/.cargo/bin`,
+  `/opt/homebrew/bin`, `/opt/homebrew/opt/rustup/bin`, `/usr/local/bin` and
+  rustup toolchains; if the server still cannot start, the OUTLINE panel shows
+  the error detail.
 - `F1` shows server hover, `F12` jumps to definition, and `⌘I` (`Ctrl+I` on
   Linux/Windows) opens completion. `Ctrl+Space` also works where the OS does
   not reserve it for input-method switching. Completion uses `↑`/`↓`,
@@ -279,6 +283,7 @@ Mouse: click a folder to expand it, a file to open it in a tab, `×` to close a
 tab (unsaved tabs open a Save / Discard / Cancel modal), `+` for a new buffer,
 drag a tab to reorder it, right-click it for Close / Close Others / Close to the
 Right / Copy Path / Reveal in Sidebar (closing several dirty tabs asks once),
+right-click a file-tree row for Open / New File / Copy Path / Reveal in Finder,
 drag the editor scrollbars, drag in the text to select, wheel-scroll the
 preview.
 
@@ -589,6 +594,7 @@ src/
   ui/git.rs           GIT sidebar tab + diff overlay + commit prompt
   ui/lsp.rs           hover card + completion list overlays
   ui/outline.rs       right document-symbol outline
+  ui/tree_menu.rs     file-tree context menu
   ui/settings.rs      settings + Keymap row
   ui/terminal.rs      vt100 cell renderer + terminal key encoding
   input.rs            keyboard dispatch: modal -> find -> shortcuts -> tree
