@@ -419,6 +419,11 @@ impl EditorApp {
                 let sidebar = ui::sidebar::hover_at(&state, *position);
                 let language =
                     state.ws.active_doc().is_some() && state.language_hit.contains(*position);
+                let git_hover = ui::git::hover_rect(&state, *position);
+                if state.git.hover != git_hover {
+                    state.git.hover = git_hover;
+                    state.dirty = true;
+                }
                 let tab_menu = ui::tab_menu::hover_at(&state, *position);
                 let tab_menu_changed = state.tab_menu.as_mut().is_some_and(|menu| {
                     if menu.hover == tab_menu {

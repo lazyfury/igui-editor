@@ -6,6 +6,7 @@
 //! methods are added to the existing delegate class with `class_addMethod`.
 
 use std::cell::{Cell, RefCell};
+use std::mem::ManuallyDrop;
 use std::path::{Path, PathBuf};
 use std::ptr;
 
@@ -33,9 +34,13 @@ const KEY_DIRECT_OBJECT: u32 = u32::from_be_bytes(*b"----");
 struct EmptyIvars;
 
 thread_local! {
-    static WINDOW: RefCell<Option<SharedWindow>> = const { RefCell::new(None) };
-    static OPEN_HANDLER: RefCell<Option<Retained<OpenHandler>>> = const { RefCell::new(None) };
-    static RECENT_TARGET: RefCell<Option<Retained<RecentTarget>>> = const { RefCell::new(None) };
+    // These hold main-thread AppKit/winit objects. They must not be dropped by
+    // thread-local destructors at process exit: objc2 aborts if an autorelease
+    // object is finalized after the event loop; `ManuallyDrop` leaks them for
+    // the process lifetime, which is exactly what the app singleton wants.
+    static WINDOW: RefCell<Option<ManuallyDrop<SharedWindow>>> = const { RefCell::new(None) };
+    static OPEN_HANDLER: RefCell<Option<ManuallyDrop<Retained<OpenHandler>>>> = const { RefCell::new(None) };
+    static RECENT_TARGET: RefCell<Option<ManuallyDrop<Retained<RecentTarget>>>> = const { RefCell::new(None) };
     static RECENT: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
     static DIRTY: Cell<usize> = const { Cell::new(0) };
     static ALLOW_QUIT: Cell<bool> = const { Cell::new(false) };
@@ -55,7 +60,7 @@ fn wake() {
 /// Store the window and install the Apple Event open-documents handler.
 /// Called by the host before the event loop starts.
 pub fn install(window: SharedWindow) {
-    WINDOW.with(|slot| *slot.borrow_mut() = Some(window));
+    WINDOW.with(|slot| *slot.borrow_mut() = Some(ManuallyDrop::new(window)));
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
@@ -74,7 +79,7 @@ pub fn install(window: SharedWindow) {
                 andEventID: OPEN_DOCUMENTS
             ];
         }
-        *slot.borrow_mut() = Some(handler);
+        *slot.borrow_mut() = Some(ManuallyDrop::new(handler));
     });
     install_delegate_hook(mtm);
 }
@@ -289,9 +294,13 @@ impl RecentTarget {
 
 fn recent_target(mtm: MainThreadMarker) -> Retained<RecentTarget> {
     RECENT_TARGET.with(|slot| {
-        slot.borrow_mut()
-            .get_or_insert_with(|| RecentTarget::new(mtm))
-            .clone()
+        let mut slot = slot.borrow_mut();
+        if let Some(target) = slot.as_ref() {
+            return (**target).clone();
+        }
+        let target = RecentTarget::new(mtm);
+        *slot = Some(ManuallyDrop::new(target.clone()));
+        target
     })
 }
 

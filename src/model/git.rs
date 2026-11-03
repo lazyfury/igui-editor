@@ -626,7 +626,11 @@ pub fn run_log(cwd: &Path, limit: usize) -> Vec<GitCommit> {
         .stdout
         .split(|byte| *byte == 0)
         .filter(|chunk| !chunk.is_empty())
-        .map(|chunk| String::from_utf8_lossy(chunk).into_owned())
+        .map(|chunk| {
+            String::from_utf8_lossy(chunk)
+                .trim_start_matches(['\n', '\r'])
+                .to_string()
+        })
         .collect();
     fields
         .chunks_exact(5)

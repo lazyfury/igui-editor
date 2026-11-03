@@ -77,6 +77,9 @@ pub fn paint_sidebar(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         Vec2::new(header.right() - 26.0, header.top() + 5.0),
         Size::new(20.0, 20.0),
     );
+    if state.git.hover == Some(refresh) {
+        kit::fill(env.ctx, refresh, p.hover);
+    }
     env.ctx.stroke_rect(refresh, 1.0, p.border);
     kit::text_center(
         env.ctx,
@@ -139,6 +142,9 @@ pub fn paint_sidebar(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                 Vec2::new(content.left(), y - state.git.scroll),
                 Size::new(content.width() - 1.0, 34.0),
             );
+            if state.git.hover == Some(row) {
+                kit::fill(env.ctx, row, p.hover);
+            }
             if row.bottom() > content.top() && row.top() < content.bottom() {
                 kit::text(
                     env.ctx,
@@ -224,10 +230,14 @@ pub fn paint_sidebar(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                 Size::new(content.width() - 1.0, ROW_H),
             );
             let selected = state.git.selected.as_deref() == Some(entry.path.as_path());
+            let action = Rect::from_min_size(
+                Vec2::new(row.right() - 24.0, row.top() + 2.0),
+                Size::new(20.0, 18.0),
+            );
             if selected {
                 kit::fill(env.ctx, row, p.active);
                 kit::vline(env.ctx, row.left(), row.top(), row.bottom(), p.accent);
-            } else if state.sidebar.hover.is_some_and(|index| index == rows.len()) {
+            } else if state.git.hover == Some(row) || state.git.hover == Some(action) {
                 kit::fill(env.ctx, row, p.hover);
             }
             kit::text(
@@ -251,10 +261,6 @@ pub fn paint_sidebar(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                 kit::baseline(measurer, row, m.font_ui),
                 m.font_ui,
                 if selected { p.text } else { p.dim },
-            );
-            let action = Rect::from_min_size(
-                Vec2::new(row.right() - 24.0, row.top() + 2.0),
-                Size::new(20.0, 18.0),
             );
             if !entry.conflict {
                 env.ctx.stroke_rect(action, 1.0, p.border);
@@ -286,6 +292,9 @@ pub fn paint_sidebar(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         Vec2::new(bottom.right() - bottom.width() * 0.56, bottom.top()),
         Size::new(bottom.width() * 0.56, 24.0),
     );
+    if state.git.hover == Some(stage_all) {
+        kit::fill(env.ctx, stage_all, p.hover);
+    }
     env.ctx.stroke_rect(stage_all, 1.0, p.border);
     kit::text_center(
         env.ctx,
@@ -330,6 +339,40 @@ pub fn paint_sidebar(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             p.faint,
         );
     }
+}
+
+pub fn hover_rect(state: &AppState, pos: Vec2) -> Option<Rect> {
+    if state.sidebar_tab != "git" || !state.sidebar.rect.contains(pos) {
+        return None;
+    }
+    for rect in [
+        state.git.refresh_rect,
+        state.git.stage_all_rect,
+        state.git.commit_rect,
+        state.git.changes_rect,
+        state.git.history_rect,
+    ] {
+        if rect.width() > 0.0 && rect.contains(pos) {
+            return Some(rect);
+        }
+    }
+    if state.git.mode == crate::state::GitMode::History {
+        return state
+            .git
+            .history_rows
+            .iter()
+            .find(|(_, rect)| rect.contains(pos))
+            .map(|(_, rect)| *rect);
+    }
+    state.git.rows.iter().find_map(|(_, _, row, action)| {
+        if action.contains(pos) {
+            Some(*action)
+        } else if row.contains(pos) {
+            Some(*row)
+        } else {
+            None
+        }
+    })
 }
 
 pub fn click(state: &mut AppState, pos: Vec2) -> bool {

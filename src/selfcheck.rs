@@ -3011,6 +3011,48 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
     if harness.app.state().git.detail_visible {
         return Err("Esc did not close the Git commit detail".into());
     }
+    // Hover follows the painted Commit button exactly.
+    harness.frame()?;
+    let commit_hover = harness.app.state().git.commit_rect;
+    harness.event(InputEvent::PointerMove {
+        position: commit_hover.center(),
+    });
+    harness.frame()?;
+    if harness.app.state().git.hover != Some(commit_hover) {
+        return Err("Git commit hover rect is offset from the pointer".into());
+    }
+    // A second history row must open its own commit, not an empty overlay.
+    let second = harness
+        .app
+        .state()
+        .git
+        .history_rows
+        .get(1)
+        .map(|(hash, rect)| (hash.clone(), rect.center()))
+        .ok_or("Git history has no second commit row")?;
+    harness.click(second.1);
+    for _ in 0..50 {
+        harness.frame()?;
+        if !harness.app.state().git.detail_loading && harness.app.state().git.detail.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    {
+        let state = harness.app.state();
+        let detail = state
+            .git
+            .detail
+            .as_ref()
+            .ok_or("second Git commit detail did not load")?;
+        if detail.commit.hash != second.0 {
+            return Err(format!(
+                "second Git commit detail has the wrong commit: {} vs {}",
+                detail.commit.hash, second.0
+            ));
+        }
+    }
+    harness.key(Key::Escape);
 
     // Terminal service: PTY, vt100 screen, panel and close.
     harness.shortcut(
