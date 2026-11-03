@@ -933,7 +933,9 @@ impl EditorApp {
     /// Whether a coalesced preview rebuild still needs frames. If the preview
     /// pane is no longer mounted, clear the deadline instead of spinning.
     fn preview_rebuild_pending(&self) -> bool {
-        let mut state = self.state.borrow_mut();
+        let Ok(mut state) = self.state.try_borrow_mut() else {
+            return true;
+        };
         if !state.preview.rebuild_pending() {
             return false;
         }
