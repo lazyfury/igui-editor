@@ -2950,6 +2950,52 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
         }
     }
 
+    // Git history + commit detail.
+    harness.frame()?;
+    let history_tab = harness.app.state().git.history_rect.center();
+    harness.click(history_tab);
+    for _ in 0..50 {
+        harness.frame()?;
+        if harness.app.state().git.commits.len() >= 2 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    if harness.app.state().git.commits.len() < 2 {
+        return Err("Git history did not load the commits".into());
+    }
+    let commit_row = harness
+        .app
+        .state()
+        .git
+        .history_rows
+        .first()
+        .map(|(_, rect)| rect.center())
+        .ok_or("Git history has no commit row")?;
+    harness.click(commit_row);
+    for _ in 0..50 {
+        harness.frame()?;
+        if !harness.app.state().git.detail_loading && harness.app.state().git.detail.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    {
+        let state = harness.app.state();
+        let detail = state
+            .git
+            .detail
+            .as_ref()
+            .ok_or("Git commit detail did not load")?;
+        if !detail.diff.contains("diff --git") && !detail.diff.is_empty() {
+            return Err("Git commit detail has no patch".into());
+        }
+    }
+    harness.key(Key::Escape);
+    if harness.app.state().git.detail_visible {
+        return Err("Esc did not close the Git commit detail".into());
+    }
+
     // Terminal service: PTY, vt100 screen, panel and close.
     harness.shortcut(
         Key::Character('`'),
@@ -2979,6 +3025,27 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
     }
     if !seen.contains("terminal-selfcheck") {
         return Err(format!("terminal output was not parsed: {seen:?}"));
+    }
+    let frame = harness.frame()?;
+    let accent = crate::theme::Theme::new(Mode::Dark).p.accent.to_rgba8();
+    let faint = crate::theme::Theme::new(Mode::Dark).p.faint.to_rgba8();
+    if !draw_text_has_color(&frame, "TERMINAL", accent) {
+        return Err("focused terminal header was not accented".into());
+    }
+    let editor_center = harness.app.state().editor.text_rect.center();
+    harness.click(editor_center);
+    let frame = harness.frame()?;
+    if harness.app.state().focus != Focus::Editor || !draw_text_has_color(&frame, "TERMINAL", faint)
+    {
+        return Err("clicking the editor did not dim the terminal focus".into());
+    }
+    let terminal_center = harness.app.state().terminal.rect.center();
+    harness.click(terminal_center);
+    let frame = harness.frame()?;
+    if harness.app.state().focus != Focus::Terminal
+        || !draw_text_has_color(&frame, "TERMINAL", accent)
+    {
+        return Err("clicking the terminal did not restore its accent".into());
     }
     harness.shortcut(
         Key::Character('`'),

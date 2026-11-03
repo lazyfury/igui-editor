@@ -124,9 +124,15 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         right -= width + 16.0;
     }
 
+    let focus = if state.focus == crate::state::Focus::Terminal {
+        "TERMINAL"
+    } else {
+        "EDITOR"
+    };
     let mut facts = vec![
         theme.name(),
         mode.as_str(),
+        focus,
         size.as_str(),
         "UTF-8",
         spaces.as_str(),

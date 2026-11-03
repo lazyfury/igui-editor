@@ -262,6 +262,7 @@ impl EditorApp {
         let mut state = self.state.borrow_mut();
         ui::git::paint_diff(&mut state, measurer.as_ref(), ctx);
         ui::git::paint_commit(&mut state, measurer.as_ref(), ctx);
+        ui::git::paint_commit_detail(&mut state, measurer.as_ref(), ctx);
         drop(state);
         // Overlays, in stacking order: menu drop-down, settings, modal.
         let measurer = igui_ui::text_measurer(&self.tree);
@@ -304,6 +305,10 @@ impl EditorApp {
                 }
                 // The bar sits above the drop-down: a press on a bar item
                 // toggles that menu (including closing the open one).
+                if state.git.detail_visible {
+                    ui::git::click_commit_detail(&mut state, *position);
+                    return EventResult::Handled;
+                }
                 if state.git.commit_open {
                     ui::git::commit_click(&mut state, *position);
                     return EventResult::Handled;
@@ -452,6 +457,13 @@ impl EditorApp {
                 position, delta, ..
             } => {
                 let mut state = self.state.borrow_mut();
+                if state.git.detail_visible {
+                    let (panel, _) = ui::git::detail_layout(&state);
+                    if panel.contains(*position) {
+                        ui::git::wheel_commit_detail(&mut state, *delta);
+                        return EventResult::Handled;
+                    }
+                }
                 if state.git.diff_visible {
                     let (panel, _) = ui::git::diff_layout(&state);
                     if panel.contains(*position) {
@@ -482,6 +494,10 @@ impl EditorApp {
                     return EventResult::Handled;
                 }
                 if state.search.open && ui::project_search::on_key(&mut state, *key, modifiers) {
+                    return EventResult::Handled;
+                }
+                if state.git.detail_visible && *key == Key::Escape {
+                    state.close_git_commit_detail();
                     return EventResult::Handled;
                 }
                 if state.git.commit_open && ui::git::commit_key(&mut state, *key, modifiers) {

@@ -351,6 +351,9 @@ Dock reopen remain follow-ups.
 Terminal descriptors), Git status/diff/stage/unstage/commit, native PTY terminal
 with vt100 cell rendering and `⌃\`` toggle. Extension host remains deferred.
 
+**M10 (done)** — visible focus states for editor/terminal, Git commit History
+(last 50) and read-only commit detail overlay.
+
 Next candidates: terminal drag-resize/multiple sessions/session restore, Git
 discard/branch/network operations, native macOS top menu/close guard, per-hit
 replace and cross-file undo, incremental preview layout for very large

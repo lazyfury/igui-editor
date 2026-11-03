@@ -88,7 +88,99 @@ pub fn paint_sidebar(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         if state.git.loading { p.accent } else { p.dim },
     );
     state.git.refresh_rect = refresh;
-    let mut y = header.bottom() + 4.0;
+    let tabs_y = header.bottom() + 2.0;
+    let changes_tab = Rect::from_min_size(
+        Vec2::new(content.left() + 10.0, tabs_y),
+        Size::new(72.0, 20.0),
+    );
+    let history_tab = Rect::from_min_size(
+        Vec2::new(changes_tab.right() + 4.0, tabs_y),
+        Size::new(72.0, 20.0),
+    );
+    for (rect, label, active) in [
+        (
+            changes_tab,
+            "Changes",
+            state.git.mode == crate::state::GitMode::Changes,
+        ),
+        (
+            history_tab,
+            "History",
+            state.git.mode == crate::state::GitMode::History,
+        ),
+    ] {
+        if active {
+            kit::hline(
+                env.ctx,
+                rect.left(),
+                rect.right(),
+                rect.bottom() - 1.0,
+                p.accent,
+            );
+        }
+        kit::text(
+            env.ctx,
+            label,
+            rect.left() + 6.0,
+            kit::baseline(measurer, rect, m.font_small),
+            m.font_small,
+            if active { p.text } else { p.faint },
+        );
+    }
+    state.git.changes_rect = changes_tab;
+    state.git.history_rect = history_tab;
+    let mut y = tabs_y + 24.0;
+    if state.git.mode == crate::state::GitMode::History {
+        state.git.history_rows.clear();
+        env.ctx.save();
+        env.ctx.clip_rect(content);
+        for commit in state.git.commits.iter() {
+            let row = Rect::from_min_size(
+                Vec2::new(content.left(), y - state.git.scroll),
+                Size::new(content.width() - 1.0, 34.0),
+            );
+            if row.bottom() > content.top() && row.top() < content.bottom() {
+                kit::text(
+                    env.ctx,
+                    &commit.short,
+                    row.left() + 12.0,
+                    row.top() + 14.0,
+                    m.font_small,
+                    p.accent,
+                );
+                kit::text(
+                    env.ctx,
+                    &kit::truncate(measurer, &commit.subject, m.font_ui, row.width() - 92.0),
+                    row.left() + 72.0,
+                    row.top() + 14.0,
+                    m.font_ui,
+                    p.text,
+                );
+                kit::text(
+                    env.ctx,
+                    &format!("{} · {}", commit.author, commit.date),
+                    row.left() + 12.0,
+                    row.top() + 27.0,
+                    m.font_small,
+                    p.faint,
+                );
+            }
+            state.git.history_rows.push((commit.hash.clone(), row));
+            y += 36.0;
+        }
+        if state.git.commits.is_empty() {
+            kit::text(
+                env.ctx,
+                "no commits",
+                content.left() + 12.0,
+                y + 16.0,
+                m.font_small,
+                p.faint,
+            );
+        }
+        env.ctx.restore();
+        return;
+    }
 
     let mut rows = Vec::new();
     let sections = [
@@ -246,6 +338,26 @@ pub fn click(state: &mut AppState, pos: Vec2) -> bool {
     }
     if state.git.refresh_rect.contains(pos) {
         state.request_git_refresh();
+        return true;
+    }
+    if state.git.changes_rect.contains(pos) {
+        state.set_git_mode(crate::state::GitMode::Changes);
+        return true;
+    }
+    if state.git.history_rect.contains(pos) {
+        state.set_git_mode(crate::state::GitMode::History);
+        return true;
+    }
+    if state.git.mode == crate::state::GitMode::History {
+        let commit = state
+            .git
+            .history_rows
+            .iter()
+            .find(|(_, rect)| rect.contains(pos))
+            .map(|(hash, _)| hash.clone());
+        if let Some(hash) = commit {
+            state.open_git_commit_detail(hash);
+        }
         return true;
     }
     if state.git.stage_all_rect.contains(pos) {
@@ -434,6 +546,141 @@ pub fn paint_diff(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut P
             p.faint,
         );
     }
+}
+
+pub fn detail_layout(state: &AppState) -> (Rect, Rect) {
+    let viewport = state.viewport.logical_rect();
+    let panel = Rect::from_center_size(
+        viewport.center(),
+        Size::new(
+            (viewport.width() - 100.0).max(320.0),
+            (viewport.height() - 120.0).max(240.0),
+        ),
+    );
+    let close = Rect::from_min_size(
+        Vec2::new(panel.right() - 30.0, panel.top() + 8.0),
+        Size::new(22.0, 22.0),
+    );
+    (panel, close)
+}
+
+pub fn paint_commit_detail(
+    state: &mut AppState,
+    measurer: &dyn TextMeasurer,
+    ctx: &mut PaintContext,
+) {
+    if !state.git.detail_visible {
+        return;
+    }
+    let theme = state.theme;
+    let m = theme.m;
+    let p = theme.p;
+    let viewport = state.viewport.logical_rect();
+    let (panel, close) = detail_layout(state);
+    ctx.fill_rect(viewport, igui_core::Color::new(0.0, 0.0, 0.0, 0.45));
+    kit::fill(ctx, panel, p.raised);
+    ctx.stroke_rect(panel, 1.0, p.border);
+    kit::hline(ctx, panel.left(), panel.right(), panel.top(), p.accent);
+    let Some(detail) = state.git.detail.as_ref() else {
+        kit::text(
+            ctx,
+            if state.git.detail_loading {
+                "reading commit…"
+            } else {
+                "no commit"
+            },
+            panel.left() + 16.0,
+            panel.top() + 32.0,
+            m.font_ui,
+            p.faint,
+        );
+        return;
+    };
+    let header = format!(
+        "{}  {}  {}  {}",
+        detail.commit.short, detail.commit.author, detail.commit.date, detail.commit.subject
+    );
+    kit::text(
+        ctx,
+        &kit::truncate(measurer, &header, m.font_ui, panel.width() - 60.0),
+        panel.left() + 16.0,
+        panel.top() + 28.0,
+        m.font_ui,
+        p.text,
+    );
+    let c = close.center();
+    ctx.draw_line(
+        Vec2::new(c.x - 4.0, c.y - 4.0),
+        Vec2::new(c.x + 4.0, c.y + 4.0),
+        1.5,
+        p.dim,
+    );
+    ctx.draw_line(
+        Vec2::new(c.x - 4.0, c.y + 4.0),
+        Vec2::new(c.x + 4.0, c.y - 4.0),
+        1.5,
+        p.dim,
+    );
+    let body = Rect::from_min_size(
+        Vec2::new(panel.left() + 16.0, panel.top() + 44.0),
+        Size::new(panel.width() - 32.0, panel.height() - 60.0),
+    );
+    let line_h = (m.font_small + 4.0).max(15.0);
+    let lines: Vec<&str> = detail.diff.lines().collect();
+    let max_scroll = (lines.len() as f32 * line_h - body.height()).max(0.0);
+    state.git.detail_scroll = state.git.detail_scroll.clamp(0.0, max_scroll);
+    ctx.save();
+    ctx.clip_rect(body);
+    let first = (state.git.detail_scroll / line_h).floor() as usize;
+    let visible = (body.height() / line_h).ceil() as usize + 1;
+    for (index, line) in lines.iter().enumerate().skip(first).take(visible) {
+        let y = body.top() + (index as f32 - first as f32) * line_h
+            - (state.git.detail_scroll - first as f32 * line_h);
+        let color = if line.starts_with('+') {
+            p.accent
+        } else if line.starts_with('-') {
+            p.error
+        } else {
+            p.dim
+        };
+        kit::text(
+            ctx,
+            &kit::truncate(measurer, line, m.font_small, body.width()),
+            body.left(),
+            y + line_h - 4.0,
+            m.font_small,
+            color,
+        );
+    }
+    ctx.restore();
+}
+
+pub fn click_commit_detail(state: &mut AppState, pos: Vec2) -> bool {
+    if !state.git.detail_visible {
+        return false;
+    }
+    let (panel, close) = detail_layout(state);
+    if close.contains(pos) || !panel.contains(pos) {
+        state.close_git_commit_detail();
+    }
+    true
+}
+
+pub fn wheel_commit_detail(state: &mut AppState, delta: Vec2) -> bool {
+    if !state.git.detail_visible {
+        return false;
+    }
+    let line_h = (state.theme.m.font_small + 4.0).max(15.0);
+    let lines = state
+        .git
+        .detail
+        .as_ref()
+        .map_or(0, |detail| detail.diff.lines().count());
+    let (panel, _) = detail_layout(state);
+    let max = (lines as f32 * line_h - (panel.height() - 60.0)).max(0.0);
+    state.git.detail_scroll = (state.git.detail_scroll - delta.y).clamp(0.0, max);
+    state.dirty = true;
+    true
 }
 
 pub fn commit_layout(state: &AppState) -> (Rect, Rect) {

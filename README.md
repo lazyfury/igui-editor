@@ -54,9 +54,11 @@ The sidebar has `EXPLORER / GIT` tabs. GIT shows the repository branch,
 ahead/behind, and staged/changes/conflicts sections from `git status
 --porcelain=v2 -z`. Click a file for a read-only unified diff overlay; `Esc` or
 the overlay ✕ closes it. `+` / `−` stage or unstage a row, `Stage all` stages the
-worktree, and `Commit` opens a one-line message prompt. Refreshes happen on
-open/save/tab/folder changes and via the panel button. Discard and network
-operations are intentionally not exposed.
+worktree, and `Commit` opens a one-line message prompt. `Changes / History`
+switches to the last 50 commits; clicking one opens a read-only commit detail
+with author/date/subject, changed files and patch. Refreshes happen on
+open/save/tab/folder changes, commit and via the panel button. Discard and
+network operations are intentionally not exposed.
 
 Git is a **built-in plugin** (`services/git.rs`) over a native worker
 (`model/git.rs`), not a JS or dynamic-library extension. See
@@ -67,9 +69,11 @@ Git is a **built-in plugin** (`services/git.rs`) over a native worker
 Native PTY (`portable-pty`) + `vt100` screen, no WebView or JS. The panel sits
 below the editor with a 220 px fixed height for this first slice. It starts
 `$SHELL`, supports ANSI/256-color cells, cursor, resize, plain text, arrows,
-Ctrl letters and Alt prefixes. `Ctrl+\`` closes it and kills the child. Terminal
-layout/state is not persisted yet; multiple sessions and a draggable top handle
-are follow-ups.
+Ctrl letters and Alt prefixes. `Ctrl+\`` closes it and kills the child. Focus is
+visible: the active editor gets an accent top line and caret, the inactive caret
+dims, and the terminal header/cursor accent only while it owns keyboard focus.
+Terminal layout/state is not persisted yet; multiple sessions and a draggable
+top handle are follow-ups.
 
 ## macOS integration
 

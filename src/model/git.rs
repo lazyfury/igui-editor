@@ -61,6 +61,23 @@ impl RepoStatus {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GitCommit {
+    pub hash: String,
+    pub short: String,
+    pub author: String,
+    pub date: String,
+    pub subject: String,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct GitCommitDetail {
+    pub commit: GitCommit,
+    pub files: Vec<String>,
+    pub diff: String,
+    pub truncated: bool,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct GitDiff {
     pub path: PathBuf,
@@ -97,6 +114,16 @@ pub enum GitRequest {
         cwd: PathBuf,
         message: String,
     },
+    Log {
+        generation: u64,
+        cwd: PathBuf,
+        limit: usize,
+    },
+    ShowCommit {
+        generation: u64,
+        cwd: PathBuf,
+        hash: String,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -112,6 +139,14 @@ pub enum GitEvent {
     Write {
         generation: u64,
         result: Result<String, String>,
+    },
+    Log {
+        generation: u64,
+        commits: Vec<GitCommit>,
+    },
+    CommitDetail {
+        generation: u64,
+        detail: Result<GitCommitDetail, String>,
     },
 }
 
@@ -184,6 +219,35 @@ impl GitWorker {
                             let result = run_commit(&cwd, &message);
                             if event_tx
                                 .send(GitEvent::Write { generation, result })
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                        GitRequest::Log {
+                            generation,
+                            cwd,
+                            limit,
+                        } => {
+                            let commits = run_log(&cwd, limit);
+                            if event_tx
+                                .send(GitEvent::Log {
+                                    generation,
+                                    commits,
+                                })
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                        GitRequest::ShowCommit {
+                            generation,
+                            cwd,
+                            hash,
+                        } => {
+                            let detail = run_show_commit(&cwd, &hash);
+                            if event_tx
+                                .send(GitEvent::CommitDetail { generation, detail })
                                 .is_err()
                             {
                                 break;
@@ -540,6 +604,111 @@ pub fn run_commit(cwd: &Path, message: &str) -> Result<String, String> {
     }
 }
 
+pub fn run_log(cwd: &Path, limit: usize) -> Vec<GitCommit> {
+    let Ok(root) = repo_root(cwd) else {
+        return Vec::new();
+    };
+    let limit = limit.clamp(1, 200).to_string();
+    let output = match command(
+        &root,
+        &[
+            "log",
+            "-n",
+            &limit,
+            "--date=short",
+            "--format=%H%x00%h%x00%an%x00%ad%x00%s%x00",
+        ],
+    ) {
+        Ok(output) if output.status.success() => output,
+        _ => return Vec::new(),
+    };
+    let fields: Vec<String> = output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|chunk| !chunk.is_empty())
+        .map(|chunk| String::from_utf8_lossy(chunk).into_owned())
+        .collect();
+    fields
+        .chunks_exact(5)
+        .map(|chunk| GitCommit {
+            hash: chunk[0].clone(),
+            short: chunk[1].clone(),
+            author: chunk[2].clone(),
+            date: chunk[3].clone(),
+            subject: chunk[4].clone(),
+        })
+        .collect()
+}
+
+pub fn run_show_commit(cwd: &Path, hash: &str) -> Result<GitCommitDetail, String> {
+    if !(7..=40).contains(&hash.len()) || !hash.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Err("invalid commit hash".into());
+    }
+    let root = repo_root(cwd)?;
+    let meta = command(
+        &root,
+        &[
+            "show",
+            "-s",
+            "--date=short",
+            "--format=%H%x00%h%x00%an%x00%ad%x00%s%x00",
+            hash,
+        ],
+    )?;
+    if !meta.status.success() {
+        return Err(stderr(&meta));
+    }
+    let fields: Vec<String> = meta
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|chunk| !chunk.is_empty())
+        .map(|chunk| String::from_utf8_lossy(chunk).into_owned())
+        .collect();
+    if fields.len() < 5 {
+        return Err("could not parse commit".into());
+    }
+    let commit = GitCommit {
+        hash: fields[0].clone(),
+        short: fields[1].clone(),
+        author: fields[2].clone(),
+        date: fields[3].clone(),
+        subject: fields[4].clone(),
+    };
+    let files_output = command(&root, &["show", "--name-status", "--format=", hash])?;
+    let files = String::from_utf8_lossy(&files_output.stdout)
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            line.split_once('\t')
+                .map(|(status, path)| format!("{status} {path}"))
+                .unwrap_or_else(|| line.to_string())
+        })
+        .collect();
+    let diff_output = command(
+        &root,
+        &[
+            "show",
+            "--no-color",
+            "--no-ext-diff",
+            "--format=",
+            "--patch",
+            hash,
+        ],
+    )?;
+    let mut diff = String::from_utf8_lossy(&diff_output.stdout).into_owned();
+    let truncated = diff.len() > OUTPUT_CAP;
+    if truncated {
+        diff.truncate(OUTPUT_CAP);
+        diff.push_str("\n… diff truncated …\n");
+    }
+    Ok(GitCommitDetail {
+        commit,
+        files,
+        diff,
+        truncated,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -611,6 +780,10 @@ u UU N... 100644 100644 100644 a b conflict.rs\0";
         run_commit(&dir, "update files\n").unwrap();
         let clean = run_status(&dir);
         assert!(clean.staged.is_empty() && clean.changes.is_empty());
+        let log = run_log(&dir, 10);
+        assert_eq!(log.len(), 2);
+        let detail = run_show_commit(&dir, &log[0].hash).unwrap();
+        assert!(detail.files.iter().any(|file| file.contains("new.txt")));
         let _ = std::fs::remove_dir_all(dir);
     }
 }

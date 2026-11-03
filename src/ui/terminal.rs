@@ -68,15 +68,22 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     let theme = state.theme;
     let m = theme.m;
     let p = theme.p;
+    let focused = state.focus == Focus::Terminal;
     kit::fill(env.ctx, rect, p.bg);
-    kit::hline(env.ctx, rect.left(), rect.right(), rect.top(), p.border);
+    kit::hline(
+        env.ctx,
+        rect.left(),
+        rect.right(),
+        rect.top(),
+        if focused { p.accent } else { p.border },
+    );
     kit::text(
         env.ctx,
         "TERMINAL",
         rect.left() + 10.0,
         rect.top() + 15.0,
         m.font_small,
-        p.faint,
+        if focused { p.accent } else { p.faint },
     );
     let cwd = state.terminal.cwd.display().to_string();
     kit::text_right(
@@ -164,7 +171,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                 ),
                 Size::new(2.0, line_h),
             ),
-            p.accent,
+            if focused { p.accent } else { p.faint },
         );
     }
     env.ctx.restore();

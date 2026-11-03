@@ -456,6 +456,9 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     let p = theme.p;
     let measurer = env.measurer;
     kit::fill(env.ctx, rect, p.bg);
+    if state.focus == Focus::Editor {
+        kit::hline(env.ctx, rect.left(), rect.right(), rect.top(), p.accent);
+    }
 
     if state.ws.active_doc().is_none() {
         paint_welcome(state, env, rect);
@@ -673,7 +676,11 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                 Vec2::new(rect.left(), y),
                 Size::new(rect.width() - sb, line_h),
             ),
-            p.current_line,
+            if state.focus == Focus::Editor {
+                p.current_line
+            } else {
+                p.current_line.alpha_mul(0.5)
+            },
         );
     }
 
@@ -950,14 +957,16 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             tab,
         ) - row_start_x;
         let y = row_y(row);
+        let focused = state.focus == Focus::Editor;
         let caret_rect = Rect::from_min_size(
             Vec2::new(text_rect.left() + pad + x - scroll_x, y),
-            Size::new(2.0, line_h),
+            Size::new(if focused { 2.0 } else { 1.0 }, line_h),
         );
         state.editor.caret_rect = caret_rect;
         env.ctx.save();
         env.ctx.clip_rect(text_rect);
-        env.ctx.fill_rect(caret_rect, p.accent);
+        env.ctx
+            .fill_rect(caret_rect, if focused { p.accent } else { p.faint });
         env.ctx.restore();
     }
 

@@ -18,7 +18,9 @@ use igui_ui::{Clipboard, TextEdit};
 use crate::model::brackets::match_bracket;
 use crate::model::doc::Document;
 use crate::model::find::{find_all, Matcher};
-use crate::model::git::{GitDiff, GitEvent, GitRequest, GitWorker, RepoStatus};
+use crate::model::git::{
+    GitCommit, GitCommitDetail, GitDiff, GitEvent, GitRequest, GitWorker, RepoStatus,
+};
 use crate::model::highlight::HighlightCache;
 use crate::model::pty::PtySession;
 use crate::model::recovery::{RecoveryEntry, RecoveryStore};
@@ -565,6 +567,12 @@ pub struct SidebarUi {
     pub tabs: Vec<(&'static str, Rect)>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum GitMode {
+    Changes,
+    History,
+}
+
 /// Built-in terminal panel/session.
 pub struct TerminalState {
     pub open: bool,
@@ -613,6 +621,17 @@ pub struct GitState {
     pub commit_rect: Rect,
     pub scroll: f32,
     pub error: Option<String>,
+    pub mode: GitMode,
+    pub commits: Vec<GitCommit>,
+    pub history_generation: u64,
+    pub history_rows: Vec<(String, Rect)>,
+    pub history_rect: Rect,
+    pub changes_rect: Rect,
+    pub detail: Option<GitCommitDetail>,
+    pub detail_generation: u64,
+    pub detail_visible: bool,
+    pub detail_loading: bool,
+    pub detail_scroll: f32,
     pub write_generation: u64,
     pub commit_open: bool,
     pub commit_message: TextEdit,
@@ -640,6 +659,17 @@ impl Default for GitState {
             commit_rect: Rect::ZERO,
             scroll: 0.0,
             error: None,
+            mode: GitMode::Changes,
+            commits: Vec::new(),
+            history_generation: 0,
+            history_rows: Vec::new(),
+            history_rect: Rect::ZERO,
+            changes_rect: Rect::ZERO,
+            detail: None,
+            detail_generation: 0,
+            detail_visible: false,
+            detail_loading: false,
+            detail_scroll: 0.0,
             write_generation: 0,
             commit_open: false,
             commit_message: TextEdit::new(""),
@@ -1176,6 +1206,72 @@ impl AppState {
         self.dirty = true;
     }
 
+    pub fn set_git_mode(&mut self, mode: GitMode) {
+        if self.git.mode != mode {
+            self.git.mode = mode;
+            self.git.history_rows.clear();
+            if mode == GitMode::History {
+                self.request_git_log();
+            }
+            self.dirty = true;
+        }
+    }
+
+    pub fn request_git_log(&mut self) {
+        self.ensure_git_worker();
+        self.git.history_generation += 1;
+        let generation = self.git.history_generation;
+        let cwd = self
+            .git
+            .cwd
+            .clone()
+            .or_else(|| self.git_cwd())
+            .unwrap_or_else(|| PathBuf::from("."));
+        self.git.detail = None;
+        self.git.detail_visible = false;
+        self.git.detail_loading = false;
+        if let Some(worker) = &self.git.worker {
+            worker.send(GitRequest::Log {
+                generation,
+                cwd,
+                limit: 50,
+            });
+        }
+        self.dirty = true;
+    }
+
+    pub fn open_git_commit_detail(&mut self, hash: String) {
+        self.ensure_git_worker();
+        self.git.detail_generation += 1;
+        let generation = self.git.detail_generation;
+        let cwd = self
+            .git
+            .cwd
+            .clone()
+            .or_else(|| self.git_cwd())
+            .unwrap_or_else(|| PathBuf::from("."));
+        self.git.detail = None;
+        self.git.detail_loading = true;
+        self.git.detail_visible = true;
+        self.git.detail_scroll = 0.0;
+        if let Some(worker) = &self.git.worker {
+            worker.send(GitRequest::ShowCommit {
+                generation,
+                cwd,
+                hash,
+            });
+        }
+        self.dirty = true;
+    }
+
+    pub fn close_git_commit_detail(&mut self) {
+        self.git.detail_visible = false;
+        self.git.detail_loading = false;
+        self.git.detail = None;
+        self.git.detail_scroll = 0.0;
+        self.dirty = true;
+    }
+
     fn ensure_git_worker(&mut self) {
         if self.git.worker.is_none() {
             self.git.worker = Some(GitWorker::spawn());
@@ -1357,6 +1453,20 @@ impl AppState {
                 GitEvent::Diff { generation, diff } if generation == self.git.diff_generation => {
                     self.git.diff = Some(diff);
                     self.git.diff_loading = false;
+                    self.dirty = true;
+                }
+                GitEvent::Log {
+                    generation,
+                    commits,
+                } if generation == self.git.history_generation => {
+                    self.git.commits = commits;
+                    self.dirty = true;
+                }
+                GitEvent::CommitDetail { generation, detail }
+                    if generation == self.git.detail_generation =>
+                {
+                    self.git.detail = detail.ok();
+                    self.git.detail_loading = false;
                     self.dirty = true;
                 }
                 GitEvent::Write { generation, result }

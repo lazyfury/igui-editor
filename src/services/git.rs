@@ -10,6 +10,8 @@ pub struct GitPlugin;
 pub const CAPABILITIES: &[Capability] = &[
     Capability::GitReadStatus,
     Capability::GitReadDiff,
+    Capability::GitReadLog,
+    Capability::GitReadCommit,
     Capability::GitWriteStage,
     Capability::GitWriteCommit,
 ];
@@ -24,6 +26,11 @@ pub const COMMANDS: &[CommandSpec] = &[
         id: "git.diff",
         title: "Show Diff",
         capability: Some(Capability::GitReadDiff),
+    },
+    CommandSpec {
+        id: "git.log",
+        title: "Show Commit History",
+        capability: Some(Capability::GitReadLog),
     },
 ];
 
