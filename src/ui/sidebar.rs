@@ -99,11 +99,15 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
         let state = state.clone();
         move |tree, _id, delta| {
             let mut state = state.borrow_mut();
-            let row_h = state.theme.m.row_h;
-            let content = state.ws.tree.rows().len() as f32 * row_h;
-            let view = (state.sidebar.rect.height() - HEADER_H).max(0.0);
-            let max = (content - view).max(0.0);
-            crate::ui::scroll::apply(&mut state.sidebar.scroll, delta.y, max);
+            if state.sidebar_tab == "git" {
+                crate::ui::git::scroll(&mut state, delta.y);
+            } else {
+                let row_h = state.theme.m.row_h;
+                let content = state.ws.tree.rows().len() as f32 * row_h;
+                let view = (state.sidebar.rect.height() - HEADER_H).max(0.0);
+                let max = (content - view).max(0.0);
+                crate::ui::scroll::apply(&mut state.sidebar.scroll, delta.y, max);
+            }
             state.dirty = true;
             igui_ui::request_paint(tree);
         }

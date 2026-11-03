@@ -135,6 +135,9 @@ pub fn paint_sidebar(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     let mut y = tabs_y + 24.0;
     if state.git.mode == crate::state::GitMode::History {
         state.git.history_rows.clear();
+        let max_scroll = (state.git.commits.len() as f32 * 36.0 + 24.0 - content.height()).max(0.0);
+        state.git.scroll_max = max_scroll;
+        crate::ui::scroll::clamp(&mut state.git.scroll, max_scroll);
         env.ctx.save();
         env.ctx.clip_rect(content);
         for commit in state.git.commits.iter() {
@@ -202,7 +205,8 @@ pub fn paint_sidebar(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         * ROW_H
         - content_h)
         .max(0.0);
-    state.git.scroll = state.git.scroll.clamp(0.0, max_scroll);
+    state.git.scroll_max = max_scroll;
+    crate::ui::scroll::clamp(&mut state.git.scroll, max_scroll);
     env.ctx.save();
     env.ctx.clip_rect(content);
     for (title, entries) in sections {
@@ -339,6 +343,11 @@ pub fn paint_sidebar(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             p.faint,
         );
     }
+}
+
+pub fn scroll(state: &mut AppState, delta_y: f32) {
+    crate::ui::scroll::apply(&mut state.git.scroll, delta_y, state.git.scroll_max);
+    state.dirty = true;
 }
 
 pub fn hover_rect(state: &AppState, pos: Vec2) -> Option<Rect> {

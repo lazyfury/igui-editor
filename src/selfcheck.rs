@@ -2817,6 +2817,10 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
     fs::write(&tracked, original).map_err(|error| format!("fixture: {error}"))?;
     git(&["add", "tracked.txt"])?;
     git(&["commit", "-qm", "initial"])?;
+    for index in 0..30 {
+        let message = format!("history {index}");
+        git(&["commit", "--allow-empty", "-qm", &message])?;
+    }
     let changed: String = (0..80)
         .map(|index| format!("changed line {index}\n"))
         .collect();
@@ -3055,6 +3059,25 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
                 second.0
             ));
         }
+    }
+    let sidebar_center = harness.app.state().sidebar.rect.center();
+    let before_scroll = harness.app.state().git.scroll;
+    harness.event(InputEvent::Wheel {
+        position: sidebar_center,
+        delta: Vec2::new(0.0, 40.0),
+        phase: igui_core::TouchPhase::Moved,
+        device: igui_core::ScrollDevice::Wheel,
+    });
+    harness.frame()?;
+    if harness.app.state().git.scroll <= before_scroll {
+        return Err(format!(
+            "Git history did not scroll: mode={:?} scroll={} max={} before={} commits={}",
+            harness.app.state().git.mode,
+            harness.app.state().git.scroll,
+            harness.app.state().git.scroll_max,
+            before_scroll,
+            harness.app.state().git.commits.len()
+        ));
     }
 
     // Terminal service: PTY, vt100 screen, panel and close.

@@ -633,6 +633,7 @@ pub struct GitState {
     pub stage_all_rect: Rect,
     pub commit_rect: Rect,
     pub scroll: f32,
+    pub scroll_max: f32,
     pub error: Option<String>,
     pub mode: GitMode,
     pub commits: Vec<GitCommit>,
@@ -672,6 +673,7 @@ impl Default for GitState {
             stage_all_rect: Rect::ZERO,
             commit_rect: Rect::ZERO,
             scroll: 0.0,
+            scroll_max: 0.0,
             error: None,
             mode: GitMode::Changes,
             commits: Vec::new(),
@@ -1281,6 +1283,7 @@ impl AppState {
     pub fn set_git_mode(&mut self, mode: GitMode) {
         if self.git.mode != mode {
             self.git.mode = mode;
+            self.git.scroll = 0.0;
             self.git.history_rows.clear();
             if mode == GitMode::History {
                 self.request_git_log();
