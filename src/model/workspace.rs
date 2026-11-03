@@ -75,6 +75,17 @@ impl Workspace {
         self.folder_open.then_some(self.root.as_path())
     }
 
+    /// Closes the sidebar folder but keeps the open tabs (they continue as
+    /// standalone files). Returns whether a folder was open.
+    pub fn close_folder(&mut self) -> bool {
+        if !self.folder_open {
+            return false;
+        }
+        self.folder_open = false;
+        self.tree = FsTree::empty();
+        true
+    }
+
     /// A workspace rooted at the file's parent, with that file open.
     pub fn with_file(path: impl Into<PathBuf>) -> Result<Self, String> {
         let path = path.into();
@@ -296,6 +307,21 @@ mod tests {
         workspace.force_close(0);
         assert!(workspace.tabs.is_empty());
         assert_eq!(workspace.active, 0);
+    }
+
+    #[test]
+    fn closing_the_folder_keeps_tabs() {
+        let dir = temp_dir("close-folder");
+        let path = dir.join("a.txt");
+        fs::write(&path, "a").unwrap();
+        let mut workspace = Workspace::with_file(&path).unwrap();
+        assert!(workspace.folder_open);
+        assert!(workspace.close_folder());
+        assert!(!workspace.folder_open);
+        assert!(workspace.folder().is_none());
+        assert_eq!(workspace.tabs.len(), 1);
+        assert!(!workspace.close_folder(), "closing twice is a no-op");
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

@@ -126,7 +126,7 @@ registry.register(Arc::new(MyLang));
 Plugin **loading** is not implemented; the trait, the registry and
 `EditorApp::register_syntax` are the extension seam only.
 
-## Language packs (`Lang` menu, `<config>/languages/*.json`)
+## Language packs (footer language type, `<config>/languages/*.json`)
 
 Built-ins always win a name clash; packs are data only (no code loading).
 Drop a JSON file like this into the config's `languages/` directory and restart:
@@ -148,9 +148,10 @@ The optional fields mirror the C-family tokenizer: `types`, `constants`,
 `preprocessor`, `annotations`, `toml_tables`, `case_types`. Limits: 64 packs,
 64 KB each; invalid packs are skipped (reported on stderr + status).
 
-Per-document override: **Lang** menu → Auto (by extension) or any registered
-provider. Path overrides are persisted in the session; untitled buffers keep
-theirs for the session only.
+Per-document override: click the language type in the **bottom-right footer**
+(`LUA`, `RUST`, `TEXT`, …) → Auto (by extension) or any registered provider.
+The popup opens above the status bar. Path overrides are persisted in the
+session; untitled buffers keep theirs for the session only.
 
 ## Replace in files
 
@@ -200,15 +201,17 @@ clickable.
 
 ## Workspace, welcome and drag & drop
 
-- **No folder open** (first launch, or after closing the folder's tabs): the
-  editor shows a welcome panel with actions (Open File / Open Folder / New
+- **No folder open** (first launch, **File → Close Folder**, or after closing
+  the folder's tabs): the editor shows a welcome panel with actions (Open File / Open Folder / New
   Buffer / Quick Open / Search when a folder is open), and the sidebar shows
   `NO FOLDER OPEN` with the same actions plus a drop hint. Opening a file works
   without a folder; Quick Open and project search ask for one first.
 - **Open Folder…** (`⇧⌘O`) or dropping a folder sets the sidebar root and
-  persists it in the session. Dropping files opens them in tabs; dropping both
-  opens the folder first, then the files. While a drag hovers the window, a
-  themed “Drop to open” overlay covers the viewport.
+  persists it in the session. **File → Close Folder** clears the folder and the
+  persisted root but keeps the open tabs as standalone files. Dropping files
+  opens them in tabs; dropping both opens the folder first, then the files.
+  While a drag hovers the window, a themed “Drop to open” overlay covers the
+  viewport.
 - Closing the last tab returns to the welcome state (no hidden untitled buffer).
 - Status bar without a document shows `no document` plus the folder name (or
   `no folder open`).
@@ -311,12 +314,13 @@ settings panel (font, tab width, gutter, guides, syntax, sidebar width), sidebar
 drag-resize, the large-preview truncation banner, the >32 MB open refusal, tab
 overflow scrolling, and settings restored from the session.
 
-M5 checks: a temporary JSON language pack highlights a `.lua` fixture, the
-per-document override (lua → rust → Auto) changes token colors and the status
-bar, overrides survive a session restore, replace-in-files (cancel is a no-op,
-apply rewrites a non-open file, an open tab is skipped), and scroll sync moves
-the preview from the editor and the editor back from the preview (including the
-disable toggle).
+M5 checks: a temporary JSON language pack highlights a `.lua` fixture; the
+footer language type (bottom-right) opens a popup above the status bar, and
+lua → rust → Auto changes token colors and the footer label; overrides survive a
+session restore; File → Close Folder keeps the tabs and clears the persisted
+folder; replace-in-files (cancel is a no-op, apply rewrites a non-open file, an
+open tab is skipped); and scroll sync moves the preview from the editor and the
+editor back from the preview (including the disable toggle).
 
 M4 checks: welcome/no-folder state and empty sidebar, drop overlay, dropping a
 file vs a folder, CLI folder argument, Quick Open (filter → open), project

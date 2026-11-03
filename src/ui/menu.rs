@@ -113,12 +113,24 @@ pub fn popup_layout(
     let Some(menu) = state.menu_open else {
         return (Rect::ZERO, Vec::new());
     };
-    let anchor = state
-        .menubar_hits
-        .iter()
-        .find(|(candidate, _)| *candidate == menu)
-        .map(|(_, rect)| *rect)
-        .unwrap_or(Rect::ZERO);
+    // Menus open below their bar item; the language selector opens *above*
+    // its footer cell (bottom-right).
+    let (anchor, above) = if menu == Menu::Language {
+        (state.language_hit, true)
+    } else {
+        (
+            state
+                .menubar_hits
+                .iter()
+                .find(|(candidate, _)| *candidate == menu)
+                .map(|(_, rect)| *rect)
+                .unwrap_or(Rect::ZERO),
+            false,
+        )
+    };
+    if anchor == Rect::ZERO {
+        return (Rect::ZERO, Vec::new());
+    }
     let items = state::items(menu, state);
 
     let mut widest = POPUP_W;
@@ -131,7 +143,19 @@ pub fn popup_layout(
     for item in &items {
         height += if item.is_some() { ITEM_H } else { SEP_H };
     }
-    let origin = Vec2::new(anchor.left(), anchor.bottom());
+    let mut origin = if above {
+        Vec2::new(anchor.right() - widest, anchor.top() - height)
+    } else {
+        Vec2::new(anchor.left(), anchor.bottom())
+    };
+    let bounds = state.viewport.logical_rect();
+    origin.x = origin.x.clamp(
+        bounds.left() + 4.0,
+        (bounds.right() - widest - 4.0).max(bounds.left() + 4.0),
+    );
+    if above {
+        origin.y = origin.y.max(bounds.top() + 4.0);
+    }
     let rect = Rect::from_min_size(origin, Size::new(widest, height));
     let mut y = origin.y + POPUP_PAD;
     let mut hits = Vec::with_capacity(items.len());

@@ -3,25 +3,25 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use igui_core::{NodeId, Rect, Vec2};
+use igui_core::{NodeId, Rect, Size, Vec2};
 use igui_scene::SceneTree;
 use igui_ui::{Container, PaintEnv};
 
 use crate::kit::{self, RectExt};
-use crate::state::AppState;
+use crate::state::{AppState, Menu};
 
 pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>) -> NodeId {
     let id = kit::node(tree, parent, "status");
     kit::set_container(tree, id, Container::Leaf);
     kit::clip(tree, id, true);
     kit::draw(tree, id, move |env, rect, _| {
-        let state = state.borrow();
-        paint(&state, env, rect);
+        let mut state = state.borrow_mut();
+        paint(&mut state, env, rect);
     });
     id
 }
 
-fn paint(state: &AppState, env: &mut PaintEnv<'_>, rect: Rect) {
+fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     let theme = state.theme;
     let m = theme.m;
     let p = theme.p;
@@ -57,10 +57,73 @@ fn paint(state: &AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         .map(|doc| format_size(doc.text().len()))
         .unwrap_or_default();
     let spaces = format!("Spaces: {}", state.settings.tab_width);
+
+    // Language selector: rightmost footer cell, above the popup anchor.
+    if state.ws.active_doc().is_some() {
+        let width = kit::width(measurer, &language, m.font_small);
+        let hit = Rect::from_min_size(
+            Vec2::new(right - width - 22.0, rect.top()),
+            Size::new(width + 22.0, rect.height()),
+        );
+        let open = state.menu_open == Some(Menu::Language);
+        if state.language_hover || open {
+            kit::fill(env.ctx, hit, if open { p.raised } else { p.hover });
+        }
+        let color = if state.language_hover || open {
+            p.accent
+        } else {
+            p.dim
+        };
+        kit::text(
+            env.ctx,
+            &language,
+            hit.left() + 8.0,
+            baseline,
+            m.font_small,
+            color,
+        );
+        // A small down chevron: the label opens the language popup.
+        let c = Vec2::new(hit.right() - 9.0, rect.center().y + 1.0);
+        env.ctx.draw_line(
+            Vec2::new(c.x - 3.0, c.y - 1.5),
+            Vec2::new(c.x, c.y + 1.5),
+            1.5,
+            color,
+        );
+        env.ctx.draw_line(
+            Vec2::new(c.x, c.y + 1.5),
+            Vec2::new(c.x + 3.0, c.y - 1.5),
+            1.5,
+            color,
+        );
+        if open {
+            kit::hline(
+                env.ctx,
+                hit.left(),
+                hit.right(),
+                hit.bottom() - 2.0,
+                p.accent,
+            );
+        }
+        state.language_hit = hit;
+        right = hit.left() - 16.0;
+    } else {
+        state.language_hit = Rect::ZERO;
+        let width = kit::width(measurer, &language, m.font_small);
+        kit::text(
+            env.ctx,
+            &language,
+            right - width,
+            baseline,
+            m.font_small,
+            p.faint,
+        );
+        right -= width + 16.0;
+    }
+
     let facts = [
         theme.name(),
         mode.as_str(),
-        language.as_str(),
         size.as_str(),
         "UTF-8",
         spaces.as_str(),

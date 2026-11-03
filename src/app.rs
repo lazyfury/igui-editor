@@ -21,7 +21,7 @@ use crate::input;
 use crate::kit;
 use crate::model::session::{self, Session};
 use crate::model::Workspace;
-use crate::state::{AppState, DialogKind, DialogRequest, Focus, ViewMode};
+use crate::state::{AppState, DialogKind, DialogRequest, Focus, Menu, ViewMode};
 use crate::theme::{Mode, Theme};
 use crate::ui;
 
@@ -292,6 +292,18 @@ impl EditorApp {
                     ui::project_search::click(&mut state, *position);
                     return EventResult::Handled;
                 }
+                // Footer language selector (bottom-right): a click toggles the
+                // language popup, which opens above the status bar.
+                if state.ws.active_doc().is_some() && state.language_hit.contains(*position) {
+                    state.menu_open = if state.menu_open == Some(Menu::Language) {
+                        None
+                    } else {
+                        Some(Menu::Language)
+                    };
+                    state.menu_hover = None;
+                    state.dirty = true;
+                    return EventResult::Handled;
+                }
                 if ui::menu::handle_bar_click(&mut state, *position) {
                     return EventResult::Handled;
                 }
@@ -326,15 +338,19 @@ impl EditorApp {
                 let menu_hover = ui::menu::hover_at(&state, *position, measurer.as_ref());
                 let tabs = ui::tabs::hover_at(&state, *position);
                 let sidebar = ui::sidebar::hover_at(&state, *position);
+                let language =
+                    state.ws.active_doc().is_some() && state.language_hit.contains(*position);
                 if state.menubar_hover != menubar
                     || state.menu_hover != menu_hover
                     || state.tabs.hover != tabs
                     || state.sidebar.hover != sidebar
+                    || state.language_hover != language
                 {
                     state.menubar_hover = menubar;
                     state.menu_hover = menu_hover;
                     state.tabs.hover = tabs;
                     state.sidebar.hover = sidebar;
+                    state.language_hover = language;
                     state.dirty = true;
                 }
                 drop(state);

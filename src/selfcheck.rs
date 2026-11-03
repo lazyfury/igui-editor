@@ -986,10 +986,59 @@ fn check(dir: &Path) -> Result<(), String> {
     if !draw_text_has_color(&frame, "local", keyword) {
         return Err("the lua pack did not highlight `local` as a keyword".into());
     }
-    harness.app.state_mut().set_language(Some("rust".into()));
+    let language_chip = {
+        let state = harness.app.state();
+        if state
+            .menubar_hits
+            .iter()
+            .any(|(menu, _)| *menu == Menu::Language)
+        {
+            return Err("the language menu is still in the menu bar".into());
+        }
+        if state.language_hit.width() <= 0.0 || state.language_hit.right() < WIDTH - 24.0 {
+            return Err(format!(
+                "the language chip is not in the footer's bottom-right: {:?}",
+                state.language_hit
+            ));
+        }
+        state.language_hit.center()
+    };
+    harness.click(language_chip);
+    if harness.app.state().menu_open != Some(Menu::Language) {
+        return Err("clicking the footer language type did not open the language popup".into());
+    }
+    let _ = harness.frame()?;
+    {
+        let state = harness.app.state();
+        if state.menu_rect.bottom() > state.language_hit.top() + 0.5
+            || state.menu_rect.left() < 0.0
+            || state.menu_rect.right() > WIDTH
+        {
+            return Err(format!(
+                "the language popup is not above the footer / inside the window: {:?} vs {:?}",
+                state.menu_rect, state.language_hit
+            ));
+        }
+    }
+    let measurer = igui_ui::text_measurer(harness.app.tree());
+    let rust_item = {
+        let state = harness.app.state();
+        let (_, items) = crate::ui::menu::popup_layout(&state, measurer.as_ref());
+        items
+            .iter()
+            .find(|(action, _)| {
+                matches!(action, Some(Action::SetLanguage(Some(name))) if name == "rust")
+            })
+            .map(|(_, rect)| rect.center())
+            .ok_or("the footer language popup has no rust item")?
+    };
+    harness.click(rust_item);
     let frame = harness.frame()?;
     {
         let state = harness.app.state();
+        if state.menu_open.is_some() {
+            return Err("choosing a language did not close the popup".into());
+        }
         if state.language_name() != Some("rust") {
             return Err("the language override to rust did not apply".into());
         }
@@ -1002,7 +1051,19 @@ fn check(dir: &Path) -> Result<(), String> {
     if draw_text_has_color(&frame, "local", keyword) {
         return Err("the rust override kept the lua keyword color".into());
     }
-    harness.app.state_mut().set_language(None);
+    let language_chip = harness.app.state().language_hit.center();
+    harness.click(language_chip);
+    let _ = harness.frame();
+    let auto_item = {
+        let state = harness.app.state();
+        let (_, items) = crate::ui::menu::popup_layout(&state, measurer.as_ref());
+        items
+            .iter()
+            .find(|(action, _)| *action == Some(Action::SetLanguage(None)))
+            .map(|(_, rect)| rect.center())
+            .ok_or("the footer language popup has no Auto item")?
+    };
+    harness.click(auto_item);
     let frame = harness.frame()?;
     {
         let state = harness.app.state();
@@ -1864,6 +1925,54 @@ fn check(dir: &Path) -> Result<(), String> {
         return Err("Open Folder did not retarget the sidebar root".into());
     }
     expect(&texts(&frame), "lib.rs", "sidebar now lists the new root")?;
+
+    // -- File > Close Folder keeps tabs, clears the session folder ---------
+    let tabs_before = harness.app.state().ws.tabs.len();
+    let file_item = harness
+        .app
+        .state()
+        .menubar_hits
+        .iter()
+        .find(|(menu, _)| *menu == Menu::File)
+        .map(|(_, rect)| rect.center())
+        .ok_or("no File menu hit rect after opening a folder")?;
+    harness.click(file_item);
+    harness.frame()?;
+    let close_folder_item = {
+        let state = harness.app.state();
+        if !Action::CloseFolder.enabled(&state) {
+            return Err("Close Folder is disabled while a folder is open".into());
+        }
+        let (_, items) = crate::ui::menu::popup_layout(&state, measurer.as_ref());
+        items
+            .iter()
+            .find(|(action, _)| *action == Some(Action::CloseFolder))
+            .map(|(_, rect)| rect.center())
+            .ok_or("the File menu has no Close Folder item")?
+    };
+    harness.click(close_folder_item);
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        if state.ws.folder_open || state.ws.folder().is_some() {
+            return Err("Close Folder left the workspace folder open".into());
+        }
+        if state.ws.tabs.len() != tabs_before {
+            return Err("Close Folder must keep the open tabs".into());
+        }
+        if state.session.folder.is_some() {
+            return Err("Close Folder did not clear the persisted session folder".into());
+        }
+        if Action::CloseFolder.enabled(&state) {
+            return Err("Close Folder is still enabled with no folder".into());
+        }
+    }
+    // Reopen it for the session-restore assertion below.
+    harness.app.state_mut().set_root(dir.join("src"));
+    harness.frame()?;
+    if !harness.app.state().ws.folder_open {
+        return Err("reopening the folder after Close Folder failed".into());
+    }
 
     // -- session restore -------------------------------------------------
     harness.frame()?; // flush the session file

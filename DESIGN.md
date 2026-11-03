@@ -143,10 +143,12 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
 19. **A workspace folder is optional.** `Workspace { root, folder_open, tree }`:
    `folder_open == false` means no folder (welcome state, empty sidebar, Quick
    Open/project search refuse). Opening a file never implicitly opens a folder;
-   a CLI folder, Open Folder or a dropped folder does. The folder is stored in
-   the session (`folder=`) instead of being inferred from tabs; v1 sessions
-   infer it from the first tab for compatibility. Closing the last tab returns
-   to the welcome state instead of creating a hidden untitled buffer.
+   a CLI folder, Open Folder or a dropped folder does. **File → Close Folder**
+   clears `folder_open` + the persisted root and keeps the tabs as standalone
+   files. The folder is stored in the session (`folder=`) instead of being
+   inferred from tabs; v1 sessions infer it from the first tab for compatibility.
+   Closing the last tab returns to the welcome state instead of creating a
+   hidden untitled buffer.
 20. **Drag & drop is a host observer into a shared target.** `winit` reports
    `HoveredFile`/`DroppedFile`; a `DropPlugin` (app crate, not the engine) writes
    them into `drop::DropTarget` and `EditorApp::update` drains it. Files open as
@@ -171,8 +173,10 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    (the registry keeps the first registration, so a pack can never shadow a
    built-in). Fields map onto the existing C-family tokenizer; strings are
    leaked at load time so the provider keeps the engine's `&'static` spec
-   contract. Per-document overrides live in **Lang** and persist by path
-   (`lang.N.path/name`); untitled buffers keep an in-memory override.
+   contract. Per-document overrides live in the **footer language type** (the
+   rightmost status cell, `LUA`/`RUST`/…); its popup opens above the status bar
+   and persists by path (`lang.N.path/name`); untitled buffers keep an
+   in-memory override.
 25. **Replace-in-files is plan → confirm → apply.** The plan re-matches each
    file's current text (never stale hit offsets), collects non-overlapping
    matches, and records length + mtime. Open tabs, files changed since the plan,

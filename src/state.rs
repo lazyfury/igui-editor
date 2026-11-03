@@ -44,14 +44,14 @@ pub enum Menu {
 }
 
 impl Menu {
-    pub const ALL: [Menu; 4] = [Menu::File, Menu::Edit, Menu::View, Menu::Language];
+    pub const ALL: [Menu; 3] = [Menu::File, Menu::Edit, Menu::View];
 
     pub const fn label(self) -> &'static str {
         match self {
             Menu::File => "File",
             Menu::Edit => "Edit",
             Menu::View => "View",
-            Menu::Language => "Lang",
+            Menu::Language => "Language",
         }
     }
 }
@@ -117,6 +117,7 @@ pub enum Action {
     New,
     Open,
     OpenFolder,
+    CloseFolder,
     Save,
     SaveAs,
     CloseTab,
@@ -151,6 +152,7 @@ impl Action {
             Action::New => "New Buffer".into(),
             Action::Open => "Open…".into(),
             Action::OpenFolder => "Open Folder…".into(),
+            Action::CloseFolder => "Close Folder".into(),
             Action::Save => "Save".into(),
             Action::SaveAs => "Save As…".into(),
             Action::CloseTab => "Close Tab".into(),
@@ -194,6 +196,7 @@ impl Action {
                 "⌘" => "⇧⌘O",
                 _ => "Ctrl+Shift+O",
             },
+            Action::CloseFolder => "",
             Action::Save => match ACCEL {
                 "⌘" => "⌘S",
                 _ => "Ctrl+S",
@@ -278,6 +281,7 @@ impl Action {
             | Action::Find
             | Action::Settings
             | Action::ToggleScrollSync => true,
+            Action::CloseFolder => state.ws.folder_open,
             Action::QuickOpen | Action::ProjectSearch => state.ws.folder_open,
             Action::Save => doc.is_some(),
             Action::SaveAs => doc.is_some(),
@@ -314,6 +318,7 @@ pub fn items(menu: Menu, state: &AppState) -> Vec<Option<Action>> {
                 Some(Action::New),
                 Some(Action::Open),
                 Some(Action::OpenFolder),
+                Some(Action::CloseFolder),
                 None,
                 Some(Action::Save),
                 Some(Action::SaveAs),
@@ -666,6 +671,9 @@ pub struct AppState {
     pub sidebar_node: Option<NodeId>,
     /// Sidebar resize drag: `(start_pointer_x, start_width)`.
     pub sidebar_drag: Option<(f32, f32)>,
+    /// Status-bar language selector hit rect (footer, bottom right).
+    pub language_hit: Rect,
+    pub language_hover: bool,
     /// Set when a settings change needs the sidebar's flex basis updated.
     pub pending_sidebar_sync: bool,
     /// A file drag is hovering the window (paints the drop overlay).
@@ -750,6 +758,8 @@ impl AppState {
             settings_row: 0,
             sidebar_node: None,
             sidebar_drag: None,
+            language_hit: Rect::ZERO,
+            language_hover: false,
             pending_sidebar_sync: false,
             drop_hover: false,
             quick_open: QuickOpenState::default(),
@@ -1958,6 +1968,28 @@ impl AppState {
         self.dirty = true;
     }
 
+    /// Closes the sidebar folder, keeping the open tabs as standalone files.
+    pub fn close_folder(&mut self) {
+        if !self.ws.close_folder() {
+            self.error("no folder open");
+            return;
+        }
+        self.sidebar.scroll = 0.0;
+        self.sidebar.selected = None;
+        self.sidebar.actions.clear();
+        self.session.folder = None;
+        self.config_dirty = true;
+        if self.quick_open.open {
+            self.close_quick_open();
+        }
+        self.quick_open.index = None;
+        if self.search.open {
+            self.close_project_search();
+        }
+        self.status("folder closed");
+        self.dirty = true;
+    }
+
     /// Opens dropped paths: a folder becomes the workspace, files become tabs.
     pub fn open_dropped(&mut self, paths: Vec<PathBuf>) {
         let mut folder = None;
@@ -2067,6 +2099,7 @@ impl AppState {
                     then_close: None,
                 });
             }
+            Action::CloseFolder => self.close_folder(),
             Action::Save => self.save_active(),
             Action::SaveAs => {
                 self.pending_dialog = Some(DialogRequest {
