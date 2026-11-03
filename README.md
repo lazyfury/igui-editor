@@ -71,6 +71,10 @@ Git is a **built-in plugin** (`services/git.rs`) over a native worker
 (`model/git.rs`), not a JS or dynamic-library extension. See
 [`DESIGN-services.md`](DESIGN-services.md).
 
+The current shortcuts are documented in **Keys** below. A selectable
+VS Code / JetBrains / Vim keymap layer is designed in
+[`DESIGN-keymaps.md`](DESIGN-keymaps.md); it is not implemented yet.
+
 ## Language intelligence (LSP, Rust first)
 
 The editor talks to language servers over native stdio JSON-RPC — no WebView,
