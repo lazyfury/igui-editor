@@ -63,8 +63,8 @@ Not exposed: arbitrary git command strings, network/auth UI, libgit2.
 
 - `portable-pty` + `vt100`; native cell-grid renderer, no WebView/JS.
 - One PTY worker per session; reader thread + writer; resize updates PTY and
-  parser; drop kills the child. The first UI has one session and a 220 px fixed
-  panel; drag-resize, multiple sessions and session restore are next.
+  parser; drop kills the child. The first UI has one session and a draggable
+  panel whose open/height state persists; multiple sessions are next.
 - Focus is a separate `Focus::Terminal`; key encoding is pure and testable.
 - Panel lives below the editor inside `main`; its top divider extends the shared
   `ui::handle` with a horizontal axis.

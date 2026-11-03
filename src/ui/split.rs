@@ -29,6 +29,7 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
                 &state.theme,
                 interact.hovered,
                 dragging,
+                crate::ui::handle::Axis::Vertical,
                 crate::ui::handle::GripSide::Left,
                 state.content_center_y,
             );

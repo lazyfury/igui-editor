@@ -119,6 +119,7 @@ impl EditorApp {
             .active_doc()
             .and_then(|doc| doc.path().map(Path::to_path_buf));
         state.request_git_refresh();
+        state.restore_terminal();
         let state = Rc::new(RefCell::new(state));
         let mut tree = SceneTree::new();
         igui_ui::set_text_measurer(
@@ -1041,9 +1042,16 @@ fn build_shell(tree: &mut SceneTree, state: &Rc<RefCell<AppState>>) -> (NodeId, 
     };
 
     if state.borrow().terminal.open {
+        let handle = ui::terminal::build_handle(tree, main, state.clone());
+        kit::flex(tree, handle, 0.0, Some(ui::handle::HANDLE_WIDTH), 0.0);
+        kit::min_size(tree, handle, 0.0, ui::handle::HANDLE_WIDTH);
         let terminal = ui::terminal::build(tree, main, state.clone());
-        kit::flex(tree, terminal, 0.0, Some(ui::terminal::HEIGHT), 0.0);
-        kit::min_size(tree, terminal, 0.0, ui::terminal::HEIGHT);
+        let height = state.borrow().terminal.height.clamp(120.0, 600.0);
+        kit::flex(tree, terminal, 0.0, Some(height), 0.0);
+        kit::min_size(tree, terminal, 0.0, height);
+        state.borrow_mut().terminal.node = Some(terminal);
+    } else {
+        state.borrow_mut().terminal.node = None;
     }
 
     let status = ui::status::build(tree, column, state.clone());

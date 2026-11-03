@@ -13,6 +13,71 @@ use crate::state::{AppState, Focus};
 pub const HEIGHT: f32 = 220.0;
 const HEADER: f32 = 22.0;
 
+pub fn build_handle(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>) -> NodeId {
+    let id = kit::node(tree, parent, "terminal-handle");
+    kit::set_container(tree, id, Container::Leaf);
+    kit::set_cursor(
+        tree,
+        id,
+        crate::ui::handle::cursor_for(crate::ui::handle::Axis::Horizontal),
+    );
+    kit::draw(tree, id, {
+        let state = state.clone();
+        move |env, rect, interact| {
+            let mut state = state.borrow_mut();
+            state.terminal.handle_rect = rect;
+            let grip_x = if state.terminal.rect.width() > 0.0 {
+                Some(state.terminal.rect.center().x)
+            } else {
+                None
+            };
+            crate::ui::handle::paint(
+                env,
+                rect,
+                &state.theme,
+                interact.hovered,
+                state.terminal.drag.is_some(),
+                crate::ui::handle::Axis::Horizontal,
+                crate::ui::handle::GripSide::Down,
+                grip_x,
+            );
+        }
+    });
+    kit::on_pointer(tree, id, {
+        let state = state.clone();
+        move |tree, _id, phase, _rect, pos| {
+            let mut state = state.borrow_mut();
+            match phase {
+                PointerPhase::Down => {
+                    state.terminal.drag = Some((pos.y, state.terminal.height));
+                }
+                PointerPhase::Move => {
+                    if let Some((start_y, start_height)) = state.terminal.drag {
+                        let height = (start_height + (start_y - pos.y)).clamp(120.0, 600.0);
+                        if (height - state.terminal.height).abs() > 0.5 {
+                            state.terminal.height = height;
+                            if let Some(node) = state.terminal.node {
+                                kit::flex(tree, node, 0.0, Some(height), 0.0);
+                                kit::min_size(tree, node, 0.0, height);
+                                igui_ui::mark_dirty(tree, node);
+                            }
+                            state.dirty = true;
+                        }
+                    }
+                }
+                PointerPhase::Up => state.finish_terminal_resize(),
+                PointerPhase::DoubleClick => {
+                    state.terminal.height = HEIGHT;
+                    state.finish_terminal_resize();
+                    state.needs_rebuild = true;
+                }
+            }
+            igui_ui::request_paint(tree);
+        }
+    });
+    id
+}
+
 pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>) -> NodeId {
     let id = kit::node(tree, parent, "terminal");
     kit::set_container(tree, id, Container::Leaf);

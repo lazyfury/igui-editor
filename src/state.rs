@@ -584,6 +584,10 @@ pub struct TerminalState {
     pub cols: u16,
     pub cwd: PathBuf,
     pub caret_rect: Rect,
+    pub height: f32,
+    pub node: Option<NodeId>,
+    pub drag: Option<(f32, f32)>,
+    pub handle_rect: Rect,
 }
 
 impl Default for TerminalState {
@@ -598,6 +602,10 @@ impl Default for TerminalState {
             cols: 80,
             cwd: PathBuf::from("."),
             caret_rect: Rect::ZERO,
+            height: 220.0,
+            node: None,
+            drag: None,
+            handle_rect: Rect::ZERO,
         }
     }
 }
@@ -973,6 +981,8 @@ impl AppState {
             .join("recovery");
         let languages: HashMap<PathBuf, String> = session.languages.iter().cloned().collect();
         let sync_scroll = session.sync_scroll;
+        let terminal_open = session.terminal_open;
+        let terminal_height = session.terminal_height.clamp(120.0, 600.0);
         let sidebar_tab = if session.sidebar_tab.is_empty() {
             "explorer".into()
         } else {
@@ -1032,7 +1042,11 @@ impl AppState {
             services,
             sidebar_tab,
             git: GitState::default(),
-            terminal: TerminalState::default(),
+            terminal: TerminalState {
+                open: terminal_open,
+                height: terminal_height,
+                ..TerminalState::default()
+            },
             syntax: SyntaxRegistry::with_builtins(),
             highlight: HighlightCache::new(),
             bracket: None,
@@ -1112,6 +1126,9 @@ impl AppState {
             self.terminal.focused = false;
             self.terminal.session = None;
             self.terminal.parser = None;
+            self.session.terminal_open = false;
+            self.session.terminal_height = self.terminal.height;
+            self.config_dirty = true;
             self.focus = Focus::Editor;
             self.needs_rebuild = true;
             self.dirty = true;
@@ -1134,11 +1151,47 @@ impl AppState {
                 self.terminal.cwd = cwd;
                 self.terminal.open = true;
                 self.terminal.focused = true;
+                self.session.terminal_open = true;
+                self.session.terminal_height = self.terminal.height;
+                self.config_dirty = true;
                 self.focus = Focus::Terminal;
                 self.needs_rebuild = true;
                 self.dirty = true;
             }
             Err(error) => self.error(format!("terminal: {error}")),
+        }
+    }
+
+    /// Restores a persisted terminal panel after startup (new shell).
+    pub fn restore_terminal(&mut self) {
+        if self.terminal.open && self.terminal.session.is_none() {
+            let cwd = self
+                .git
+                .cwd
+                .clone()
+                .or_else(|| self.git_cwd())
+                .or_else(|| self.ws.folder().map(Path::to_path_buf))
+                .unwrap_or_else(|| PathBuf::from("."));
+            if let Ok(session) = PtySession::spawn(&cwd, 24, 80) {
+                self.terminal.parser = Some(vt100::Parser::new(
+                    std::num::NonZeroU16::new(24).unwrap(),
+                    std::num::NonZeroU16::new(80).unwrap(),
+                    4000,
+                ));
+                self.terminal.session = Some(session);
+                self.terminal.cwd = cwd;
+            } else {
+                self.terminal.open = false;
+            }
+        }
+    }
+
+    pub fn finish_terminal_resize(&mut self) {
+        if self.terminal.drag.take().is_some() {
+            self.session.terminal_height = self.terminal.height;
+            self.session.terminal_open = self.terminal.open;
+            self.config_dirty = true;
+            self.dirty = true;
         }
     }
 

@@ -41,6 +41,14 @@ pub enum GripSide {
     Right,
     /// Right-side handle (split): nudge left.
     Left,
+    /// Top-edge handle (terminal): nudge down.
+    Down,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Axis {
+    Vertical,
+    Horizontal,
 }
 
 /// Grip centre for a handle centred at `center_x`.
@@ -48,6 +56,15 @@ pub fn grip_center_x(center_x: f32, side: GripSide) -> f32 {
     match side {
         GripSide::Right => center_x + GRIP_OFFSET,
         GripSide::Left => center_x - GRIP_OFFSET,
+        GripSide::Down => center_x,
+    }
+}
+
+/// Grip centre for a horizontal handle centered at `center_y`.
+pub fn grip_center_y(center_y: f32, side: GripSide) -> f32 {
+    match side {
+        GripSide::Down => center_y + GRIP_OFFSET,
+        GripSide::Right | GripSide::Left => center_y,
     }
 }
 
@@ -56,15 +73,24 @@ pub const fn cursor() -> Cursor {
     Cursor::ColResize
 }
 
+pub const fn cursor_for(axis: Axis) -> Cursor {
+    match axis {
+        Axis::Vertical => Cursor::ColResize,
+        Axis::Horizontal => Cursor::RowResize,
+    }
+}
+
 /// Paints the handle for its interaction state.
+#[allow(clippy::too_many_arguments)]
 pub fn paint(
     env: &mut PaintEnv<'_>,
     rect: Rect,
     theme: &Theme,
     hovered: bool,
     dragging: bool,
+    axis: Axis,
     grip_side: GripSide,
-    grip_center_y: Option<f32>,
+    grip_center: Option<f32>,
 ) {
     let p = theme.p;
     let background = if dragging {
@@ -83,26 +109,50 @@ pub fn paint(
     } else {
         p.border
     };
-    kit::vline(
-        env.ctx,
-        (rect.center().x - 0.5).round(),
-        rect.top(),
-        rect.bottom(),
-        line,
-    );
-
-    let grip_height = GRIP_HEIGHT.min(rect.height() * 0.5);
-    let half = grip_height * 0.5;
-    let min_y = rect.top() + half;
-    let max_y = rect.bottom() - half;
-    let center_y = match grip_center_y {
-        Some(y) if max_y >= min_y => y.clamp(min_y, max_y),
-        _ => rect.center().y,
+    let grip = match axis {
+        Axis::Vertical => {
+            kit::vline(
+                env.ctx,
+                (rect.center().x - 0.5).round(),
+                rect.top(),
+                rect.bottom(),
+                line,
+            );
+            let grip_height = GRIP_HEIGHT.min(rect.height() * 0.5);
+            let half = grip_height * 0.5;
+            let min_y = rect.top() + half;
+            let max_y = rect.bottom() - half;
+            let center_y = match grip_center {
+                Some(y) if max_y >= min_y => y.clamp(min_y, max_y),
+                _ => rect.center().y,
+            };
+            Rect::from_center_size(
+                Vec2::new(grip_center_x(rect.center().x, grip_side), center_y),
+                Size::new(GRIP_WIDTH, grip_height),
+            )
+        }
+        Axis::Horizontal => {
+            kit::hline(
+                env.ctx,
+                rect.left(),
+                rect.right(),
+                (rect.center().y - 0.5).round(),
+                line,
+            );
+            let grip_width = GRIP_HEIGHT.min(rect.width() * 0.5);
+            let half = grip_width * 0.5;
+            let min_x = rect.left() + half;
+            let max_x = rect.right() - half;
+            let center_x = match grip_center {
+                Some(x) if max_x >= min_x => x.clamp(min_x, max_x),
+                _ => rect.center().x,
+            };
+            Rect::from_center_size(
+                Vec2::new(center_x, grip_center_y(rect.center().y, grip_side)),
+                Size::new(grip_width, GRIP_WIDTH),
+            )
+        }
     };
-    let grip = Rect::from_center_size(
-        Vec2::new(grip_center_x(rect.center().x, grip_side), center_y),
-        Size::new(GRIP_WIDTH, grip_height),
-    );
     let grip_color = if dragging {
         p.accent
     } else if hovered {

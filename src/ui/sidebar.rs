@@ -31,6 +31,7 @@ pub fn build_divider(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<App
                 &state.theme,
                 interact.hovered,
                 state.sidebar_drag.is_some(),
+                crate::ui::handle::Axis::Vertical,
                 crate::ui::handle::GripSide::Right,
                 state.content_center_y,
             );

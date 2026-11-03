@@ -169,7 +169,8 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    2 s idle; every dirty buffer (including untitled) gets a raw `.txt` +
    metadata snapshot under `<config>/recovery/`, and a startup prompt offers
    Restore All / Discard All. Window size/position persist in the session
-   (restored unless maximized). Session format is version 5 (`sidebar_tab`).
+   (restored unless maximized). Session format is version 6 (`sidebar_tab`,
+   terminal open/height).
 24. **Language packs are data, not code.** `<config>/languages/*.json` packs are
    validated, capped and registered into `SyntaxRegistry` after the built-ins
    (the registry keeps the first registration, so a pack can never shadow a
@@ -308,7 +309,8 @@ Markdown split divider. Any new resize handle must reuse it.
 | Drag | pointer capture; live layout, no tree rebuild; drag math owned by the caller (width vs ratio) |
 | Double-click | split handle resets the ratio to 50%; the sidebar has no double-click action |
 | Corners | square — no radius anywhere |
-| Persistence | sidebar width and split ratio are stored in the session |
+| Persistence | sidebar width, split ratio and terminal height are stored in the session |
+| Axis | the same implementation handles vertical side seams and the horizontal terminal seam (`Axis`, grip nudged toward the pane) |
 
 Each seam has exactly **one** line: the sidebar paints no right border and the
 preview paints no left border, so only the handle's line separates the panes.
@@ -353,6 +355,10 @@ with vt100 cell rendering and `⌃\`` toggle. Extension host remains deferred.
 
 **M10 (done)** — visible focus states for editor/terminal, Git commit History
 (last 50) and read-only commit detail overlay.
+
+**M11 (in progress)** — terminal horizontal shared handle, persisted height/open,
+IME caret, vim application cursor mode and live PTY repaint. Next: multiple
+terminal sessions, selection/copy, scrollback.
 
 Next candidates: terminal drag-resize/multiple sessions/session restore, Git
 discard/branch/network operations, native macOS top menu/close guard, per-hit

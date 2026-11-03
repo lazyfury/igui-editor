@@ -67,15 +67,16 @@ Git is a **built-in plugin** (`services/git.rs`) over a native worker
 ## Terminal (`⌃\``, View → Terminal)
 
 Native PTY (`portable-pty`) + `vt100` screen, no WebView or JS. The panel sits
-below the editor with a 220 px fixed height for this first slice. It starts
+below the editor with a draggable top handle (120–600 px, default 220 px,
+double-click resets). It starts
 `$SHELL`, supports ANSI/256-color cells, cursor, resize, plain text, arrows,
 Ctrl letters, Alt prefixes, application cursor mode (vim/less) and IME candidate
 placement at the terminal cursor. The terminal requests frames while a PTY is
 alive, so full-screen programs repaint without extra input. `Ctrl+\`` closes it
 and kills the child. Focus is visible: the active editor gets an accent top line and caret, the inactive caret
 dims, and the terminal header/cursor accent only while it owns keyboard focus.
-Terminal layout/state is not persisted yet; multiple sessions and a draggable
-top handle are follow-ups.
+Open state and height persist in the session (v6); the shell process and screen
+contents do not. Multiple sessions are a follow-up.
 
 ## macOS integration
 
@@ -337,9 +338,9 @@ remembered per document and the last ratio is persisted.
   original name/path and are marked dirty so the first save writes them back.
 - **Window state**: size and position are persisted and restored (skipped while
   maximized/fullscreen).
-- Session format is version 5 (`sidebar_tab` added; v4 added `soft_wrap` on top
-  of v3's `languages`/`sync_scroll`); older files still load (v1 infers the
-  folder from the first tab).
+- Session format is version 6 (`terminal_open`, `terminal_height`; v5 added
+  `sidebar_tab`, v4 `soft_wrap`); older files still load (v1 infers the folder
+  from the first tab).
 
 ## Theme: "geek", compact, no corners
 

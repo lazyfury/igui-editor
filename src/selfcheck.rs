@@ -3048,6 +3048,13 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
     if !draw_text_has_color(&frame, "TERMINAL", accent) {
         return Err("focused terminal header was not accented".into());
     }
+    let handle = harness.app.state().terminal.handle_rect.center();
+    let height_before = harness.app.state().terminal.height;
+    harness.drag(handle, Vec2::new(handle.x, handle.y - 30.0));
+    harness.frame()?;
+    if harness.app.state().terminal.height <= height_before {
+        return Err("terminal handle drag did not increase its height".into());
+    }
     if let Some(caret) = harness.app.caret() {
         if !harness.app.state().terminal.rect.contains(caret.center()) {
             return Err(format!(

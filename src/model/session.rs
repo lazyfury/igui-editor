@@ -51,6 +51,8 @@ pub struct Session {
     pub soft_wrap: bool,
     /// Active sidebar tab id (`explorer`, `git`, …).
     pub sidebar_tab: String,
+    pub terminal_open: bool,
+    pub terminal_height: f32,
     /// Last window geometry (logical size + position).
     pub window: Option<WindowGeometry>,
 }
@@ -65,7 +67,7 @@ pub struct WindowGeometry {
 impl Default for Session {
     fn default() -> Self {
         Self {
-            version: 5,
+            version: 6,
             theme: "dark".into(),
             sidebar: true,
             folder: None,
@@ -83,6 +85,8 @@ impl Default for Session {
             sync_scroll: true,
             soft_wrap: false,
             sidebar_tab: "explorer".into(),
+            terminal_open: false,
+            terminal_height: 220.0,
             window: None,
         }
     }
@@ -134,6 +138,10 @@ impl Session {
                 "sync_scroll" => session.sync_scroll = value == "1",
                 "soft_wrap" => session.soft_wrap = value == "1",
                 "sidebar_tab" => session.sidebar_tab = value,
+                "terminal_open" => session.terminal_open = value == "1",
+                "terminal_height" => {
+                    session.terminal_height = value.parse().unwrap_or(session.terminal_height)
+                }
                 key if key.starts_with("lang.") => {
                     let rest = &key["lang.".len()..];
                     let Some((index, field)) = rest.split_once('.') else {
@@ -187,7 +195,7 @@ impl Session {
     pub fn render(&self) -> String {
         let mut out = String::new();
         // Always write the current format; parsing older files still works.
-        out.push_str("version=5\n");
+        out.push_str("version=6\n");
         out.push_str(&format!("theme={}\n", self.theme));
         out.push_str(&format!("sidebar={}\n", u8::from(self.sidebar)));
         if let Some(folder) = &self.folder {
@@ -204,6 +212,8 @@ impl Session {
         out.push_str(&format!("sync_scroll={}\n", u8::from(self.sync_scroll)));
         out.push_str(&format!("soft_wrap={}\n", u8::from(self.soft_wrap)));
         out.push_str(&format!("sidebar_tab={}\n", escape(&self.sidebar_tab)));
+        out.push_str(&format!("terminal_open={}\n", u8::from(self.terminal_open)));
+        out.push_str(&format!("terminal_height={}\n", self.terminal_height));
         for (index, (path, name)) in self.languages.iter().enumerate() {
             out.push_str(&format!(
                 "lang.{index}.path={}\nlang.{index}.name={}\n",
