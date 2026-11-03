@@ -128,8 +128,9 @@ double-click resets). It starts
 Ctrl letters, Alt prefixes, application cursor mode (vim/less) and IME candidate
 placement at the terminal cursor. The terminal requests frames while a PTY is
 alive, so full-screen programs repaint without extra input. `Ctrl+\`` closes it
-and kills the child. Focus is visible: the active editor gets an accent top line and caret, the inactive caret
-dims, and the terminal header/cursor accent only while it owns keyboard focus.
+and kills the child. Focus is visible through the caret: the active editor caret is accent and
+2 px, the inactive caret dims, and the terminal header text/cursor accent only
+while it owns keyboard focus. Editor and terminal tops have no accent rule.
 Open state and height persist in the session (v7); the shell process and screen
 contents do not. Multiple sessions are a follow-up.
 

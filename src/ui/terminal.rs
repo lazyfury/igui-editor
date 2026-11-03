@@ -135,13 +135,6 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     let p = theme.p;
     let focused = state.focus == Focus::Terminal;
     kit::fill(env.ctx, rect, p.bg);
-    kit::hline(
-        env.ctx,
-        rect.left(),
-        rect.right(),
-        rect.top(),
-        if focused { p.accent } else { p.border },
-    );
     kit::text(
         env.ctx,
         "TERMINAL",

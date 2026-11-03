@@ -496,9 +496,6 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     let p = theme.p;
     let measurer = env.measurer;
     kit::fill(env.ctx, rect, p.bg);
-    if state.focus == Focus::Editor {
-        kit::hline(env.ctx, rect.left(), rect.right(), rect.top(), p.accent);
-    }
 
     if state.ws.active_doc().is_none() {
         paint_welcome(state, env, rect);
