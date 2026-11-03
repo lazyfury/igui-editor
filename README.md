@@ -5,7 +5,7 @@ A compact, square-cornered **text / Markdown editor** built on the
 through `igui_ui` / `igui_render` only.
 
 Tabs · undo/redo · find & replace · syntax highlighting (JSON language packs) ·
-native LSP (Rust / `rust-analyzer` first) · Markdown split preview (tables included) ·
+native LSP (Rust / `rust-analyzer` first) · outline panel · Markdown split preview (tables included) ·
 Quick Open (`⌘P`) · project search + replace (`⇧⌘F`) · local Git
 status/diff/stage/commit · built-in terminal · scroll sync · tab drag/context menu ·
 soft wrap · external-change detection · Finder/Dock file opening · Dock Recent ·
@@ -119,6 +119,15 @@ external extension host. Native plugins are still compile-time (no dylib ABI).
 }
 ```
 
+## Outline (`⌘⌥O`, View → Outline)
+
+The right sidebar shows LSP document symbols (`textDocument/documentSymbol`) for
+the active document. Rust files inside a Cargo project get functions, methods,
+structs/enums, fields, variables and nested items from `rust-analyzer`; the list
+updates after edits. Clicking a row moves the caret to the symbol and reveals
+it in the editor. The panel is persisted in the session and can be hidden from
+View → Outline or `⌘⌥O`. Symbols are transient LSP state, not saved to disk.
+
 ## Terminal (`⌃\``, View → Terminal)
 
 Native PTY (`portable-pty`) + `vt100` screen, no WebView or JS. The panel sits
@@ -131,7 +140,7 @@ alive, so full-screen programs repaint without extra input. `Ctrl+\`` closes it
 and kills the child. Focus is visible through the caret: the active editor caret is accent and
 2 px, the inactive caret dims, and the terminal header text/cursor accent only
 while it owns keyboard focus. Editor and terminal tops have no accent rule.
-Open state and height persist in the session (v7); the shell process and screen
+Open state and height persist in the session (v8); the shell process and screen
 contents do not. Multiple sessions are a follow-up.
 
 ## macOS integration
@@ -169,6 +178,7 @@ contents do not. Multiple sessions are a follow-up.
 | `⌘A` | select all |
 | `⌘P` | Quick Open (fuzzy file picker) |
 | `⇧⌘F` | search in folder |
+| `⌘⌥O` | toggle the right outline panel |
 | `F1` / `F12` | LSP hover / go to definition |
 | `⌘I` / `Ctrl+I` | LSP completion (also `Ctrl+Space` when available) |
 | `⌘,` | settings panel |
@@ -424,8 +434,8 @@ remembered per document and the last ratio is persisted.
   original name/path and are marked dirty so the first save writes them back.
 - **Window state**: size and position are persisted and restored (skipped while
   maximized/fullscreen).
-- Session format is version 7 (`keymap`; v6 added `terminal_open`,
-  `terminal_height`; v5 added
+- Session format is version 8 (`outline`; v7 added `keymap`, v6 added
+  `terminal_open`, `terminal_height`; v5 added
   `sidebar_tab`, v4 `soft_wrap`); older files still load (v1 infers the folder
   from the first tab).
 
@@ -550,6 +560,7 @@ src/
   services/           native service registry + built-in plugin descriptors
   ui/git.rs           GIT sidebar tab + diff overlay + commit prompt
   ui/lsp.rs           hover card + completion list overlays
+  ui/outline.rs       right document-symbol outline
   ui/settings.rs      settings + Keymap row
   ui/terminal.rs      vt100 cell renderer + terminal key encoding
   input.rs            keyboard dispatch: modal -> find -> shortcuts -> tree

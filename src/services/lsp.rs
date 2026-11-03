@@ -16,6 +16,7 @@ pub const CAPABILITIES: &[Capability] = &[
     Capability::LspHover,
     Capability::LspCompletion,
     Capability::LspDefinition,
+    Capability::LspSymbols,
 ];
 
 pub const COMMANDS: &[CommandSpec] = &[

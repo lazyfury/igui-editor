@@ -398,6 +398,9 @@ impl EditorApp {
                         }
                     }
                 }
+                if ui::outline::click(&mut state, *position) {
+                    return EventResult::Handled;
+                }
                 drop(state);
                 let result = igui_ui::route_input(&mut self.tree, event);
                 self.focus_editor();
@@ -467,6 +470,7 @@ impl EditorApp {
                 if tab_menu_changed {
                     state.dirty = true;
                 }
+                ui::outline::hover_at(&mut state, *position);
                 drop(state);
                 let result = igui_ui::route_input(&mut self.tree, event);
                 self.focus_editor();
@@ -1134,6 +1138,12 @@ fn build_shell(tree: &mut SceneTree, state: &Rc<RefCell<AppState>>) -> (NodeId, 
         state.borrow_mut().terminal.node = Some(terminal);
     } else {
         state.borrow_mut().terminal.node = None;
+    }
+
+    if state.borrow().show_outline {
+        let outline = ui::outline::build(tree, body, state.clone());
+        kit::flex(tree, outline, 0.0, Some(ui::outline::WIDTH), 0.0);
+        kit::min_size(tree, outline, ui::outline::WIDTH, 0.0);
     }
 
     let status = ui::status::build(tree, column, state.clone());

@@ -3581,6 +3581,19 @@ while True:
             0, 3, 4, 1, 0,
             1, 8, 10, 0, 0,
         ]}})
+    elif method == "textDocument/documentSymbol":
+        send({"jsonrpc": "2.0", "id": request_id, "result": [{
+            "name": "main",
+            "kind": 12,
+            "range": {"start": {"line": 0, "character": 0}, "end": {"line": 3, "character": 1}},
+            "selectionRange": {"start": {"line": 0, "character": 3}, "end": {"line": 0, "character": 7}},
+            "children": [{
+                "name": "diagnostic",
+                "kind": 13,
+                "range": {"start": {"line": 1, "character": 4}, "end": {"line": 1, "character": 18}},
+                "selectionRange": {"start": {"line": 1, "character": 8}, "end": {"line": 1, "character": 18}},
+            }],
+        }]})
 "#,
     )
     .map_err(|error| format!("lsp fixture: {error}"))?;
@@ -3632,6 +3645,9 @@ fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
         if state.lsp.semantic_for(&path).len() != 2 {
             return Err("LSP semantic tokens were not received".into());
         }
+        if state.lsp.symbols_for(&path).len() != 2 {
+            return Err("LSP document symbols were not received".into());
+        }
     }
 
     let frame = harness.frame()?;
@@ -3652,6 +3668,29 @@ fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
         )
     }) {
         return Err("LSP diagnostic underline was not painted".into());
+    }
+
+    let frame = harness.frame()?;
+    if harness.app.state().outline.rows.len() < 2
+        || !texts(&frame).iter().any(|text| text == "OUTLINE")
+        || !texts(&frame).iter().any(|text| text == "diagnostic")
+    {
+        return Err("outline panel did not paint document symbols".into());
+    }
+    let outline_row = harness.app.state().outline.rows[1].1.center();
+    harness.click(outline_row);
+    harness.frame()?;
+    if harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .is_none_or(|doc| doc.line_col().0 != 1)
+    {
+        return Err("clicking an outline symbol did not jump to its line".into());
+    }
+    if let Some(doc) = harness.app.state_mut().ws.active_doc_mut() {
+        doc.set_caret(0);
     }
 
     // Hover: F1, wait for the response, and assert the overlay is painted.

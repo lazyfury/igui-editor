@@ -9,6 +9,7 @@ pub mod lsp;
 pub mod menu;
 pub mod modal;
 pub mod new_file;
+pub mod outline;
 pub mod preview;
 pub mod project_search;
 pub mod quick_open;

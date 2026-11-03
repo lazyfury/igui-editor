@@ -30,6 +30,7 @@ pub enum Capability {
     LspHover,
     LspCompletion,
     LspDefinition,
+    LspSymbols,
 }
 
 impl Capability {
@@ -49,6 +50,7 @@ impl Capability {
             Capability::LspHover => "lsp.hover",
             Capability::LspCompletion => "lsp.completion",
             Capability::LspDefinition => "lsp.definition",
+            Capability::LspSymbols => "lsp.symbols",
         }
     }
 }

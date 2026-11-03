@@ -55,6 +55,15 @@ pub struct SemanticToken {
 }
 
 #[derive(Clone, Debug)]
+pub struct OutlineSymbol {
+    pub name: String,
+    pub kind: u32,
+    pub depth: usize,
+    pub line: u32,
+    pub character: u32,
+}
+
+#[derive(Clone, Debug)]
 pub struct HoverUi {
     pub text: String,
 }
@@ -86,6 +95,7 @@ enum PendingKind {
     Completion,
     Definition,
     Semantic(PathBuf),
+    Symbols(PathBuf),
 }
 
 struct OpenDoc {
@@ -404,6 +414,9 @@ pub struct LspController {
     semantic: HashMap<PathBuf, Vec<SemanticToken>>,
     semantic_pending: HashSet<PathBuf>,
     semantic_in_flight: HashSet<PathBuf>,
+    symbols: HashMap<PathBuf, Vec<OutlineSymbol>>,
+    symbols_pending: HashSet<PathBuf>,
+    symbols_in_flight: HashSet<PathBuf>,
     pending: HashMap<u64, (PendingKind, Instant)>,
     failed: Option<(PathBuf, Instant)>,
     pub hover: Option<HoverUi>,
@@ -426,6 +439,9 @@ impl Default for LspController {
             semantic: HashMap::new(),
             semantic_pending: HashSet::new(),
             semantic_in_flight: HashSet::new(),
+            symbols: HashMap::new(),
+            symbols_pending: HashSet::new(),
+            symbols_in_flight: HashSet::new(),
             pending: HashMap::new(),
             failed: None,
             hover: None,
@@ -530,9 +546,14 @@ impl LspController {
             .map(|(id, _)| *id)
             .collect();
         for id in expired {
-            let kind = self.pending.remove(&id).map(|(kind, _)| kind);
-            if let Some(PendingKind::Semantic(path)) = kind {
-                self.semantic_in_flight.remove(&path);
+            match self.pending.remove(&id).map(|(kind, _)| kind) {
+                Some(PendingKind::Semantic(path)) => {
+                    self.semantic_in_flight.remove(&path);
+                }
+                Some(PendingKind::Symbols(path)) => {
+                    self.symbols_in_flight.remove(&path);
+                }
+                Some(_) | None => {}
             }
         }
 
@@ -552,6 +573,9 @@ impl LspController {
         self.semantic.clear();
         self.semantic_pending.clear();
         self.semantic_in_flight.clear();
+        self.symbols.clear();
+        self.symbols_pending.clear();
+        self.symbols_in_flight.clear();
         self.pending.clear();
         self.hover = None;
         self.completion = None;
@@ -577,6 +601,8 @@ impl LspController {
                     self.open_docs.clear();
                     self.semantic_pending.clear();
                     self.semantic_in_flight.clear();
+                    self.symbols_pending.clear();
+                    self.symbols_in_flight.clear();
                     self.pending.clear();
                     self.changed = true;
                 }
@@ -645,6 +671,18 @@ impl LspController {
                         self.semantic.remove(&path);
                     } else {
                         self.semantic.insert(path, tokens);
+                    }
+                    self.changed = true;
+                }
+            }
+            PendingKind::Symbols(path) => {
+                self.symbols_in_flight.remove(&path);
+                if self.open_docs.contains_key(&path) {
+                    let symbols = parse_document_symbols(result);
+                    if symbols.is_empty() {
+                        self.symbols.remove(&path);
+                    } else {
+                        self.symbols.insert(path, symbols);
                     }
                     self.changed = true;
                 }
@@ -739,10 +777,14 @@ impl LspController {
             self.semantic.remove(&path);
             self.semantic_pending.remove(&path);
             self.semantic_in_flight.remove(&path);
+            self.symbols.remove(&path);
+            self.symbols_pending.remove(&path);
+            self.symbols_in_flight.remove(&path);
         }
 
         let now = Instant::now();
         let mut semantic_queue = Vec::new();
+        let mut symbol_queue = Vec::new();
         for doc in &ws.tabs {
             let Some(path) = doc.path().map(Path::to_path_buf) else {
                 continue;
@@ -777,7 +819,8 @@ impl LspController {
                             changed_at: None,
                         },
                     );
-                    semantic_queue.push(path);
+                    semantic_queue.push(path.clone());
+                    symbol_queue.push(path);
                 }
                 Some(open) => {
                     if open.rev == doc.rev() {
@@ -804,6 +847,7 @@ impl LspController {
                             );
                         }
                         semantic_queue.push(path.clone());
+                        symbol_queue.push(path.clone());
                     }
                 }
             }
@@ -811,7 +855,11 @@ impl LspController {
         for path in semantic_queue {
             self.semantic_pending.insert(path);
         }
+        for path in symbol_queue {
+            self.symbols_pending.insert(path);
+        }
         self.flush_semantic_requests();
+        self.flush_symbol_requests();
     }
 
     fn send_position(&mut self, method: &str, kind: PendingKind, doc: &Document) -> bool {
@@ -898,6 +946,34 @@ impl LspController {
                 self.semantic_in_flight.insert(path);
             }
         }
+    }
+
+    fn flush_symbol_requests(&mut self) {
+        let paths: Vec<PathBuf> = self
+            .symbols_pending
+            .iter()
+            .filter(|path| !self.symbols_in_flight.contains(*path))
+            .cloned()
+            .collect();
+        for path in paths {
+            self.symbols_pending.remove(&path);
+            let Some(client) = self.client.as_mut() else {
+                return;
+            };
+            let request = client.request(
+                "textDocument/documentSymbol",
+                json!({"textDocument": {"uri": path_to_uri(&path)}}),
+            );
+            if let Some(id) = request {
+                self.pending
+                    .insert(id, (PendingKind::Symbols(path.clone()), Instant::now()));
+                self.symbols_in_flight.insert(path);
+            }
+        }
+    }
+
+    pub fn symbols_for(&self, path: &Path) -> &[OutlineSymbol] {
+        self.symbols.get(path).map(Vec::as_slice).unwrap_or(&[])
     }
 
     pub fn semantic_for(&self, path: &Path) -> &[SemanticToken] {
@@ -993,6 +1069,45 @@ impl LspController {
     }
 }
 
+fn parse_document_symbols(result: &Value) -> Vec<OutlineSymbol> {
+    fn walk(items: &[Value], depth: usize, out: &mut Vec<OutlineSymbol>) {
+        if depth > 12 || out.len() >= 2_000 {
+            return;
+        }
+        for item in items {
+            let Some(name) = item["name"].as_str().filter(|name| !name.is_empty()) else {
+                continue;
+            };
+            let start = if item.get("selectionRange").is_some() {
+                &item["selectionRange"]["start"]
+            } else if item.get("location").is_some() {
+                &item["location"]["range"]["start"]
+            } else {
+                &item["range"]["start"]
+            };
+            out.push(OutlineSymbol {
+                name: name.to_string(),
+                kind: item["kind"].as_u64().unwrap_or(13) as u32,
+                depth,
+                line: start["line"].as_u64().unwrap_or(0) as u32,
+                character: start["character"].as_u64().unwrap_or(0) as u32,
+            });
+            if let Some(children) = item["children"].as_array() {
+                walk(children, depth + 1, out);
+            }
+            if out.len() >= 2_000 {
+                return;
+            }
+        }
+    }
+    let Some(items) = result.as_array() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    walk(items, 0, &mut out);
+    out
+}
+
 fn semantic_capability(result: &Value) -> (bool, Vec<String>) {
     let provider = &result["capabilities"]["semanticTokensProvider"];
     let types = provider["legend"]["tokenTypes"]
@@ -1074,6 +1189,11 @@ fn initialize_params(root: &Path, spec: &LanguageServerSpec) -> Value {
                     }
                 },
                 "definition": {"dynamicRegistration": false, "linkSupport": false},
+                "documentSymbol": {
+                    "dynamicRegistration": false,
+                    "hierarchicalDocumentSymbolSupport": true,
+                    "labelSupport": false
+                },
                 "semanticTokens": {
                     "dynamicRegistration": false,
                     "requests": {"full": true, "range": false},

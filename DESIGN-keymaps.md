@@ -235,7 +235,7 @@ changing the profile re-applies it synchronously.
   primary, user override precedence, conflict detection.
 - Headless selfcheck per profile: drive `KeyDown`/`TextInput` through the real
   app and assert model state; no OS screenshots.
-- Regression: existing 131 + 2 tests and the LSP/Git/terminal/keymap selfchecks must
+- Regression: existing tests and the LSP/Git/terminal/keymap selfchecks must
   stay green after each routing change.
 
 ## Non-goals for the first keymap slice

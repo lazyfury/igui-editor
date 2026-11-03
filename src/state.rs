@@ -155,6 +155,7 @@ pub enum Action {
     ToggleTerminal,
     Settings,
     ToggleSidebar,
+    ToggleOutline,
     ToggleTheme,
     SetView(ViewMode),
     ToggleScrollSync,
@@ -208,6 +209,7 @@ impl Action {
             Action::ToggleTerminal => "Terminal".into(),
             Action::Settings => "Settings…".into(),
             Action::ToggleSidebar => "Toggle Sidebar".into(),
+            Action::ToggleOutline => "Outline".into(),
             Action::ToggleTheme => "Toggle Theme".into(),
             Action::SetView(mode) => mode.label().into(),
             Action::ToggleScrollSync => "Sync Scroll".into(),
@@ -310,6 +312,10 @@ impl Action {
                 "⌘" => "⌘B",
                 _ => "Ctrl+B",
             },
+            Action::ToggleOutline => match ACCEL {
+                "⌘" => "⌘⌥O",
+                _ => "Ctrl+Alt+O",
+            },
             Action::ToggleTheme => match ACCEL {
                 "⌘" => "⇧⌘L",
                 _ => "Ctrl+Shift+L",
@@ -350,6 +356,7 @@ impl Action {
             | Action::Open
             | Action::OpenFolder
             | Action::ToggleSidebar
+            | Action::ToggleOutline
             | Action::ToggleTheme
             | Action::Find
             | Action::FindReplace
@@ -393,6 +400,7 @@ impl Action {
         match self {
             Action::SetView(mode) => *mode == state.view_of_active(),
             Action::ToggleScrollSync => state.sync_scroll,
+            Action::ToggleOutline => state.show_outline,
             Action::ToggleSoftWrap => state.session.soft_wrap,
             Action::ToggleTerminal => state.terminal.open,
             Action::SetLanguage(None) => state.language_override_of_active().is_none(),
@@ -452,6 +460,7 @@ pub fn items(menu: Menu, state: &AppState) -> Vec<Option<Action>> {
         }
         Menu::View => vec![
             Some(Action::ToggleSidebar),
+            Some(Action::ToggleOutline),
             Some(Action::ToggleTheme),
             None,
             Some(Action::SetView(ViewMode::Edit)),
@@ -630,6 +639,17 @@ pub struct SidebarUi {
     pub actions: Vec<(Action, Rect)>,
     /// Sidebar tab hit rectangles (tab id, rect).
     pub tabs: Vec<(&'static str, Rect)>,
+}
+
+/// Right-side document outline (LSP document symbols).
+#[derive(Clone, Debug, Default)]
+pub struct OutlineUi {
+    pub rect: Rect,
+    pub scroll: f32,
+    pub scroll_max: f32,
+    pub hover: Option<usize>,
+    /// Visible row index and its hit rectangle, recorded during paint.
+    pub rows: Vec<(usize, Rect)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -947,8 +967,10 @@ pub struct AppState {
     pub theme: Theme,
     pub ws: Workspace,
     pub show_sidebar: bool,
+    pub show_outline: bool,
     pub viewport: ViewportSize,
     pub sidebar: SidebarUi,
+    pub outline: OutlineUi,
     pub editor: EditorUi,
     pub tabs: TabsUi,
     pub tab_drag: Option<TabDrag>,
@@ -1058,6 +1080,7 @@ impl AppState {
         let sync_scroll = session.sync_scroll;
         let terminal_open = session.terminal_open;
         let terminal_height = session.terminal_height.clamp(120.0, 600.0);
+        let show_outline = session.outline;
         let sidebar_tab = if session.sidebar_tab.is_empty() {
             "explorer".into()
         } else {
@@ -1076,8 +1099,10 @@ impl AppState {
             theme,
             ws,
             show_sidebar: session.sidebar,
+            show_outline,
             viewport: ViewportSize::default(),
             sidebar: SidebarUi::default(),
+            outline: OutlineUi::default(),
             editor: EditorUi {
                 reveal: true,
                 wrap: crate::model::wrap::WrapLayout::default(),
@@ -3851,6 +3876,15 @@ impl AppState {
             Action::ToggleSidebar => {
                 self.show_sidebar = !self.show_sidebar;
                 self.session.sidebar = self.show_sidebar;
+                self.config_dirty = true;
+                self.needs_rebuild = true;
+            }
+            Action::ToggleOutline => {
+                self.show_outline = !self.show_outline;
+                self.session.outline = self.show_outline;
+                if !self.show_outline {
+                    self.outline.hover = None;
+                }
                 self.config_dirty = true;
                 self.needs_rebuild = true;
             }

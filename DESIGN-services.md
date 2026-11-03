@@ -49,6 +49,7 @@ lsp.diagnostics
 lsp.hover
 lsp.completion
 lsp.definition
+lsp.symbols
 ```
 
 Git read + stage/unstage/commit are wired. Terminal capabilities are declared;
@@ -114,8 +115,9 @@ PluginHost
   a server cannot stall the UI.
 - **UI state**: diagnostics are keyed by path and painted as underlines + gutter
   markers; semantic tokens are requested on open/change and painted over the
-  syntax pass with server-aware variable/parameter/field/type colors. Hover and
-  completion are transient overlays. Nothing is persisted.
+  syntax pass with server-aware variable/parameter/field/type colors. Document
+  symbols feed the right outline panel. Hover and completion are transient
+  overlays. Nothing is persisted.
 - **Rust spec**: command `rust-analyzer`, overridable with
   `IGUI_EDITOR_RUST_ANALYZER` (tests use a scripted server); arguments are
   passed directly, never through a shell.
@@ -127,6 +129,7 @@ lsp.diagnostics
 lsp.hover
 lsp.completion
 lsp.definition
+lsp.symbols
 ```
 
 ### Dynamic/data-only contributions
