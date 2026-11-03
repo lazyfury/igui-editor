@@ -1,6 +1,6 @@
 # Native services and built-in plugins
 
-Status: M8.1 (Git read-only) implemented. Terminal is the next service.
+Status: Git status/diff/stage/unstage/commit and the first native PTY terminal slice are implemented. Extension host remains deferred.
 
 ## Intent
 
@@ -45,8 +45,8 @@ terminal.resize
 terminal.close
 ```
 
-Only read capabilities are wired in M8.1. Write capabilities are declared so
-the future extension host has a stable permission vocabulary.
+Git read + stage/unstage/commit are wired. Terminal capabilities are declared;
+the first panel currently exposes one session, fixed height, no persistence.
 
 ## Git service
 
@@ -59,11 +59,12 @@ the future extension host has a stable permission vocabulary.
 
 Not exposed: arbitrary git command strings, network/auth UI, libgit2.
 
-## Terminal service (planned)
+## Terminal service (first slice implemented)
 
 - `portable-pty` + `vt100`; native cell-grid renderer, no WebView/JS.
-- One PTY worker per session; reader/writer channels; resize updates PTY and
-  parser; drop kills the child.
+- One PTY worker per session; reader thread + writer; resize updates PTY and
+  parser; drop kills the child. The first UI has one session and a 220 px fixed
+  panel; drag-resize, multiple sessions and session restore are next.
 - Focus is a separate `Focus::Terminal`; key encoding is pure and testable.
 - Panel lives below the editor inside `main`; its top divider extends the shared
   `ui::handle` with a horizontal axis.

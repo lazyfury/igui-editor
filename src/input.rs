@@ -94,6 +94,7 @@ pub fn shortcut(state: &mut AppState, key: Key, modifiers: Modifiers) -> Option<
             'l' => Action::ToggleTheme,
             'm' => Action::SetView(state.view_of_active().next()),
             'y' => Action::ToggleScrollSync,
+            '`' => Action::ToggleTerminal,
             'g' => {
                 if state.find.open {
                     state.find_step(if shift { -1 } else { 1 });
@@ -288,7 +289,7 @@ fn field_copy(state: &AppState) {
     let field = match state.focus {
         Focus::Find => Some(&state.find.query),
         Focus::Replace => Some(&state.find.replace),
-        Focus::Editor => None,
+        Focus::Editor | Focus::Terminal => None,
     };
     let text = field.and_then(|field| field.selected_text().map(str::to_string));
     if let Some(text) = text {

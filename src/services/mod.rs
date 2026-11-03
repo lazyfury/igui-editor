@@ -7,6 +7,7 @@
 //! terminal.
 
 pub mod git;
+pub mod terminal;
 
 use std::collections::BTreeMap;
 
@@ -108,10 +109,13 @@ pub fn install_builtins() -> ServiceRegistry {
         label: "EXPLORER",
     });
     let plugin = git::GitPlugin;
+    let terminal = terminal::TerminalPlugin;
     registry.plugins.push(plugin.id());
+    registry.plugins.push(terminal.id());
     let mut host = PluginHost {
         registry: &mut registry,
     };
     plugin.register(&mut host);
+    terminal.register(&mut host);
     registry
 }

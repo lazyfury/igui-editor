@@ -20,6 +20,7 @@ use crate::model::doc::Document;
 use crate::model::find::{find_all, Matcher};
 use crate::model::git::{GitDiff, GitEvent, GitRequest, GitWorker, RepoStatus};
 use crate::model::highlight::HighlightCache;
+use crate::model::pty::PtySession;
 use crate::model::recovery::{RecoveryEntry, RecoveryStore};
 use crate::model::replace::{self, PlannedFile};
 use crate::model::search::{SearchHit, SearchMessage, SearchWorker};
@@ -133,6 +134,7 @@ pub enum Action {
     Find,
     QuickOpen,
     ProjectSearch,
+    ToggleTerminal,
     Settings,
     ToggleSidebar,
     ToggleTheme,
@@ -171,6 +173,7 @@ impl Action {
             Action::Find => "Find…".into(),
             Action::QuickOpen => "Quick Open…".into(),
             Action::ProjectSearch => "Search in Folder…".into(),
+            Action::ToggleTerminal => "Terminal".into(),
             Action::Settings => "Settings…".into(),
             Action::ToggleSidebar => "Toggle Sidebar".into(),
             Action::ToggleTheme => "Toggle Theme".into(),
@@ -257,6 +260,10 @@ impl Action {
                 "⌘" => "⇧⌘F",
                 _ => "Ctrl+Shift+F",
             },
+            Action::ToggleTerminal => match ACCEL {
+                "⌘" => "⌃`",
+                _ => "Ctrl+`",
+            },
             Action::Settings => match ACCEL {
                 "⌘" => "⌘,",
                 _ => "Ctrl+,",
@@ -297,7 +304,8 @@ impl Action {
             | Action::ToggleTheme
             | Action::Find
             | Action::Settings
-            | Action::ToggleScrollSync => true,
+            | Action::ToggleScrollSync
+            | Action::ToggleTerminal => true,
             Action::CloseFolder => state.ws.folder_open,
             Action::QuickOpen | Action::ProjectSearch => state.ws.folder_open,
             Action::Save => doc.is_some(),
@@ -321,6 +329,7 @@ impl Action {
             Action::SetView(mode) => *mode == state.view_of_active(),
             Action::ToggleScrollSync => state.sync_scroll,
             Action::ToggleSoftWrap => state.session.soft_wrap,
+            Action::ToggleTerminal => state.terminal.open,
             Action::SetLanguage(None) => state.language_override_of_active().is_none(),
             Action::SetLanguage(Some(name)) => {
                 state.language_override_of_active() == Some(name.as_str())
@@ -386,6 +395,7 @@ pub fn items(menu: Menu, state: &AppState) -> Vec<Option<Action>> {
             None,
             Some(Action::ToggleScrollSync),
             Some(Action::ToggleSoftWrap),
+            Some(Action::ToggleTerminal),
             Some(Action::Settings),
         ],
     }
@@ -400,6 +410,7 @@ pub enum Focus {
     Editor,
     Find,
     Replace,
+    Terminal,
 }
 
 /// What the pointer is currently dragging inside the editor.
@@ -554,6 +565,33 @@ pub struct SidebarUi {
     pub tabs: Vec<(&'static str, Rect)>,
 }
 
+/// Built-in terminal panel/session.
+pub struct TerminalState {
+    pub open: bool,
+    pub focused: bool,
+    pub session: Option<PtySession>,
+    pub parser: Option<vt100::Parser>,
+    pub rect: Rect,
+    pub rows: u16,
+    pub cols: u16,
+    pub cwd: PathBuf,
+}
+
+impl Default for TerminalState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            focused: false,
+            session: None,
+            parser: None,
+            rect: Rect::ZERO,
+            rows: 24,
+            cols: 80,
+            cwd: PathBuf::from("."),
+        }
+    }
+}
+
 /// Git panel / diff state. The worker owns the child process; the UI owns only
 /// immutable snapshots.
 pub struct GitState {
@@ -569,10 +607,16 @@ pub struct GitState {
     pub diff_loading: bool,
     pub diff_visible: bool,
     pub diff_scroll: f32,
-    pub rows: Vec<(PathBuf, bool, Rect)>,
+    pub rows: Vec<(PathBuf, bool, Rect, Rect)>,
     pub refresh_rect: Rect,
+    pub stage_all_rect: Rect,
+    pub commit_rect: Rect,
     pub scroll: f32,
     pub error: Option<String>,
+    pub write_generation: u64,
+    pub commit_open: bool,
+    pub commit_message: TextEdit,
+    pub commit_error: Option<String>,
 }
 
 impl Default for GitState {
@@ -592,8 +636,14 @@ impl Default for GitState {
             diff_scroll: 0.0,
             rows: Vec::new(),
             refresh_rect: Rect::ZERO,
+            stage_all_rect: Rect::ZERO,
+            commit_rect: Rect::ZERO,
             scroll: 0.0,
             error: None,
+            write_generation: 0,
+            commit_open: false,
+            commit_message: TextEdit::new(""),
+            commit_error: None,
         }
     }
 }
@@ -831,6 +881,7 @@ pub struct AppState {
     pub services: ServiceRegistry,
     pub sidebar_tab: String,
     pub git: GitState,
+    pub terminal: TerminalState,
     pub syntax: SyntaxRegistry,
     pub highlight: HighlightCache,
     /// Matched bracket byte positions for the caret (`open`, `close`).
@@ -949,6 +1000,7 @@ impl AppState {
             services,
             sidebar_tab,
             git: GitState::default(),
+            terminal: TerminalState::default(),
             syntax: SyntaxRegistry::with_builtins(),
             highlight: HighlightCache::new(),
             bracket: None,
@@ -1022,6 +1074,73 @@ impl AppState {
             .map(|(text, error, _)| (text.as_str(), *error))
     }
 
+    pub fn toggle_terminal(&mut self) {
+        if self.terminal.open {
+            self.terminal.open = false;
+            self.terminal.focused = false;
+            self.terminal.session = None;
+            self.terminal.parser = None;
+            self.focus = Focus::Editor;
+            self.needs_rebuild = true;
+            self.dirty = true;
+            return;
+        }
+        let cwd = self
+            .git
+            .status
+            .root
+            .clone()
+            .or_else(|| self.git_cwd())
+            .or_else(|| self.ws.folder().map(Path::to_path_buf))
+            .unwrap_or_else(|| PathBuf::from("."));
+        match PtySession::spawn(&cwd, 24, 80) {
+            Ok(session) => {
+                let rows = std::num::NonZeroU16::new(24).unwrap();
+                let cols = std::num::NonZeroU16::new(80).unwrap();
+                self.terminal.parser = Some(vt100::Parser::new(rows, cols, 4000));
+                self.terminal.session = Some(session);
+                self.terminal.cwd = cwd;
+                self.terminal.open = true;
+                self.terminal.focused = true;
+                self.focus = Focus::Terminal;
+                self.needs_rebuild = true;
+                self.dirty = true;
+            }
+            Err(error) => self.error(format!("terminal: {error}")),
+        }
+    }
+
+    pub fn tick_terminal(&mut self) {
+        let chunks = self
+            .terminal
+            .session
+            .as_mut()
+            .map(PtySession::try_read)
+            .unwrap_or_default();
+        for chunk in chunks {
+            if let Some(parser) = self.terminal.parser.as_mut() {
+                parser.process(&chunk);
+            }
+            self.dirty = true;
+        }
+        if self
+            .terminal
+            .session
+            .as_ref()
+            .is_some_and(|session| session.exit.is_some())
+            && self.terminal.open
+        {
+            self.status("terminal process exited");
+            self.terminal.session = None;
+        }
+    }
+
+    pub fn terminal_write(&mut self, bytes: &[u8]) {
+        if let Some(session) = self.terminal.session.as_mut() {
+            session.write(bytes);
+        }
+    }
+
     pub fn sidebar_tabs(&self) -> &[SidebarContribution] {
         &self.services.sidebar_tabs
     }
@@ -1063,6 +1182,123 @@ impl AppState {
         }
     }
 
+    pub fn git_stage(&mut self, paths: Vec<PathBuf>) {
+        self.ensure_git_worker();
+        self.git.write_generation += 1;
+        let generation = self.git.write_generation;
+        let cwd = self
+            .git
+            .cwd
+            .clone()
+            .or_else(|| self.git_cwd())
+            .unwrap_or_else(|| PathBuf::from("."));
+        if let Some(worker) = &self.git.worker {
+            worker.send(GitRequest::Stage {
+                generation,
+                cwd,
+                paths,
+            });
+        }
+        self.git.loading = true;
+        self.dirty = true;
+    }
+
+    pub fn git_unstage(&mut self, paths: Vec<PathBuf>) {
+        self.ensure_git_worker();
+        self.git.write_generation += 1;
+        let generation = self.git.write_generation;
+        let cwd = self
+            .git
+            .cwd
+            .clone()
+            .or_else(|| self.git_cwd())
+            .unwrap_or_else(|| PathBuf::from("."));
+        if let Some(worker) = &self.git.worker {
+            worker.send(GitRequest::Unstage {
+                generation,
+                cwd,
+                paths,
+            });
+        }
+        self.git.loading = true;
+        self.dirty = true;
+    }
+
+    pub fn git_stage_all(&mut self) {
+        let paths = self
+            .git
+            .status
+            .changes
+            .iter()
+            .filter(|entry| !entry.conflict)
+            .map(|entry| entry.path.clone())
+            .collect::<Vec<_>>();
+        if !paths.is_empty() {
+            self.git_stage(paths);
+        }
+    }
+
+    pub fn git_unstage_all(&mut self) {
+        let paths = self
+            .git
+            .status
+            .staged
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect::<Vec<_>>();
+        if !paths.is_empty() {
+            self.git_unstage(paths);
+        }
+    }
+
+    pub fn open_git_commit(&mut self) {
+        if self.git.status.staged.is_empty() {
+            self.status("stage a file first");
+            return;
+        }
+        self.git.commit_open = true;
+        self.focus = Focus::Editor;
+        self.terminal.focused = false;
+        self.git.commit_message = TextEdit::new("");
+        self.git.commit_error = None;
+        self.git.diff_visible = false;
+        self.dirty = true;
+    }
+
+    pub fn close_git_commit(&mut self) {
+        self.git.commit_open = false;
+        self.git.commit_error = None;
+        self.dirty = true;
+    }
+
+    pub fn submit_git_commit(&mut self) {
+        let message = self.git.commit_message.text().trim().to_string();
+        if message.is_empty() {
+            self.git.commit_error = Some("enter a commit message".into());
+            self.dirty = true;
+            return;
+        }
+        self.ensure_git_worker();
+        self.git.write_generation += 1;
+        let generation = self.git.write_generation;
+        let cwd = self
+            .git
+            .cwd
+            .clone()
+            .or_else(|| self.git_cwd())
+            .unwrap_or_else(|| PathBuf::from("."));
+        if let Some(worker) = &self.git.worker {
+            worker.send(GitRequest::Commit {
+                generation,
+                cwd,
+                message,
+            });
+        }
+        self.git.loading = true;
+        self.git.commit_error = None;
+        self.dirty = true;
+    }
+
     pub fn open_git_diff(&mut self, path: PathBuf, staged: bool) {
         self.ensure_git_worker();
         self.git.selected = Some(path.clone());
@@ -1070,6 +1306,8 @@ impl AppState {
         self.git.diff_loading = true;
         self.git.diff_visible = true;
         self.git.diff_scroll = 0.0;
+        self.focus = Focus::Editor;
+        self.terminal.focused = false;
         self.git.diff_generation += 1;
         let generation = self.git.diff_generation;
         let cwd = self
@@ -1099,26 +1337,48 @@ impl AppState {
 
     /// Drains Git worker events and issues a pending status request.
     pub fn tick_git(&mut self) {
-        if let Some(worker) = &self.git.worker {
+        let events = if let Some(worker) = &self.git.worker {
+            let mut events = Vec::new();
             while let Some(event) = worker.try_recv() {
-                match event {
-                    GitEvent::Status { generation, status }
-                        if generation == self.git.generation =>
-                    {
-                        self.git.status = status;
-                        self.git.loading = false;
-                        self.git.error = None;
-                        self.dirty = true;
-                    }
-                    GitEvent::Diff { generation, diff }
-                        if generation == self.git.diff_generation =>
-                    {
-                        self.git.diff = Some(diff);
-                        self.git.diff_loading = false;
-                        self.dirty = true;
-                    }
-                    _ => {}
+                events.push(event);
+            }
+            events
+        } else {
+            Vec::new()
+        };
+        for event in events {
+            match event {
+                GitEvent::Status { generation, status } if generation == self.git.generation => {
+                    self.git.status = status;
+                    self.git.loading = false;
+                    self.git.error = None;
+                    self.dirty = true;
                 }
+                GitEvent::Diff { generation, diff } if generation == self.git.diff_generation => {
+                    self.git.diff = Some(diff);
+                    self.git.diff_loading = false;
+                    self.dirty = true;
+                }
+                GitEvent::Write { generation, result }
+                    if generation == self.git.write_generation =>
+                {
+                    self.git.loading = false;
+                    match result {
+                        Ok(message) => {
+                            self.status(message);
+                            self.git.commit_open = false;
+                            self.git.commit_error = None;
+                            self.request_git_refresh();
+                        }
+                        Err(message) => {
+                            self.git.error = Some(message.clone());
+                            self.git.commit_error = Some(message.clone());
+                            self.status(message);
+                        }
+                    }
+                    self.dirty = true;
+                }
+                _ => {}
             }
         }
         if self.git.pending {
@@ -1168,6 +1428,8 @@ impl AppState {
         self.new_file.error = None;
         self.new_file.preedit = None;
         self.new_file.open = true;
+        self.focus = Focus::Editor;
+        self.terminal.focused = false;
         self.dirty = true;
     }
 
@@ -2382,7 +2644,7 @@ impl AppState {
         match self.focus {
             Focus::Find => Some(&mut self.find.query),
             Focus::Replace => Some(&mut self.find.replace),
-            Focus::Editor => None,
+            Focus::Editor | Focus::Terminal => None,
         }
     }
 
@@ -2935,6 +3197,7 @@ impl AppState {
                 let on = !self.session.soft_wrap;
                 self.set_soft_wrap(on);
             }
+            Action::ToggleTerminal => self.toggle_terminal(),
             Action::SetLanguage(name) => self.set_language(name),
             Action::OpenRecent(path) => self.open_path(path),
             Action::ClearRecent => self.clear_recent(),

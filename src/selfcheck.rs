@@ -2876,8 +2876,8 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
         .git
         .rows
         .iter()
-        .find(|(path, _, _)| path == Path::new("tracked.txt"))
-        .map(|(_, _, rect)| rect.center())
+        .find(|(path, _, _, _)| path == Path::new("tracked.txt"))
+        .map(|(_, _, rect, _)| rect.center())
         .ok_or("Git panel has no tracked.txt row")?;
     harness.click(row);
     for _ in 0..50 {
@@ -2900,6 +2900,96 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
     harness.key(Key::Escape);
     if harness.app.state().git.diff_visible {
         return Err("Esc did not close the Git diff".into());
+    }
+    // Stage all, then commit through the in-app prompt.
+    harness.frame()?;
+    let stage_all = harness.app.state().git.stage_all_rect.center();
+    harness.click(stage_all);
+    for _ in 0..50 {
+        harness.frame()?;
+        if !harness.app.state().git.loading && harness.app.state().git.status.staged.len() >= 2 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    if harness.app.state().git.status.staged.len() < 2 {
+        return Err(format!(
+            "Stage all did not stage the Git changes: loading={} status={:?} error={:?} write_gen={} gen={}",
+            harness.app.state().git.loading,
+            harness.app.state().git.status,
+            harness.app.state().git.error,
+            harness.app.state().git.write_generation,
+            harness.app.state().git.generation
+        ));
+    }
+    let commit_button = harness.app.state().git.commit_rect.center();
+    harness.click(commit_button);
+    harness.frame()?;
+    if !harness.app.state().git.commit_open {
+        return Err("the Commit button did not open the prompt".into());
+    }
+    harness.type_text("selfcheck commit");
+    harness.key(Key::Enter);
+    for _ in 0..50 {
+        harness.frame()?;
+        if !harness.app.state().git.loading && !harness.app.state().git.commit_open {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    {
+        let state = harness.app.state();
+        if state.git.commit_open {
+            return Err(format!(
+                "Git commit did not finish: {:?}",
+                state.git.commit_error
+            ));
+        }
+        if !state.git.status.staged.is_empty() || !state.git.status.changes.is_empty() {
+            return Err("Git commit did not clean the worktree".into());
+        }
+    }
+
+    // Terminal service: PTY, vt100 screen, panel and close.
+    harness.shortcut(
+        Key::Character('`'),
+        Modifiers {
+            ctrl: true,
+            ..Modifiers::NONE
+        },
+    );
+    harness.frame()?;
+    if !harness.app.state().terminal.open || harness.app.state().terminal.session.is_none() {
+        return Err("Ctrl+` did not open a PTY terminal".into());
+    }
+    harness
+        .app
+        .state_mut()
+        .terminal_write(b"printf terminal-selfcheck\n");
+    let mut seen = String::new();
+    for _ in 0..100 {
+        harness.frame()?;
+        if let Some(parser) = harness.app.state().terminal.parser.as_ref() {
+            seen = parser.screen().contents();
+        }
+        if seen.contains("terminal-selfcheck") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    if !seen.contains("terminal-selfcheck") {
+        return Err(format!("terminal output was not parsed: {seen:?}"));
+    }
+    harness.shortcut(
+        Key::Character('`'),
+        Modifiers {
+            ctrl: true,
+            ..Modifiers::NONE
+        },
+    );
+    harness.frame()?;
+    if harness.app.state().terminal.open {
+        return Err("Ctrl+` did not close the terminal".into());
     }
     Ok(())
 }

@@ -243,7 +243,9 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    serializes `git status --porcelain=v2 -z --branch` and diff requests on a
    worker thread; the UI reads immutable `RepoStatus`/`GitDiff` snapshots. The
    GIT sidebar tab is a plugin contribution, and the diff is an app overlay.
-   Stage/unstage/commit are the next slice; network/auth stays in the terminal.
+   Stage/unstage/commit run through the same worker; network/auth stays in the
+   terminal. The built-in terminal is a second native plugin (`portable-pty` +
+   `vt100`) with a cell-grid renderer and a dedicated focus mode.
 
 ## Theme spec (geek / compact / no corners)
 
@@ -345,14 +347,14 @@ queue, Dock Recent / New File / Clear, quick file creation (`⇧⌘N`), system
 recent items, dirty quit confirmation. Native macOS top menu / close-guard /
 Dock reopen remain follow-ups.
 
-**M8 (in progress)** — native service/built-in plugin registry (Git first),
-Git read-only status panel and diff overlay. Next: Git stage/unstage/commit,
-then the native PTY terminal. Extension host remains deferred.
+**M8/M9 (first slice)** — native service/built-in plugin registry (Git and
+Terminal descriptors), Git status/diff/stage/unstage/commit, native PTY terminal
+with vt100 cell rendering and `⌃\`` toggle. Extension host remains deferred.
 
-Next candidates: terminal (PTY + vt100 + shared horizontal handle), Git write
-operations, native macOS top menu/close guard, per-hit replace and cross-file
-undo, incremental preview layout for very large documents, word-boundary
-wrapping.
+Next candidates: terminal drag-resize/multiple sessions/session restore, Git
+discard/branch/network operations, native macOS top menu/close guard, per-hit
+replace and cross-file undo, incremental preview layout for very large
+documents, word-boundary wrapping.
 
 ## Non-goals for the editor core
 

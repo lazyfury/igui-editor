@@ -18,3 +18,4 @@ pub mod split;
 pub mod status;
 pub mod tab_menu;
 pub mod tabs;
+pub mod terminal;

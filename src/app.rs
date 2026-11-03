@@ -21,7 +21,7 @@ use crate::input;
 use crate::kit;
 use crate::model::session::{self, Session};
 use crate::model::Workspace;
-use crate::state::{AppState, DialogKind, DialogRequest, Focus, Menu, ViewMode};
+use crate::state::{Action, AppState, DialogKind, DialogRequest, Focus, Menu, ViewMode};
 use crate::theme::{Mode, Theme};
 use crate::ui;
 
@@ -209,6 +209,7 @@ impl EditorApp {
         self.analysis_behind = self.state.borrow_mut().tick_analysis();
         self.state.borrow_mut().tick_external_changes();
         self.state.borrow_mut().tick_git();
+        self.state.borrow_mut().tick_terminal();
         self.state.borrow_mut().tick_reliability();
         self.state.borrow_mut().sync_scroll_positions();
         if !self.window_restored {
@@ -260,6 +261,7 @@ impl EditorApp {
         let measurer = igui_ui::text_measurer(&self.tree);
         let mut state = self.state.borrow_mut();
         ui::git::paint_diff(&mut state, measurer.as_ref(), ctx);
+        ui::git::paint_commit(&mut state, measurer.as_ref(), ctx);
         drop(state);
         // Overlays, in stacking order: menu drop-down, settings, modal.
         let measurer = igui_ui::text_measurer(&self.tree);
@@ -302,6 +304,10 @@ impl EditorApp {
                 }
                 // The bar sits above the drop-down: a press on a bar item
                 // toggles that menu (including closing the open one).
+                if state.git.commit_open {
+                    ui::git::commit_click(&mut state, *position);
+                    return EventResult::Handled;
+                }
                 if state.git.diff_visible {
                     ui::git::click_diff(&mut state, *position);
                     return EventResult::Handled;
@@ -478,8 +484,24 @@ impl EditorApp {
                 if state.search.open && ui::project_search::on_key(&mut state, *key, modifiers) {
                     return EventResult::Handled;
                 }
+                if state.git.commit_open && ui::git::commit_key(&mut state, *key, modifiers) {
+                    return EventResult::Handled;
+                }
                 if state.git.diff_visible && *key == Key::Escape {
                     state.close_git_diff();
+                    return EventResult::Handled;
+                }
+                if state.focus == Focus::Terminal
+                    && modifiers.ctrl
+                    && matches!(key, Key::Character('`'))
+                {
+                    state.run(Action::ToggleTerminal);
+                    return EventResult::Handled;
+                }
+                if state.focus == Focus::Terminal && !modifiers.meta {
+                    if let Some(bytes) = ui::terminal::encode_key(*key, modifiers) {
+                        state.terminal_write(&bytes);
+                    }
                     return EventResult::Handled;
                 }
                 if state.tab_menu.is_some() && *key == Key::Escape {
@@ -539,6 +561,14 @@ impl EditorApp {
                 if state.settings_open || state.recovery_prompt.is_some() {
                     return EventResult::Handled;
                 }
+                if state.focus == Focus::Terminal {
+                    state.terminal_write(text.as_bytes());
+                    return EventResult::Handled;
+                }
+                if state.git.commit_open {
+                    ui::git::commit_text(&mut state, text);
+                    return EventResult::Handled;
+                }
                 if state.new_file.open {
                     ui::new_file::on_text(&mut state, text);
                     return EventResult::Handled;
@@ -565,6 +595,18 @@ impl EditorApp {
             InputEvent::Ime(ime) => {
                 let mut state = self.state.borrow_mut();
                 if state.settings_open || state.recovery_prompt.is_some() {
+                    return EventResult::Handled;
+                }
+                if state.focus == Focus::Terminal {
+                    if let igui_core::ImeEvent::Commit(text) = ime {
+                        state.terminal_write(text.as_bytes());
+                    }
+                    return EventResult::Handled;
+                }
+                if state.git.commit_open {
+                    if let igui_core::ImeEvent::Commit(text) = ime {
+                        ui::git::commit_text(&mut state, text);
+                    }
                     return EventResult::Handled;
                 }
                 if state.new_file.open {
@@ -968,6 +1010,12 @@ fn build_shell(tree: &mut SceneTree, state: &Rc<RefCell<AppState>>) -> (NodeId, 
             Some(editor)
         }
     };
+
+    if state.borrow().terminal.open {
+        let terminal = ui::terminal::build(tree, main, state.clone());
+        kit::flex(tree, terminal, 0.0, Some(ui::terminal::HEIGHT), 0.0);
+        kit::min_size(tree, terminal, 0.0, ui::terminal::HEIGHT);
+    }
 
     let status = ui::status::build(tree, column, state.clone());
     kit::flex(tree, status, 0.0, Some(m.status_h), 0.0);

@@ -160,13 +160,73 @@ pub fn paint_sidebar(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                 m.font_ui,
                 if selected { p.text } else { p.dim },
             );
-            rows.push((entry.path.clone(), entry.staged, row));
+            let action = Rect::from_min_size(
+                Vec2::new(row.right() - 24.0, row.top() + 2.0),
+                Size::new(20.0, 18.0),
+            );
+            if !entry.conflict {
+                env.ctx.stroke_rect(action, 1.0, p.border);
+                kit::text_center(
+                    env.ctx,
+                    measurer,
+                    if entry.staged { "−" } else { "+" },
+                    action,
+                    kit::baseline(measurer, action, m.font_small),
+                    m.font_small,
+                    p.dim,
+                );
+            }
+            rows.push((entry.path.clone(), entry.staged, row, action));
             y += ROW_H;
         }
         y += 4.0;
     }
     env.ctx.restore();
     state.git.rows = rows;
+
+    // Bottom actions: Stage all + Commit.
+    let bottom = Rect::from_min_size(
+        Vec2::new(content.left() + 8.0, content.bottom() - 30.0),
+        Size::new(content.width() - 16.0, 24.0),
+    );
+    let stage_all = Rect::from_min_size(bottom.origin, Size::new(bottom.width() * 0.48, 24.0));
+    let commit = Rect::from_min_size(
+        Vec2::new(bottom.right() - bottom.width() * 0.56, bottom.top()),
+        Size::new(bottom.width() * 0.56, 24.0),
+    );
+    env.ctx.stroke_rect(stage_all, 1.0, p.border);
+    kit::text_center(
+        env.ctx,
+        measurer,
+        "Stage all",
+        stage_all,
+        kit::baseline(measurer, stage_all, m.font_small),
+        m.font_small,
+        p.dim,
+    );
+    env.ctx.fill_rect(
+        commit,
+        if status.staged.is_empty() {
+            p.panel
+        } else {
+            p.accent
+        },
+    );
+    kit::text_center(
+        env.ctx,
+        measurer,
+        "Commit",
+        commit,
+        kit::baseline(measurer, commit, m.font_small),
+        m.font_small,
+        if status.staged.is_empty() {
+            p.faint
+        } else {
+            p.bg
+        },
+    );
+    state.git.stage_all_rect = stage_all;
+    state.git.commit_rect = commit;
 
     if state.git.loading {
         kit::text(
@@ -188,14 +248,30 @@ pub fn click(state: &mut AppState, pos: Vec2) -> bool {
         state.request_git_refresh();
         return true;
     }
+    if state.git.stage_all_rect.contains(pos) {
+        state.git_stage_all();
+        return true;
+    }
+    if state.git.commit_rect.contains(pos) {
+        state.open_git_commit();
+        return true;
+    }
     let row = state
         .git
         .rows
         .iter()
-        .find(|(_, _, rect)| rect.contains(pos))
-        .map(|(path, staged, _)| (path.clone(), *staged));
-    if let Some((path, staged)) = row {
-        state.open_git_diff(path, staged);
+        .find(|(_, _, rect, _)| rect.contains(pos))
+        .map(|(path, staged, _, action)| (path.clone(), *staged, *action));
+    if let Some((path, staged, action)) = row {
+        if action.contains(pos) {
+            if staged {
+                state.git_unstage(vec![path]);
+            } else {
+                state.git_stage(vec![path]);
+            }
+        } else {
+            state.open_git_diff(path, staged);
+        }
         return true;
     }
     false
@@ -360,6 +436,166 @@ pub fn paint_diff(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut P
     }
 }
 
+pub fn commit_layout(state: &AppState) -> (Rect, Rect) {
+    let viewport = state.viewport.logical_rect();
+    let panel = Rect::from_center_size(
+        viewport.center(),
+        Size::new(
+            (viewport.width() - 220.0).max(320.0),
+            (viewport.height() - 300.0).max(170.0),
+        ),
+    );
+    let field = Rect::from_min_size(
+        Vec2::new(panel.left() + 18.0, panel.top() + 50.0),
+        Size::new(panel.width() - 36.0, 34.0),
+    );
+    (panel, field)
+}
+
+pub fn paint_commit(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintContext) {
+    if !state.git.commit_open {
+        return;
+    }
+    let theme = state.theme;
+    let m = theme.m;
+    let p = theme.p;
+    let viewport = state.viewport.logical_rect();
+    let (panel, field) = commit_layout(state);
+    ctx.fill_rect(viewport, igui_core::Color::new(0.0, 0.0, 0.0, 0.4));
+    kit::fill(ctx, panel, p.raised);
+    ctx.stroke_rect(panel, 1.0, p.border);
+    kit::hline(ctx, panel.left(), panel.right(), panel.top(), p.accent);
+    kit::text(
+        ctx,
+        "Commit staged changes",
+        panel.left() + 18.0,
+        panel.top() + 28.0,
+        m.font_ui,
+        p.text,
+    );
+    kit::fill(ctx, field, p.bg);
+    ctx.stroke_rect(field, 1.0, p.accent);
+    let inner = Rect::from_min_size(
+        Vec2::new(field.left() + 8.0, field.top()),
+        Size::new((field.width() - 16.0).max(8.0), field.height()),
+    );
+    ctx.save();
+    ctx.clip_rect(inner);
+    let baseline = kit::baseline(measurer, field, m.font_ui);
+    let text = &state.git.commit_message;
+    if let Some((start, end)) = text.selection() {
+        let x0 = inner.left() + kit::width(measurer, &text.text()[..start], m.font_ui);
+        let x1 = inner.left() + kit::width(measurer, &text.text()[..end], m.font_ui);
+        ctx.fill_rect(
+            Rect::from_min_size(
+                Vec2::new(x0, field.top() + 4.0),
+                Size::new((x1 - x0).max(1.0), field.height() - 8.0),
+            ),
+            p.selection,
+        );
+    }
+    kit::text(ctx, text.text(), inner.left(), baseline, m.font_ui, p.text);
+    let caret_x = inner.left() + kit::width(measurer, &text.text()[..text.caret()], m.font_ui);
+    ctx.fill_rect(
+        Rect::from_min_size(
+            Vec2::new(caret_x, field.top() + 4.0),
+            Size::new(2.0, field.height() - 8.0),
+        ),
+        p.accent,
+    );
+    ctx.restore();
+    if let Some(error) = &state.git.commit_error {
+        kit::text(
+            ctx,
+            error,
+            panel.left() + 18.0,
+            field.bottom() + 20.0,
+            m.font_small,
+            p.error,
+        );
+    }
+    kit::text(
+        ctx,
+        "Enter commit · Esc cancel",
+        panel.left() + 18.0,
+        panel.bottom() - 16.0,
+        m.font_small,
+        p.faint,
+    );
+}
+
+pub fn commit_click(state: &mut AppState, pos: Vec2) -> bool {
+    if !state.git.commit_open {
+        return false;
+    }
+    let (panel, _) = commit_layout(state);
+    if !panel.contains(pos) {
+        state.close_git_commit();
+    }
+    true
+}
+
+pub fn commit_key(
+    state: &mut AppState,
+    key: igui_core::Key,
+    modifiers: igui_core::Modifiers,
+) -> bool {
+    if !state.git.commit_open {
+        return false;
+    }
+    let accel = modifiers.meta || modifiers.ctrl;
+    let shift = modifiers.shift;
+    if accel {
+        match key {
+            igui_core::Key::Character(ch) => match ch.to_ascii_lowercase() {
+                'a' => state.git.commit_message.select_all(),
+                'c' => {
+                    if let Some(text) = state.git.commit_message.selected_text() {
+                        state.set_clipboard(text);
+                    }
+                }
+                'x' => {
+                    if let Some(text) = state.git.commit_message.selected_text() {
+                        state.set_clipboard(text);
+                        state.git.commit_message.backspace();
+                    }
+                }
+                'v' => {
+                    if let Some(text) = state.get_clipboard() {
+                        state.git.commit_message.insert(&text);
+                    }
+                }
+                _ => return false,
+            },
+            _ => return false,
+        }
+        state.git.commit_error = None;
+        state.dirty = true;
+        return true;
+    }
+    match key {
+        igui_core::Key::Escape => state.close_git_commit(),
+        igui_core::Key::Enter => state.submit_git_commit(),
+        igui_core::Key::Backspace => state.git.commit_message.backspace(),
+        igui_core::Key::Delete => state.git.commit_message.delete(),
+        igui_core::Key::ArrowLeft => state.git.commit_message.move_left(shift, modifiers.alt),
+        igui_core::Key::ArrowRight => state.git.commit_message.move_right(shift, modifiers.alt),
+        igui_core::Key::Home => state.git.commit_message.move_home(shift),
+        igui_core::Key::End => state.git.commit_message.move_end(shift),
+        igui_core::Key::Space => state.git.commit_message.insert(" "),
+        _ => {}
+    }
+    state.dirty = true;
+    true
+}
+
+pub fn commit_text(state: &mut AppState, text: &str) {
+    if state.git.commit_open {
+        state.git.commit_message.insert(text);
+        state.git.commit_error = None;
+        state.dirty = true;
+    }
+}
 pub fn click_diff(state: &mut AppState, pos: Vec2) -> bool {
     if !state.git.diff_visible {
         return false;

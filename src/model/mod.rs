@@ -11,6 +11,7 @@ pub mod fuzzy;
 pub mod git;
 pub mod highlight;
 pub mod markdown;
+pub mod pty;
 pub mod recovery;
 pub mod replace;
 pub mod search;

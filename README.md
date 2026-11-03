@@ -6,7 +6,7 @@ through `igui_ui` / `igui_render` only.
 
 Tabs · undo/redo · find & replace · syntax highlighting (JSON language packs) ·
 Markdown split preview (tables included) · Quick Open (`⌘P`) · project search +
-replace (`⇧⌘F`) · local Git status/diff · scroll sync · tab drag/context menu ·
+replace (`⇧⌘F`) · local Git status/diff/stage/commit · built-in terminal · scroll sync · tab drag/context menu ·
 soft wrap · external-change detection · Finder/Dock file opening · Dock Recent ·
 quick file creation · drag & drop · settings panel · native file dialogs ·
 recent files · session + window restore · autosave & crash recovery ·
@@ -48,17 +48,28 @@ notes. `dist/` is git-ignored.
 asynchronous: the sheet attaches to the window, the app keeps rendering, and the
 result is applied on the first frame after it closes.
 
-## Git panel (read-only)
+## Git panel
 
 The sidebar has `EXPLORER / GIT` tabs. GIT shows the repository branch,
 ahead/behind, and staged/changes/conflicts sections from `git status
 --porcelain=v2 -z`. Click a file for a read-only unified diff overlay; `Esc` or
-the overlay ✕ closes it. A refresh button and open/save/tab/folder changes update
-the snapshot. Stage/unstage/commit are the next Git slice.
+the overlay ✕ closes it. `+` / `−` stage or unstage a row, `Stage all` stages the
+worktree, and `Commit` opens a one-line message prompt. Refreshes happen on
+open/save/tab/folder changes and via the panel button. Discard and network
+operations are intentionally not exposed.
 
 Git is a **built-in plugin** (`services/git.rs`) over a native worker
 (`model/git.rs`), not a JS or dynamic-library extension. See
 [`DESIGN-services.md`](DESIGN-services.md).
+
+## Terminal (`⌃\``, View → Terminal)
+
+Native PTY (`portable-pty`) + `vt100` screen, no WebView or JS. The panel sits
+below the editor with a 220 px fixed height for this first slice. It starts
+`$SHELL`, supports ANSI/256-color cells, cursor, resize, plain text, arrows,
+Ctrl letters and Alt prefixes. `Ctrl+\`` closes it and kills the child. Terminal
+layout/state is not persisted yet; multiple sessions and a draggable top handle
+are follow-ups.
 
 ## macOS integration
 
@@ -84,6 +95,7 @@ Git is a **built-in plugin** (`services/git.rs`) over a native worker
 | `⌘S` / `⇧⌘S` | save / save as |
 | `⌘N` | new buffer (untitled) |
 | `⇧⌘N` | new file on disk (quick prompt) |
+| `⌃\`` | toggle the built-in terminal |
 | `⌘W` | close tab (asks Save / Discard / Cancel when dirty) |
 | `⌘Z` / `⇧⌘Z` | undo / redo (typing runs coalesce) |
 | `⌘X` / `⌘C` / `⌘V` | cut / copy / paste |
@@ -415,7 +427,8 @@ No OS capture of any kind is used.
 src/
   model/doc.rs        text buffer, caret/selection, movement, delta undo stack
   model/find.rs       plain-text matcher (case / whole-word)
-  model/git.rs        git status/diff worker + porcelain parser
+  model/git.rs        git status/diff/stage/commit worker + porcelain parser
+  model/pty.rs        portable-pty PTY session
   model/fuzzy.rs      Quick Open ranking
   model/workspace_index.rs  ignored-dir file index (Quick Open)
   model/search.rs     background project search (worker + caps)
@@ -432,7 +445,8 @@ src/
   native.rs           Finder/Dock/quit request queue (main-thread)
   macos/              Apple Event open, Dock menu, recent + quit guard
   services/           native service registry + built-in plugin descriptors
-  ui/git.rs           GIT sidebar tab + read-only diff overlay
+  ui/git.rs           GIT sidebar tab + diff overlay + commit prompt
+  ui/terminal.rs      vt100 cell renderer + terminal key encoding
   input.rs            keyboard dispatch: modal -> find -> shortcuts -> tree
   state.rs            shared state, actions, hit rects recorded during paint
   theme.rs            geek palette + compact metrics

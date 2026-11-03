@@ -82,12 +82,37 @@ pub enum GitRequest {
         path: PathBuf,
         staged: bool,
     },
+    Stage {
+        generation: u64,
+        cwd: PathBuf,
+        paths: Vec<PathBuf>,
+    },
+    Unstage {
+        generation: u64,
+        cwd: PathBuf,
+        paths: Vec<PathBuf>,
+    },
+    Commit {
+        generation: u64,
+        cwd: PathBuf,
+        message: String,
+    },
 }
 
 #[derive(Clone, Debug)]
 pub enum GitEvent {
-    Status { generation: u64, status: RepoStatus },
-    Diff { generation: u64, diff: GitDiff },
+    Status {
+        generation: u64,
+        status: RepoStatus,
+    },
+    Diff {
+        generation: u64,
+        diff: GitDiff,
+    },
+    Write {
+        generation: u64,
+        result: Result<String, String>,
+    },
 }
 
 /// Worker handle. Dropping the sender stops the thread after its current job.
@@ -122,6 +147,45 @@ impl GitWorker {
                         } => {
                             let diff = run_diff(&cwd, &path, staged);
                             if event_tx.send(GitEvent::Diff { generation, diff }).is_err() {
+                                break;
+                            }
+                        }
+                        GitRequest::Stage {
+                            generation,
+                            cwd,
+                            paths,
+                        } => {
+                            let result = run_stage(&cwd, &paths);
+                            if event_tx
+                                .send(GitEvent::Write { generation, result })
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                        GitRequest::Unstage {
+                            generation,
+                            cwd,
+                            paths,
+                        } => {
+                            let result = run_unstage(&cwd, &paths);
+                            if event_tx
+                                .send(GitEvent::Write { generation, result })
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                        GitRequest::Commit {
+                            generation,
+                            cwd,
+                            message,
+                        } => {
+                            let result = run_commit(&cwd, &message);
+                            if event_tx
+                                .send(GitEvent::Write { generation, result })
+                                .is_err()
+                            {
                                 break;
                             }
                         }
@@ -407,6 +471,75 @@ pub fn run_diff(cwd: &Path, path: &Path, staged: bool) -> GitDiff {
     }
 }
 
+fn relative_paths(root: &Path, paths: &[PathBuf]) -> Vec<String> {
+    paths
+        .iter()
+        .map(|path| {
+            path.strip_prefix(root)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect()
+}
+
+pub fn run_stage(cwd: &Path, paths: &[PathBuf]) -> Result<String, String> {
+    let root = repo_root(cwd)?;
+    let paths = relative_paths(&root, paths);
+    let mut args = vec!["add", "--"];
+    args.extend(paths.iter().map(String::as_str));
+    let output = command(&root, &args)?;
+    if output.status.success() {
+        Ok(format!("staged {} path(s)", paths.len()))
+    } else {
+        Err(stderr(&output))
+    }
+}
+
+pub fn run_unstage(cwd: &Path, paths: &[PathBuf]) -> Result<String, String> {
+    let root = repo_root(cwd)?;
+    let paths = relative_paths(&root, paths);
+    let mut args = vec!["restore", "--staged", "--"];
+    args.extend(paths.iter().map(String::as_str));
+    let output = command(&root, &args)?;
+    if output.status.success() {
+        Ok(format!("unstaged {} path(s)", paths.len()))
+    } else {
+        Err(stderr(&output))
+    }
+}
+
+pub fn run_commit(cwd: &Path, message: &str) -> Result<String, String> {
+    let root = repo_root(cwd)?;
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["commit", "-F", "-"])
+        .env("LC_ALL", "C")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_EDITOR", "true")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("git: {error}"))?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        use std::io::Write;
+        stdin
+            .write_all(message.as_bytes())
+            .map_err(|error| format!("git commit stdin: {error}"))?;
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("git commit: {error}"))?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        Err(stderr(&output))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -468,6 +601,16 @@ u UU N... 100644 100644 100644 a b conflict.rs\0";
         assert!(diff.text.contains("-one") && diff.text.contains("+two"));
         let untracked = run_diff(&dir, &dir.join("new.txt"), false);
         assert!(untracked.text.contains("+new"));
+        run_stage(&dir, &[dir.join("a.txt"), dir.join("new.txt")]).unwrap();
+        let staged = run_status(&dir);
+        assert_eq!(staged.staged.len(), 2);
+        run_unstage(&dir, &[dir.join("new.txt")]).unwrap();
+        let partial = run_status(&dir);
+        assert_eq!(partial.staged.len(), 1);
+        run_stage(&dir, &[dir.join("new.txt")]).unwrap();
+        run_commit(&dir, "update files\n").unwrap();
+        let clean = run_status(&dir);
+        assert!(clean.staged.is_empty() && clean.changes.is_empty());
         let _ = std::fs::remove_dir_all(dir);
     }
 }
