@@ -161,8 +161,20 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         ),
     );
     state.terminal.rect = body;
-    let cell_w = env.measurer.advance(' ', m.font_ui).max(1.0);
-    let line_h = (m.font_ui + 4.0).max(16.0);
+    // Use the editor's typography and a cell width based on a capital glyph
+    // rather than the space advance. With a proportional CJK face the space
+    // advance is much narrower than a real character, which made terminal
+    // glyphs overlap.
+    let editor = state.editor_metrics();
+    let font = editor.font;
+    let cell_w = env
+        .measurer
+        .advance('M', font)
+        .max(env.measurer.advance('0', font))
+        .max(env.measurer.advance('W', font))
+        .max(env.measurer.advance('中', font))
+        .max(1.0);
+    let line_h = editor.line_h.max(font + 4.0);
     let cols = (body.width() / cell_w).floor().max(8.0) as u16;
     let rows = (body.height() / line_h).floor().max(2.0) as u16;
     if cols != state.terminal.cols || rows != state.terminal.rows {
@@ -211,7 +223,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                         body.left() + col as f32 * cell_w,
                         body.top() + row as f32 * line_h + line_h - 4.0,
                     ),
-                    m.font_ui,
+                    font,
                     igui_core::FontWeight::NORMAL,
                     igui_render::TextAlign::Left,
                     fg,
