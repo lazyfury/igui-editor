@@ -25,6 +25,14 @@ selfcheck = [
     "dep:igui_headless",
     "dep:igui_profile",
 ]
+# Benchmark target: reuses the headless recorder, no window required.
+bench = ["selfcheck"]
+
+[[bench]]
+name = "markdown"
+path = "benches/markdown.rs"
+harness = false
+required-features = ["bench"]
 
 [dependencies]
 # The UI is built on the workspace's backend-neutral layers (path deps: this

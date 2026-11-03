@@ -510,7 +510,7 @@ impl Keymap {
 }
 
 /// Stable ids accepted by `keymaps.json`; they mirror the command names used in
-/// `DESIGN-keymaps.md`. A user only needs the subset they override.
+/// `docs/keymaps.md`. A user only needs the subset they override.
 fn action_from_id(id: &str) -> Option<Action> {
     Some(match id {
         "file.new" | "new" => Action::New,

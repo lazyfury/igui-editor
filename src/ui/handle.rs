@@ -1,4 +1,4 @@
-//! The one drag-handle specification (see `DESIGN.md` §“Drag handle”).
+//! The one drag-handle specification (see `docs/design.md` §“Drag handle”).
 //!
 //! A 4 px hit strip that paints:
 //!

@@ -39,6 +39,9 @@
 //! let _ = TokenKind::Keyword;
 //! ```
 
+#[cfg(feature = "bench")]
+pub mod bench;
+
 pub mod keymap;
 pub mod settings;
 pub mod syntax;

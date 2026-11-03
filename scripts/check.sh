@@ -21,6 +21,9 @@ step "cargo run -- --selfcheck"
 cargo run --quiet -- --selfcheck
 
 if [[ "${1:-}" == "--release" ]]; then
+    step "cargo clippy (bench feature)"
+    cargo clippy --all-targets --features bench -- -D warnings
+
     step "cargo build --release --no-default-features"
     cargo build --release --locked --no-default-features
 fi
