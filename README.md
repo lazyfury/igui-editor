@@ -125,8 +125,10 @@ The right sidebar shows LSP document symbols (`textDocument/documentSymbol`) for
 the active document. Rust files inside a Cargo project get functions, methods,
 structs/enums, fields, variables and nested items from `rust-analyzer`; the list
 updates after edits. Clicking a row moves the caret to the symbol and reveals
-it in the editor. The panel is persisted in the session and can be hidden from
-View → Outline or `⌘⌥O`. Symbols are transient LSP state, not saved to disk.
+it in the editor. The left edge is a shared drag handle: drag it to resize
+(160–420 px), double-click resets to 224 px. The panel is persisted in the
+session and can be hidden from View → Outline or `⌘⌥O`. Symbols are transient
+LSP state, not saved to disk.
 
 ## Terminal (`⌃\``, View → Terminal)
 
@@ -140,7 +142,7 @@ alive, so full-screen programs repaint without extra input. `Ctrl+\`` closes it
 and kills the child. Focus is visible through the caret: the active editor caret is accent and
 2 px, the inactive caret dims, and the terminal header text/cursor accent only
 while it owns keyboard focus. Editor and terminal tops have no accent rule.
-Open state and height persist in the session (v8); the shell process and screen
+Open state and height persist in the session (v9); the shell process and screen
 contents do not. Multiple sessions are a follow-up.
 
 ## macOS integration
@@ -232,12 +234,12 @@ are tinted in the editor, the current one strongly.
 Sidebar and split dividers share one **4 px drag handle** (spec:
 [DESIGN.md §Drag handle](DESIGN.md#drag-handle-specification)): one centered
 1 px line plus a 2 × 28 grip nudged 1 px toward the window centre (sidebar →
-right, split → left); both grips share the content-band centre, so they are the
-same height even with the find bar open. Line/grip are
+right, split and outline → left); the grips share the content-band centre, so
+they are the same height even with the find bar open. Line/grip are
 `border`/`faint` at rest, `dim`/`text` on hover, `accent` while dragging (the
 strip tints). Each seam has exactly one line — neither the sidebar nor the
-preview paints its own border. The sidebar handle resizes 180–420 px and
-persists. Tabs shrink to 96 px, then scroll horizontally with the wheel; the
+preview or outline paints its own border. The sidebar handle resizes 180–420 px,
+the outline handle 160–420 px, and both widths persist. Tabs shrink to 96 px, then scroll horizontally with the wheel; the
 active tab is revealed on a switch/new/close, while manual scrolling is free.
 No tab scrollbar is drawn.
 
@@ -434,8 +436,8 @@ remembered per document and the last ratio is persisted.
   original name/path and are marked dirty so the first save writes them back.
 - **Window state**: size and position are persisted and restored (skipped while
   maximized/fullscreen).
-- Session format is version 8 (`outline`; v7 added `keymap`, v6 added
-  `terminal_open`, `terminal_height`; v5 added
+- Session format is version 9 (`outline_width`; v8 added `outline`, v7 added
+  `keymap`, v6 added `terminal_open`, `terminal_height`; v5 added
   `sidebar_tab`, v4 `soft_wrap`); older files still load (v1 infers the folder
   from the first tab).
 

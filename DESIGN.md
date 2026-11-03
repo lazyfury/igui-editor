@@ -306,19 +306,19 @@ Markdown split divider. Any new resize handle must reuse it.
 | Cursor | `ColResize` while hovered |
 | Background | `panel` at rest · `hover` on hover · `accent` at 16% while dragging |
 | Divider line | one 1 px line centered on the strip; `border` → `dim` → `accent` |
-| Grip | 2 × 28 px (`GRIP_WIDTH` × `GRIP_HEIGHT`), nudged 1 px **toward the app centre** (`GripSide::Right` for the sidebar, `GripSide::Left` for the split handle); `faint` → `text` → `accent` |
+| Grip | 2 × 28 px (`GRIP_WIDTH` × `GRIP_HEIGHT`), nudged 1 px **toward the app centre** (`GripSide::Right` for the sidebar, `GripSide::Left` for the split and outline handles); `faint` → `text` → `accent` |
 | Grip anchor | shared **content-band centre** (the editor/preview control's rect centre, recomputed after every layout) so both grips always share one `y`; clamped into the handle; falls back to the handle centre before the first layout |
 | Drag | pointer capture; live layout, no tree rebuild; drag math owned by the caller (width vs ratio) |
-| Double-click | split handle resets the ratio to 50%; the sidebar has no double-click action |
+| Double-click | split handle resets the ratio to 50%; outline resets to 224 px; the sidebar has no double-click action |
 | Corners | square — no radius anywhere |
-| Persistence | sidebar width, split ratio and terminal height are stored in the session |
+| Persistence | sidebar width, split ratio, outline width and terminal height are stored in the session |
 | Axis | the same implementation handles vertical side seams and the horizontal terminal seam (`Axis`, grip nudged toward the pane) |
 
-Each seam has exactly **one** line: the sidebar paints no right border and the
-preview paints no left border, so only the handle's line separates the panes.
-The split divider and the sidebar divider use the same handle (line + grip), and
-both grips use the shared content-band centre so they are level — including
-when the find bar changes the content top.
+Each seam has exactly **one** line: the sidebar paints no right border, the
+preview paints no left border, and the outline paints no left border, so only
+the handle's line separates the panes. The split, sidebar and outline dividers
+use the same handle (line + grip), and all grips use the shared content-band
+centre so they are level — including when the find bar changes the content top.
 
 ## Milestones
 

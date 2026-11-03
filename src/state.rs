@@ -645,6 +645,7 @@ pub struct SidebarUi {
 #[derive(Clone, Debug, Default)]
 pub struct OutlineUi {
     pub rect: Rect,
+    pub handle_rect: Rect,
     pub scroll: f32,
     pub scroll_max: f32,
     pub hover: Option<usize>,
@@ -971,6 +972,8 @@ pub struct AppState {
     pub viewport: ViewportSize,
     pub sidebar: SidebarUi,
     pub outline: OutlineUi,
+    pub outline_node: Option<NodeId>,
+    pub outline_drag: Option<(f32, f32)>,
     pub editor: EditorUi,
     pub tabs: TabsUi,
     pub tab_drag: Option<TabDrag>,
@@ -1103,6 +1106,8 @@ impl AppState {
             viewport: ViewportSize::default(),
             sidebar: SidebarUi::default(),
             outline: OutlineUi::default(),
+            outline_node: None,
+            outline_drag: None,
             editor: EditorUi {
                 reveal: true,
                 wrap: crate::model::wrap::WrapLayout::default(),

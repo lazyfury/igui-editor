@@ -13,10 +13,16 @@ use igui_ui::{Container, PaintEnv, PointerPhase};
 use crate::kit::{self, RectExt};
 use crate::state::{AppState, Focus};
 
-pub const WIDTH: f32 = 224.0;
+pub const DEFAULT_WIDTH: f32 = 224.0;
+pub const MIN_WIDTH: f32 = 160.0;
+pub const MAX_WIDTH: f32 = 420.0;
 pub const HEADER_H: f32 = 28.0;
 const ROW_H: f32 = 20.0;
 const PAD: f32 = 10.0;
+
+pub fn clamp_width(width: f32) -> f32 {
+    width.round().clamp(MIN_WIDTH, MAX_WIDTH)
+}
 
 pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>) -> NodeId {
     let id = kit::node(tree, parent, "outline");
@@ -54,13 +60,80 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
     id
 }
 
+/// Shared drag handle on the outline's left seam.
+pub fn build_divider(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>) -> NodeId {
+    let id = kit::node(tree, parent, "outline-divider");
+    kit::set_container(tree, id, Container::Leaf);
+    kit::set_cursor(tree, id, crate::ui::handle::cursor());
+    kit::draw(tree, id, {
+        let state = state.clone();
+        move |env, rect, interact| {
+            let mut state = state.borrow_mut();
+            crate::ui::handle::paint(
+                env,
+                rect,
+                &state.theme,
+                interact.hovered,
+                state.outline_drag.is_some(),
+                crate::ui::handle::Axis::Vertical,
+                crate::ui::handle::GripSide::Left,
+                state.content_center_y,
+            );
+            state.outline.handle_rect = rect;
+        }
+    });
+    kit::on_pointer(tree, id, {
+        let state = state.clone();
+        move |tree, _id, phase, _rect, pos| {
+            let mut state = state.borrow_mut();
+            match phase {
+                PointerPhase::Down => {
+                    state.outline_drag = Some((pos.x, state.session.outline_width));
+                }
+                PointerPhase::Move => {
+                    if let Some((start_x, start_width)) = state.outline_drag {
+                        let width = clamp_width(start_width + (start_x - pos.x));
+                        if (width - state.session.outline_width).abs() > 0.5 {
+                            state.session.outline_width = width;
+                            if let Some(outline) = state.outline_node {
+                                kit::flex(tree, outline, 0.0, Some(width), 0.0);
+                                kit::min_size(tree, outline, width, 0.0);
+                                igui_ui::mark_dirty(tree, outline);
+                            }
+                            state.config_dirty = true;
+                            state.dirty = true;
+                        }
+                    }
+                }
+                PointerPhase::Up => {
+                    if state.outline_drag.take().is_some() {
+                        state.config_dirty = true;
+                    }
+                }
+                PointerPhase::DoubleClick => {
+                    state.outline_drag = None;
+                    state.session.outline_width = DEFAULT_WIDTH;
+                    if let Some(outline) = state.outline_node {
+                        kit::flex(tree, outline, 0.0, Some(DEFAULT_WIDTH), 0.0);
+                        kit::min_size(tree, outline, DEFAULT_WIDTH, 0.0);
+                        igui_ui::mark_dirty(tree, outline);
+                    }
+                    state.config_dirty = true;
+                    state.dirty = true;
+                }
+            }
+            igui_ui::request_paint(tree);
+        }
+    });
+    id
+}
+
 fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     let theme = state.theme;
     let m = theme.m;
     let p = theme.p;
     state.outline.rect = rect;
     kit::fill(env.ctx, rect, p.panel);
-    kit::vline(env.ctx, rect.left(), rect.top(), rect.bottom(), p.border);
 
     let header = Rect::from_min_size(rect.origin, Size::new(rect.width(), HEADER_H));
     kit::hline(

@@ -1141,9 +1141,16 @@ fn build_shell(tree: &mut SceneTree, state: &Rc<RefCell<AppState>>) -> (NodeId, 
     }
 
     if state.borrow().show_outline {
+        let width = ui::outline::clamp_width(state.borrow().session.outline_width);
+        let divider = ui::outline::build_divider(tree, body, state.clone());
+        kit::flex(tree, divider, 0.0, Some(ui::handle::HANDLE_WIDTH), 0.0);
+        kit::min_size(tree, divider, ui::handle::HANDLE_WIDTH, 0.0);
         let outline = ui::outline::build(tree, body, state.clone());
-        kit::flex(tree, outline, 0.0, Some(ui::outline::WIDTH), 0.0);
-        kit::min_size(tree, outline, ui::outline::WIDTH, 0.0);
+        kit::flex(tree, outline, 0.0, Some(width), 0.0);
+        kit::min_size(tree, outline, width, 0.0);
+        state.borrow_mut().outline_node = Some(outline);
+    } else {
+        state.borrow_mut().outline_node = None;
     }
 
     let status = ui::status::build(tree, column, state.clone());

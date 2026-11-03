@@ -3692,6 +3692,16 @@ fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
     if let Some(doc) = harness.app.state_mut().ws.active_doc_mut() {
         doc.set_caret(0);
     }
+    let outline_width = harness.app.state().outline.rect.width();
+    let outline_handle = harness.app.state().outline.handle_rect.center();
+    harness.drag(
+        outline_handle,
+        Vec2::new(outline_handle.x - 30.0, outline_handle.y),
+    );
+    harness.frame()?;
+    if harness.app.state().outline.rect.width() <= outline_width {
+        return Err("dragging the outline handle did not widen the panel".into());
+    }
 
     // Hover: F1, wait for the response, and assert the overlay is painted.
     harness.key(Key::F1);

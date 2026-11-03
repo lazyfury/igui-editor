@@ -20,13 +20,15 @@ const MAX_RECENT: usize = 8;
 /// Persisted application state. Missing/corrupt files fall back to defaults.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Session {
-    /// Format version (currently `8`); unknown keys are ignored so older/newer
+    /// Format version (currently `9`); unknown keys are ignored so older/newer
     /// files keep loading.
     pub version: u32,
     /// `"dark"` or `"light"`.
     pub theme: String,
     pub sidebar: bool,
     pub outline: bool,
+    /// Right outline panel width.
+    pub outline_width: f32,
     /// The open workspace folder (`None` = no folder open).
     pub folder: Option<PathBuf>,
     pub recent: Vec<PathBuf>,
@@ -70,10 +72,11 @@ pub struct WindowGeometry {
 impl Default for Session {
     fn default() -> Self {
         Self {
-            version: 8,
+            version: 9,
             theme: "dark".into(),
             sidebar: true,
             outline: true,
+            outline_width: 224.0,
             folder: None,
             recent: Vec::new(),
             tabs: Vec::new(),
@@ -130,6 +133,9 @@ impl Session {
                 }
                 "sidebar" => session.sidebar = value == "1",
                 "outline" => session.outline = value == "1",
+                "outline_width" => {
+                    session.outline_width = value.parse().unwrap_or(session.outline_width)
+                }
                 "folder" => session.folder = Some(PathBuf::from(value)),
                 "font" => session.font = value.parse().unwrap_or(session.font),
                 "tab" => session.tab = value.parse().unwrap_or(session.tab),
@@ -202,10 +208,11 @@ impl Session {
     pub fn render(&self) -> String {
         let mut out = String::new();
         // Always write the current format; parsing older files still works.
-        out.push_str("version=8\n");
+        out.push_str("version=9\n");
         out.push_str(&format!("theme={}\n", self.theme));
         out.push_str(&format!("sidebar={}\n", u8::from(self.sidebar)));
         out.push_str(&format!("outline={}\n", u8::from(self.outline)));
+        out.push_str(&format!("outline_width={}\n", self.outline_width));
         if let Some(folder) = &self.folder {
             out.push_str(&format!("folder={}\n", escape(&folder.to_string_lossy())));
         }
@@ -366,6 +373,7 @@ mod tests {
             sync_scroll: false,
             soft_wrap: true,
             keymap: "vim".into(),
+            outline_width: 260.0,
             window: Some(WindowGeometry {
                 size: (1024.0, 700.0),
                 position: (40.0, 60.0),
