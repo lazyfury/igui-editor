@@ -37,6 +37,15 @@ pub struct FsTree {
 }
 
 impl FsTree {
+    /// An empty tree for "no folder open": nothing to list, no IO.
+    pub fn empty() -> Self {
+        Self {
+            root: PathBuf::new(),
+            nodes: Vec::new(),
+            error: None,
+        }
+    }
+
     pub fn new(root: impl Into<PathBuf>) -> Self {
         let root = root.into();
         let mut tree = Self {

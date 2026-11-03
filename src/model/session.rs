@@ -26,6 +26,8 @@ pub struct Session {
     /// `"dark"` or `"light"`.
     pub theme: String,
     pub sidebar: bool,
+    /// The open workspace folder (`None` = no folder open).
+    pub folder: Option<PathBuf>,
     pub recent: Vec<PathBuf>,
     pub tabs: Vec<PathBuf>,
     /// Editor font size.
@@ -37,14 +39,28 @@ pub struct Session {
     pub syntax: bool,
     /// Sidebar width.
     pub sidebar_width: f32,
+    /// Editor/preview split ratio (0.2–0.8).
+    pub split: f32,
+    /// Autosave enabled.
+    pub autosave: bool,
+    /// Last window geometry (logical size + position).
+    pub window: Option<WindowGeometry>,
+}
+
+/// Persisted window size/position in logical pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WindowGeometry {
+    pub size: (f32, f32),
+    pub position: (f32, f32),
 }
 
 impl Default for Session {
     fn default() -> Self {
         Self {
-            version: 1,
+            version: 2,
             theme: "dark".into(),
             sidebar: true,
+            folder: None,
             recent: Vec::new(),
             tabs: Vec::new(),
             font: 13.0,
@@ -53,6 +69,9 @@ impl Default for Session {
             indent_guides: true,
             syntax: true,
             sidebar_width: 232.0,
+            split: 0.5,
+            autosave: true,
+            window: None,
         }
     }
 }
@@ -67,9 +86,15 @@ impl Session {
     }
 
     fn parse(text: &str) -> Self {
-        let mut session = Self::default();
+        // Default to v1 so a legacy file without `version=` keeps the
+        // folder-inference behaviour.
+        let mut session = Self {
+            version: 1,
+            ..Self::default()
+        };
         let mut recent: BTreeMap<usize, PathBuf> = BTreeMap::new();
         let mut tabs: BTreeMap<usize, PathBuf> = BTreeMap::new();
+        let mut window: [Option<f32>; 4] = [None; 4];
         for line in text.lines() {
             let Some((key, value)) = line.split_once('=') else {
                 continue;
@@ -82,6 +107,7 @@ impl Session {
                     }
                 }
                 "sidebar" => session.sidebar = value == "1",
+                "folder" => session.folder = Some(PathBuf::from(value)),
                 "font" => session.font = value.parse().unwrap_or(session.font),
                 "tab" => session.tab = value.parse().unwrap_or(session.tab),
                 "gutter" | "line_numbers" => session.line_numbers = value == "1",
@@ -90,7 +116,13 @@ impl Session {
                 "sidebar_width" => {
                     session.sidebar_width = value.parse().unwrap_or(session.sidebar_width)
                 }
-                "version" => {}
+                "split" => session.split = value.parse().unwrap_or(session.split),
+                "autosave" => session.autosave = value == "1",
+                "window.w" => window[0] = value.parse().ok(),
+                "window.h" => window[1] = value.parse().ok(),
+                "window.x" => window[2] = value.parse().ok(),
+                "window.y" => window[3] = value.parse().ok(),
+                "version" => session.version = value.parse().unwrap_or(session.version),
                 key if key.starts_with("recent.") => {
                     if let Ok(index) = key["recent.".len()..].parse::<usize>() {
                         recent.insert(index, PathBuf::from(value));
@@ -104,6 +136,14 @@ impl Session {
                 _ => {}
             }
         }
+        if let [Some(w), Some(h), Some(x), Some(y)] = window {
+            if w > 0.0 && h > 0.0 {
+                session.window = Some(WindowGeometry {
+                    size: (w, h),
+                    position: (x, y),
+                });
+            }
+        }
         session.recent = recent.into_values().take(MAX_RECENT).collect();
         session.tabs = tabs.into_values().take(MAX_RECENT).collect();
         session
@@ -111,15 +151,27 @@ impl Session {
 
     pub fn render(&self) -> String {
         let mut out = String::new();
-        out.push_str(&format!("version={}\n", self.version));
+        // Always write the current format; parsing older files still works.
+        out.push_str("version=2\n");
         out.push_str(&format!("theme={}\n", self.theme));
         out.push_str(&format!("sidebar={}\n", u8::from(self.sidebar)));
+        if let Some(folder) = &self.folder {
+            out.push_str(&format!("folder={}\n", escape(&folder.to_string_lossy())));
+        }
         out.push_str(&format!("font={}\n", self.font));
         out.push_str(&format!("tab={}\n", self.tab));
         out.push_str(&format!("gutter={}\n", u8::from(self.line_numbers)));
         out.push_str(&format!("guides={}\n", u8::from(self.indent_guides)));
         out.push_str(&format!("syntax={}\n", u8::from(self.syntax)));
         out.push_str(&format!("sidebar_width={}\n", self.sidebar_width));
+        out.push_str(&format!("split={}\n", self.split));
+        out.push_str(&format!("autosave={}\n", u8::from(self.autosave)));
+        if let Some(window) = self.window {
+            out.push_str(&format!("window.w={}\n", window.size.0));
+            out.push_str(&format!("window.h={}\n", window.size.1));
+            out.push_str(&format!("window.x={}\n", window.position.0));
+            out.push_str(&format!("window.y={}\n", window.position.1));
+        }
         for (index, path) in self.recent.iter().take(MAX_RECENT).enumerate() {
             out.push_str(&format!(
                 "recent.{index}={}\n",
@@ -235,6 +287,7 @@ mod tests {
         let session = Session {
             theme: "light".into(),
             sidebar: false,
+            folder: Some(PathBuf::from("/tmp/project")),
             recent: vec![PathBuf::from("/tmp/a=b.rs"), PathBuf::from("/tmp/c d.md")],
             tabs: vec![PathBuf::from("/tmp/a=b.rs")],
             font: 15.0,
@@ -243,6 +296,12 @@ mod tests {
             indent_guides: false,
             syntax: false,
             sidebar_width: 260.0,
+            split: 0.6,
+            autosave: false,
+            window: Some(WindowGeometry {
+                size: (1024.0, 700.0),
+                position: (40.0, 60.0),
+            }),
             ..Session::default()
         };
         session.save(&path).unwrap();

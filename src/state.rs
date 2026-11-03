@@ -16,9 +16,11 @@ use igui_ui::{Clipboard, TextEdit};
 
 use crate::model::brackets::match_bracket;
 use crate::model::find::{find_all, Matcher};
-use crate::model::fs_tree::FsTree;
 use crate::model::highlight::HighlightCache;
-use crate::model::session::Session;
+use crate::model::recovery::{RecoveryEntry, RecoveryStore};
+use crate::model::search::{SearchHit, SearchMessage, SearchWorker};
+use crate::model::session::{Session, WindowGeometry};
+use crate::model::workspace_index::{display_path, FileIndex};
 use crate::model::Workspace;
 use crate::settings::{EditorMetrics, Row, Settings};
 use crate::syntax::{SyntaxRegistry, TokenKind};
@@ -97,6 +99,13 @@ impl ViewMode {
     }
 }
 
+/// Per-document UI state: view mode and split ratio.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DocUi {
+    pub view: ViewMode,
+    pub split_ratio: f32,
+}
+
 /// Every command the app can run, from a menu item or a shortcut.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Action {
@@ -113,6 +122,8 @@ pub enum Action {
     Paste,
     SelectAll,
     Find,
+    QuickOpen,
+    ProjectSearch,
     Settings,
     ToggleSidebar,
     ToggleTheme,
@@ -143,6 +154,8 @@ impl Action {
             Action::Paste => "Paste".into(),
             Action::SelectAll => "Select All".into(),
             Action::Find => "Find…".into(),
+            Action::QuickOpen => "Quick Open…".into(),
+            Action::ProjectSearch => "Search in Folder…".into(),
             Action::Settings => "Settings…".into(),
             Action::ToggleSidebar => "Toggle Sidebar".into(),
             Action::ToggleTheme => "Toggle Theme".into(),
@@ -211,6 +224,14 @@ impl Action {
                 "⌘" => "⌘F",
                 _ => "Ctrl+F",
             },
+            Action::QuickOpen => match ACCEL {
+                "⌘" => "⌘P",
+                _ => "Ctrl+P",
+            },
+            Action::ProjectSearch => match ACCEL {
+                "⌘" => "⇧⌘F",
+                _ => "Ctrl+Shift+F",
+            },
             Action::Settings => match ACCEL {
                 "⌘" => "⌘,",
                 _ => "Ctrl+,",
@@ -241,6 +262,7 @@ impl Action {
             | Action::ToggleTheme
             | Action::Find
             | Action::Settings => true,
+            Action::QuickOpen | Action::ProjectSearch => state.ws.folder_open,
             Action::Save => doc.is_some(),
             Action::SaveAs => doc.is_some(),
             Action::CloseTab => doc.is_some(),
@@ -294,6 +316,8 @@ pub fn items(menu: Menu, state: &AppState) -> Vec<Option<Action>> {
             Some(Action::SelectAll),
             None,
             Some(Action::Find),
+            Some(Action::QuickOpen),
+            Some(Action::ProjectSearch),
         ],
         Menu::View => vec![
             Some(Action::ToggleSidebar),
@@ -438,6 +462,8 @@ pub struct EditorUi {
     /// Scroll the caret into view on the next paint (set by input, not by
     /// wheel scrolling).
     pub reveal: bool,
+    /// Clickable rows of the welcome screen (no document open).
+    pub welcome_actions: Vec<(Action, Rect)>,
 }
 
 /// Sidebar geometry captured by the last paint.
@@ -447,6 +473,8 @@ pub struct SidebarUi {
     pub scroll: f32,
     pub hover: Option<usize>,
     pub selected: Option<PathBuf>,
+    /// Empty-state actions (no folder open).
+    pub actions: Vec<(Action, Rect)>,
 }
 
 /// Tab strip hit rectangles captured by the last paint.
@@ -461,6 +489,67 @@ pub struct TabsUi {
     pub scroll: f32,
     /// The strip rectangle (scroll/hit diagnostics).
     pub strip: Rect,
+}
+
+/// Quick Open palette (`⌘P`).
+pub struct QuickOpenState {
+    pub open: bool,
+    pub query: TextEdit,
+    pub selected: usize,
+    pub scroll: usize,
+    pub results: Vec<PathBuf>,
+    pub index: Option<FileIndex>,
+    pub preedit: Option<String>,
+}
+
+impl Default for QuickOpenState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            query: TextEdit::new(""),
+            selected: 0,
+            scroll: 0,
+            results: Vec::new(),
+            index: None,
+            preedit: None,
+        }
+    }
+}
+
+/// Project search (`⇧⌘F`): query, streamed hits and the worker.
+pub struct SearchState {
+    pub open: bool,
+    pub query: TextEdit,
+    pub case_sensitive: bool,
+    pub whole_word: bool,
+    pub hits: Vec<SearchHit>,
+    pub selected: usize,
+    pub scroll: usize,
+    pub worker: Option<SearchWorker>,
+    pub scanning: bool,
+    pub files_scanned: usize,
+    /// Debounce timer for the next (re)start.
+    pub pending: Option<Instant>,
+    pub preedit: Option<String>,
+}
+
+impl Default for SearchState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            query: TextEdit::new(""),
+            case_sensitive: false,
+            whole_word: false,
+            hits: Vec::new(),
+            selected: 0,
+            scroll: 0,
+            worker: None,
+            scanning: false,
+            files_scanned: 0,
+            pending: None,
+            preedit: None,
+        }
+    }
 }
 
 /// The single shared state. Callbacks hold an `Rc<RefCell<AppState>>`.
@@ -486,6 +575,8 @@ pub struct AppState {
     pub needs_rebuild: bool,
     /// View mode the shell was last built for.
     pub built_view: ViewMode,
+    /// Split ratio the shell was last built for.
+    pub built_split: f32,
     /// Set when the next frame should repaint (paint cache invalidation).
     pub dirty: bool,
     // -- M2 --------------------------------------------------------------
@@ -494,8 +585,8 @@ pub struct AppState {
     pub modal: Option<Modal>,
     pub modal_buttons: Vec<(ModalButton, Rect)>,
     pub pending_dialog: Option<DialogRequest>,
-    /// Per-document view mode (keyed by `Document::id`).
-    pub doc_views: HashMap<u64, ViewMode>,
+    /// Per-document UI state (keyed by `Document::id`).
+    pub doc_views: HashMap<u64, DocUi>,
     pub session: Session,
     pub config_path: PathBuf,
     pub config_dirty: bool,
@@ -517,12 +608,33 @@ pub struct AppState {
     pub sidebar_drag: Option<(f32, f32)>,
     /// Set when a settings change needs the sidebar's flex basis updated.
     pub pending_sidebar_sync: bool,
+    /// A file drag is hovering the window (paints the drop overlay).
+    pub drop_hover: bool,
+    pub quick_open: QuickOpenState,
+    /// Split-view nodes (for drag resizing) and the divider rectangle.
+    /// Editor/preview control for the active view (vertical band anchor).
+    pub content_node: Option<NodeId>,
+    /// Shared vertical centre of the content band, used by both drag handles.
+    pub content_center_y: Option<f32>,
+    pub split_editor: Option<NodeId>,
+    pub split_preview: Option<NodeId>,
+    pub split_dragging: bool,
+    pub split_divider: Rect,
+    pub recovery: RecoveryStore,
+    pub recovery_prompt: Option<Vec<RecoveryEntry>>,
+    last_activity: Instant,
+    doc_revs: HashMap<u64, u64>,
+    pub search: SearchState,
 }
 
 impl AppState {
     pub fn new(theme: Theme, ws: Workspace, session: Session, config_path: PathBuf) -> Self {
         let title = String::new();
         let settings = settings_from_session(&session);
+        let recovery_dir = config_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("recovery");
         Self {
             theme,
             ws,
@@ -544,6 +656,7 @@ impl AppState {
             clipboard: None,
             needs_rebuild: false,
             built_view: ViewMode::Edit,
+            built_split: 0.5,
             dirty: true,
             focus: Focus::Editor,
             find: FindState::default(),
@@ -566,6 +679,19 @@ impl AppState {
             sidebar_node: None,
             sidebar_drag: None,
             pending_sidebar_sync: false,
+            drop_hover: false,
+            quick_open: QuickOpenState::default(),
+            search: SearchState::default(),
+            content_node: None,
+            content_center_y: None,
+            split_editor: None,
+            split_preview: None,
+            split_dragging: false,
+            split_divider: Rect::ZERO,
+            recovery: RecoveryStore::new(recovery_dir),
+            recovery_prompt: None,
+            last_activity: Instant::now(),
+            doc_revs: HashMap::new(),
         }
     }
 
@@ -582,6 +708,376 @@ impl AppState {
         self.message
             .as_ref()
             .map(|(text, error, _)| (text.as_str(), *error))
+    }
+
+    /// Opens the quick-open palette (folder required).
+    pub fn open_quick_open(&mut self) {
+        if !self.ws.folder_open {
+            self.error("open a folder first (⇧⌘O)");
+            return;
+        }
+        if self.quick_open.open {
+            self.close_quick_open();
+            return;
+        }
+        self.settings_open = false;
+        self.menu_open = None;
+        if self.search.open {
+            self.close_project_search();
+        }
+        self.quick_open.open = true;
+        self.quick_open.index = Some(FileIndex::build(&self.ws.root));
+        self.quick_open.selected = 0;
+        self.quick_open.scroll = 0;
+        self.quick_open.query.select_all();
+        self.refresh_quick_open();
+        self.dirty = true;
+    }
+
+    pub fn close_quick_open(&mut self) {
+        self.quick_open.open = false;
+        self.quick_open.preedit = None;
+        self.quick_open.results.clear();
+        self.quick_open.selected = 0;
+        self.quick_open.scroll = 0;
+        self.dirty = true;
+    }
+
+    /// Re-ranks the index for the current query.
+    pub fn refresh_quick_open(&mut self) {
+        if self.quick_open.index.is_none() && self.ws.folder_open {
+            self.quick_open.index = Some(FileIndex::build(&self.ws.root));
+        }
+        let Some(index) = &self.quick_open.index else {
+            self.quick_open.results.clear();
+            return;
+        };
+        let query = self.quick_open.query.text().to_string();
+        let recent = &self.session.recent;
+        self.quick_open.results = index
+            .query(&query, |path| recent.iter().any(|entry| entry == path))
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect();
+        self.quick_open.selected = self
+            .quick_open
+            .selected
+            .min(self.quick_open.results.len().saturating_sub(1));
+        self.dirty = true;
+    }
+
+    pub fn quick_open_move(&mut self, delta: isize) {
+        if self.quick_open.results.is_empty() {
+            return;
+        }
+        let last = self.quick_open.results.len() - 1;
+        let selected = self.quick_open.selected as isize + delta;
+        self.quick_open.selected = selected.clamp(0, last as isize) as usize;
+        self.dirty = true;
+    }
+
+    /// Opens the selected result.
+    pub fn quick_open_accept(&mut self) {
+        let Some(path) = self
+            .quick_open
+            .results
+            .get(self.quick_open.selected)
+            .cloned()
+        else {
+            return;
+        };
+        self.close_quick_open();
+        self.open_path(path);
+    }
+
+    /// Display path for a Quick Open row.
+    pub fn quick_open_display(&self, path: &Path) -> String {
+        display_path(&self.ws.root, path)
+    }
+
+    /// Opens (or closes) the project search panel (folder required).
+    pub fn open_project_search(&mut self) {
+        if self.search.open {
+            self.close_project_search();
+            return;
+        }
+        if !self.ws.folder_open {
+            self.error("open a folder first (⇧⌘O)");
+            return;
+        }
+        self.settings_open = false;
+        self.quick_open.open = false;
+        self.menu_open = None;
+        self.search.open = true;
+        self.search.query.select_all();
+        self.search.selected = 0;
+        self.search.scroll = 0;
+        self.search.hits.clear();
+        self.search.files_scanned = 0;
+        self.search.scanning = false;
+        self.search.pending = None;
+        if self.search.query.text().is_empty() {
+            self.search.worker = None;
+        } else {
+            self.search_start();
+        }
+        self.dirty = true;
+    }
+
+    pub fn close_project_search(&mut self) {
+        if let Some(worker) = self.search.worker.take() {
+            worker.cancel();
+        }
+        self.search.open = false;
+        self.search.pending = None;
+        self.search.scanning = false;
+        self.search.hits.clear();
+        self.search.selected = 0;
+        self.search.scroll = 0;
+        self.dirty = true;
+    }
+
+    /// Debounces query/toggle edits (120 ms), then restarts the worker.
+    pub fn search_query_changed(&mut self) {
+        self.search.pending = Some(Instant::now());
+        self.search.selected = 0;
+        self.search.scroll = 0;
+        if let Some(worker) = self.search.worker.take() {
+            worker.cancel();
+        }
+        self.search.scanning = false;
+        self.dirty = true;
+    }
+
+    fn search_start(&mut self) {
+        self.search.pending = None;
+        if let Some(worker) = self.search.worker.take() {
+            worker.cancel();
+        }
+        let query = self.search.query.text().trim().to_string();
+        if query.is_empty() {
+            self.search.scanning = false;
+            self.search.hits.clear();
+            return;
+        }
+        self.search.hits.clear();
+        self.search.files_scanned = 0;
+        self.search.selected = 0;
+        self.search.scroll = 0;
+        self.search.scanning = true;
+        let matcher = Matcher {
+            query,
+            case_sensitive: self.search.case_sensitive,
+            whole_word: self.search.whole_word,
+        };
+        self.search.worker = Some(SearchWorker::spawn(self.ws.root.clone(), matcher));
+        self.dirty = true;
+    }
+
+    /// Advances the debounce and drains worker messages. Called from `update`.
+    pub fn search_tick(&mut self) {
+        if !self.search.open {
+            return;
+        }
+        if self
+            .search
+            .pending
+            .is_some_and(|at| at.elapsed().as_millis() >= 120)
+        {
+            self.search_start();
+        }
+        let mut done = false;
+        if let Some(worker) = &self.search.worker {
+            for _ in 0..64 {
+                match worker.try_recv() {
+                    Some(SearchMessage::Hits(batch)) => {
+                        self.search.hits.extend(batch);
+                        if self.search.hits.len() >= crate::model::search::MAX_HITS {
+                            self.search.hits.truncate(crate::model::search::MAX_HITS);
+                            worker.cancel();
+                        }
+                        self.search.selected = self
+                            .search
+                            .selected
+                            .min(self.search.hits.len().saturating_sub(1));
+                        self.dirty = true;
+                    }
+                    Some(SearchMessage::Progress { files }) => {
+                        self.search.files_scanned = files;
+                        self.dirty = true;
+                    }
+                    Some(SearchMessage::Done { files }) => {
+                        self.search.files_scanned = files;
+                        done = true;
+                        self.dirty = true;
+                        break;
+                    }
+                    None => break,
+                }
+            }
+        }
+        if done {
+            self.search.worker = None;
+            self.search.scanning = false;
+        }
+    }
+
+    pub fn search_busy(&self) -> bool {
+        self.search.scanning || self.search.pending.is_some()
+    }
+
+    pub fn search_move(&mut self, delta: isize) {
+        if self.search.hits.is_empty() {
+            return;
+        }
+        let last = self.search.hits.len() - 1;
+        let selected = self.search.selected as isize + delta;
+        self.search.selected = selected.clamp(0, last as isize) as usize;
+        self.dirty = true;
+    }
+
+    /// Opens the selected hit and selects the match.
+    pub fn search_accept(&mut self) {
+        let Some(hit) = self.search.hits.get(self.search.selected).cloned() else {
+            return;
+        };
+        let file_name = hit
+            .path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let line = hit.line + 1;
+        self.open_path(hit.path);
+        if let Some(doc) = self.ws.active_doc_mut() {
+            doc.set_caret(hit.offset);
+            doc.extend_to(hit.offset + (hit.end_in_line.saturating_sub(hit.start_in_line)));
+        }
+        self.editor.reveal = true;
+        self.focus = Focus::Editor;
+        self.status(format!("{file_name}:{line}"));
+        self.dirty = true;
+    }
+
+    // -- reliability -----------------------------------------------------
+
+    /// Autosave + recovery flush after the idle delay; tracks edits to reset it.
+    pub fn tick_reliability(&mut self) {
+        if self.recovery_prompt.is_some() {
+            return;
+        }
+        let mut changed = false;
+        for doc in &self.ws.tabs {
+            let id = doc.id();
+            let rev = doc.rev();
+            match self.doc_revs.get(&id) {
+                Some(known) if *known == rev => {}
+                _ => {
+                    self.doc_revs.insert(id, rev);
+                    changed = true;
+                }
+            }
+        }
+        let live: std::collections::HashSet<u64> =
+            self.ws.tabs.iter().map(|doc| doc.id()).collect();
+        self.doc_revs.retain(|id, _| live.contains(id));
+        if changed {
+            self.last_activity = Instant::now();
+        }
+        if self.last_activity.elapsed().as_secs_f32() < 2.0 {
+            return;
+        }
+        self.flush_reliability();
+        self.last_activity = Instant::now();
+    }
+
+    /// Runs autosave + snapshots immediately (tests / shutdown paths).
+    pub fn force_reliability_flush(&mut self) {
+        self.flush_reliability();
+    }
+
+    fn flush_reliability(&mut self) {
+        let mut saved = 0usize;
+        if self.settings.autosave {
+            for doc in &mut self.ws.tabs {
+                if doc.is_dirty() && doc.path().is_some() && doc.save().is_ok() {
+                    saved += 1;
+                }
+            }
+        }
+        let mut live = std::collections::HashSet::new();
+        for doc in &self.ws.tabs {
+            live.insert(doc.id());
+            if doc.is_dirty() {
+                let _ = self.recovery.save(
+                    doc.id(),
+                    doc.name(),
+                    doc.path(),
+                    doc.text(),
+                    doc.caret(),
+                    doc.anchor(),
+                );
+            } else {
+                self.recovery.remove(doc.id());
+            }
+        }
+        for entry in self.recovery.list() {
+            if !live.contains(&entry.id) {
+                self.recovery.remove(entry.id);
+            }
+        }
+        if saved > 0 {
+            self.status(format!("autosaved {saved} file(s)"));
+            self.sync_session_tabs();
+        }
+    }
+
+    /// Applies the startup recovery prompt.
+    pub fn resolve_recovery(&mut self, restore: bool) {
+        let Some(entries) = self.recovery_prompt.take() else {
+            return;
+        };
+        if restore {
+            let mut last = None;
+            for entry in &entries {
+                let existing = entry.path.as_ref().and_then(|path| {
+                    self.ws
+                        .tabs
+                        .iter()
+                        .position(|doc| doc.path() == Some(path.as_path()))
+                });
+                if let Some(index) = existing {
+                    if let Some(doc) = self.ws.tabs.get_mut(index) {
+                        doc.restore_snapshot(entry.text.clone(), entry.caret, entry.anchor);
+                    }
+                    last = Some(index);
+                } else {
+                    let index = self.ws.add_recovered(entry);
+                    if let Some(doc) = self.ws.tabs.get(index) {
+                        self.doc_revs.insert(doc.id(), doc.rev());
+                    }
+                    last = Some(index);
+                }
+            }
+            if let Some(index) = last {
+                self.ws.select(index);
+            }
+            self.recovery.clear();
+            self.after_tabs_changed();
+            self.status(format!("restored {} buffer(s)", entries.len()));
+        } else {
+            self.recovery.clear();
+            self.status("discarded recovered buffers");
+        }
+        self.dirty = true;
+    }
+
+    /// Persists window size/position (logical pixels).
+    pub fn set_window_geometry(&mut self, size: (f32, f32), position: (f32, f32)) {
+        let geometry = WindowGeometry { size, position };
+        if self.session.window != Some(geometry) {
+            self.session.window = Some(geometry);
+            self.config_dirty = true;
+        }
     }
 
     // -- settings --------------------------------------------------------
@@ -601,6 +1097,10 @@ impl AppState {
 
     pub fn open_settings(&mut self) {
         self.settings_open = true;
+        self.quick_open.open = false;
+        if self.search.open {
+            self.close_project_search();
+        }
         self.menu_open = None;
         self.settings_row = self.settings_row.min(Row::Reset as usize);
         self.dirty = true;
@@ -628,6 +1128,7 @@ impl AppState {
             Row::LineNumbers => on_off(self.settings.line_numbers),
             Row::IndentGuides => on_off(self.settings.indent_guides),
             Row::Syntax => on_off(self.settings.syntax),
+            Row::Autosave => on_off(self.settings.autosave),
             Row::SidebarWidth => format!("{} px", self.settings.sidebar_width as i32),
             Row::Reset => "DEFAULT".into(),
         }
@@ -660,6 +1161,10 @@ impl AppState {
             }
             Row::Syntax => {
                 self.settings.syntax = !self.settings.syntax;
+                self.settings_changed();
+            }
+            Row::Autosave => {
+                self.settings.autosave = !self.settings.autosave;
                 self.settings_changed();
             }
             Row::SidebarWidth => {
@@ -696,6 +1201,7 @@ impl AppState {
         self.session.line_numbers = self.settings.line_numbers;
         self.session.indent_guides = self.settings.indent_guides;
         self.session.syntax = self.settings.syntax;
+        self.session.autosave = self.settings.autosave;
         self.session.sidebar_width = self.settings.sidebar_width;
         self.session.theme = match self.theme.mode {
             Mode::Dark => "dark".into(),
@@ -774,8 +1280,18 @@ impl AppState {
         };
         self.doc_views
             .get(&doc.id())
-            .copied()
+            .map(|ui| ui.view)
             .unwrap_or_else(|| ViewMode::for_path(doc.path()))
+    }
+
+    /// Split ratio for the active document (clamped 0.2–0.8).
+    pub fn split_of_active(&self) -> f32 {
+        self.ws
+            .active_doc()
+            .and_then(|doc| self.doc_views.get(&doc.id()))
+            .map(|ui| ui.split_ratio)
+            .unwrap_or(self.session.split)
+            .clamp(0.2, 0.8)
     }
 
     pub fn set_view(&mut self, mode: ViewMode) {
@@ -783,15 +1299,42 @@ impl AppState {
             return;
         };
         let id = doc.id();
-        self.doc_views.insert(id, mode);
+        let default_ratio = self.session.split.clamp(0.2, 0.8);
+        self.doc_views
+            .entry(id)
+            .or_insert(DocUi {
+                view: ViewMode::for_path(doc.path()),
+                split_ratio: default_ratio,
+            })
+            .view = mode;
         self.sync_layout();
         self.status(format!("view: {}", mode.label()));
+    }
+
+    /// Sets the split ratio for the active document and remembers it globally.
+    pub fn set_split_ratio(&mut self, ratio: f32) {
+        let ratio = ratio.clamp(0.2, 0.8);
+        if let Some(doc) = self.ws.active_doc() {
+            let id = doc.id();
+            let default_ratio = self.session.split.clamp(0.2, 0.8);
+            let entry = self.doc_views.entry(id).or_insert(DocUi {
+                view: ViewMode::for_path(doc.path()),
+                split_ratio: default_ratio,
+            });
+            entry.split_ratio = ratio;
+        }
+        self.session.split = ratio;
+        self.config_dirty = true;
+        self.dirty = true;
     }
 
     /// Rebuild the shell when the pane structure the active document needs
     /// differs from the one currently mounted.
     pub fn sync_layout(&mut self) {
-        let needs = self.view_of_active() != self.built_view;
+        let view = self.view_of_active();
+        let ratio = self.split_of_active();
+        let needs = view != self.built_view
+            || (view == ViewMode::Split && (ratio - self.built_split).abs() > 0.001);
         if needs {
             self.needs_rebuild = true;
         }
@@ -821,15 +1364,17 @@ impl AppState {
 
     /// Closes `index` (bypassing the dirty check) and refreshes the session.
     pub fn close_tab_now(&mut self, index: usize) {
+        let id = self.ws.tabs.get(index).map(|doc| doc.id());
         self.ws.force_close(index);
+        if let Some(id) = id {
+            self.doc_revs.remove(&id);
+            self.recovery.remove(id);
+        }
         self.after_tabs_changed();
     }
 
     /// Re-opens the workspace after a tab change.
     pub fn after_tabs_changed(&mut self) {
-        if self.ws.tabs.is_empty() {
-            self.ws.new_tab();
-        }
         self.ws.validate_active();
         self.sync_layout();
         self.sync_session_tabs();
@@ -900,6 +1445,9 @@ impl AppState {
     }
 
     fn note_saved(&mut self) {
+        if let Some(doc) = self.ws.active_doc() {
+            self.recovery.remove(doc.id());
+        }
         if let Some(path) = self
             .ws
             .active_doc()
@@ -921,7 +1469,8 @@ impl AppState {
                 doc.path()
                     .and_then(|path| path.parent().map(Path::to_path_buf))
             })
-            .or_else(|| Some(self.ws.root.clone()));
+            .or_else(|| self.ws.folder().map(Path::to_path_buf))
+            .or_else(home_dir);
         let suggested = self
             .ws
             .active_doc()
@@ -945,6 +1494,11 @@ impl AppState {
     // -- find / replace --------------------------------------------------
 
     pub fn open_find(&mut self, replace: bool) {
+        self.settings_open = false;
+        self.quick_open.open = false;
+        if self.search.open {
+            self.close_project_search();
+        }
         let was_open = self.find.open;
         self.find.open = true;
         self.focus = if replace { Focus::Replace } else { Focus::Find };
@@ -1141,18 +1695,69 @@ impl AppState {
         self.dirty = true;
     }
 
-    /// Points the sidebar at a new root directory (Open Folder), keeping tabs.
+    /// Opens a folder as the workspace (Open Folder / dropped folder).
     pub fn set_root(&mut self, path: PathBuf) {
-        let root = std::fs::canonicalize(&path).unwrap_or(path);
-        if !root.is_dir() {
-            self.error(format!("not a directory: {}", root.display()));
+        if let Err(message) = self.ws.set_folder(path) {
+            self.error(message);
             return;
         }
-        self.ws.root = root.clone();
-        self.ws.tree = FsTree::new(&root);
         self.sidebar.scroll = 0.0;
         self.sidebar.selected = None;
-        self.status(format!("workspace: {}", root.display()));
+        self.settings_open = false;
+        self.session.folder = Some(self.ws.root.clone());
+        self.quick_open.index = None;
+        if self.quick_open.open {
+            self.close_quick_open();
+        }
+        if self.search.open {
+            self.close_project_search();
+        }
+        self.config_dirty = true;
+        let name = self
+            .ws
+            .root
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| self.ws.root.display().to_string());
+        self.status(format!("folder: {name}"));
+        self.dirty = true;
+    }
+
+    /// Opens dropped paths: a folder becomes the workspace, files become tabs.
+    pub fn open_dropped(&mut self, paths: Vec<PathBuf>) {
+        let mut folder = None;
+        let mut files = Vec::new();
+        for path in paths {
+            if path.is_dir() {
+                if folder.is_none() {
+                    folder = Some(path);
+                }
+            } else if path.is_file() {
+                files.push(path);
+            }
+        }
+        if let Some(folder) = folder {
+            self.set_root(folder);
+        }
+        let had_files = !files.is_empty();
+        let mut opened = 0usize;
+        for file in files.into_iter().take(20) {
+            self.open_path(file);
+            opened += 1;
+        }
+        if opened > 0 {
+            self.focus = Focus::Editor;
+            self.status(format!(
+                "opened {opened} dropped file{}",
+                if opened == 1 { "" } else { "s" }
+            ));
+        } else if self.ws.folder_open {
+            if !had_files {
+                self.status("folder dropped");
+            }
+        } else if !had_files {
+            self.status("nothing to open");
+        }
         self.dirty = true;
     }
 
@@ -1231,6 +1836,8 @@ impl AppState {
                 }
             }
             Action::Find => self.open_find(false),
+            Action::QuickOpen => self.open_quick_open(),
+            Action::ProjectSearch => self.open_project_search(),
             Action::Settings => self.toggle_settings(),
             Action::ToggleSidebar => {
                 self.show_sidebar = !self.show_sidebar;
@@ -1282,6 +1889,10 @@ impl AppState {
     }
 }
 
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(PathBuf::from)
+}
+
 fn settings_from_session(session: &Session) -> Settings {
     Settings {
         font_size: session.font,
@@ -1289,6 +1900,7 @@ fn settings_from_session(session: &Session) -> Settings {
         line_numbers: session.line_numbers,
         indent_guides: session.indent_guides,
         syntax: session.syntax,
+        autosave: session.autosave,
         sidebar_width: session.sidebar_width,
     }
     .normalized()
@@ -1405,16 +2017,14 @@ mod tests {
     }
 
     #[test]
-    fn discard_closes_and_leaves_an_untitled_buffer() {
+    fn discard_closes_and_leaves_the_welcome_state() {
         let mut state = state();
         state.ws.active_doc_mut().unwrap().insert_text("x");
         state.request_close_tab(0);
         state.resolve_modal(ModalButton::Discard);
         assert!(state.modal.is_none());
-        assert_eq!(state.ws.tabs.len(), 1);
-        let doc = state.ws.active_doc().unwrap();
-        assert!(doc.name().starts_with("untitled"));
-        assert!(doc.text().is_empty());
+        assert!(state.ws.tabs.is_empty());
+        assert!(state.ws.active_doc().is_none());
     }
 
     #[test]

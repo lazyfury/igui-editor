@@ -41,6 +41,7 @@ pub mod settings;
 pub mod syntax;
 pub mod theme;
 
+pub mod drop;
 pub mod host;
 pub mod selfcheck;
 

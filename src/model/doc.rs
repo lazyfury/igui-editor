@@ -147,6 +147,49 @@ impl Document {
         }
     }
 
+    /// Builds a dirty buffer from a recovery snapshot (no disk read).
+    pub fn from_snapshot(
+        id: u64,
+        name: String,
+        path: Option<PathBuf>,
+        text: String,
+        caret: usize,
+        anchor: usize,
+    ) -> Self {
+        let mut doc = Self {
+            id,
+            path,
+            name,
+            text,
+            caret: 0,
+            anchor: 0,
+            line_starts: Vec::new(),
+            dirty: true,
+            rev: 1,
+            edit_span: None,
+            undo: UndoStack::default(),
+            scroll_y: 0.0,
+            scroll_x: 0.0,
+        };
+        doc.caret = floor_boundary(&doc.text, caret);
+        doc.anchor = floor_boundary(&doc.text, anchor);
+        doc.rebuild_lines();
+        doc
+    }
+
+    /// Replaces this buffer's content with a recovery snapshot (used when the
+    /// same file is already open as a clean tab).
+    pub fn restore_snapshot(&mut self, text: String, caret: usize, anchor: usize) {
+        self.text = text;
+        self.caret = floor_boundary(&self.text, caret);
+        self.anchor = floor_boundary(&self.text, anchor);
+        self.dirty = true;
+        self.rev += 1;
+        self.edit_span = None;
+        self.undo = UndoStack::default();
+        self.rebuild_lines();
+    }
+
     /// Reads a file as UTF-8, normalizing `\r\n` / `\r` to `\n`.
     pub fn open(id: u64, path: impl Into<PathBuf>) -> std::io::Result<Self> {
         let path = path.into();
@@ -269,6 +312,10 @@ impl Document {
 
     pub fn caret(&self) -> usize {
         self.caret
+    }
+
+    pub fn anchor(&self) -> usize {
+        self.anchor
     }
 
     pub fn selection(&self) -> Option<(usize, usize)> {

@@ -3,16 +3,19 @@
 
 use std::path::{Path, PathBuf};
 
-use igui_app::{App, AppConfig};
+use igui_app::{App, AppBuilder, AppConfig, PlatformEvent, PlatformObserver, Plugin};
 use igui_backend_wgpu::FontConfig;
+use igui_core::InputEvent;
 use igui_font::FaceRef;
 use igui_winit::{
     ClipboardPlugin, GpuConfig, ImePlugin, KeyboardPlugin, PointerPlugin, SharedWindow,
     TextMeasurePlugin, TitlebarMode, WgpuPlugin, WindowConfig, WinitPlugin,
 };
+use winit::event::WindowEvent;
 
 use crate::app::EditorApp;
 use crate::dialogs::{DialogFuture, Dialogs};
+use crate::drop::{self, SharedDropTarget};
 use crate::model::session::{self, Session};
 use crate::theme::{Mode, Theme};
 
@@ -99,6 +102,43 @@ impl Dialogs for NativeDialogs {
     }
 }
 
+/// Bridges winit's file drag & drop into the app's shared drop target.
+pub struct DropPlugin;
+
+impl Plugin for DropPlugin {
+    fn name(&self) -> &'static str {
+        "drop"
+    }
+
+    fn build(&self, app: &mut AppBuilder) {
+        let state = drop::shared();
+        app.insert_service(state.clone());
+        app.add_platform_observer(DropObserver { state });
+    }
+}
+
+struct DropObserver {
+    state: SharedDropTarget,
+}
+
+impl PlatformObserver for DropObserver {
+    fn on_platform(&mut self, event: PlatformEvent<'_>, _out: &mut Vec<InputEvent>) {
+        let Some(event) = event.downcast_ref::<WindowEvent>() else {
+            return;
+        };
+        let mut state = self.state.borrow_mut();
+        match event {
+            WindowEvent::HoveredFile(_) => state.hovered = true,
+            WindowEvent::HoveredFileCancelled => state.hovered = false,
+            WindowEvent::DroppedFile(path) => {
+                state.hovered = false;
+                state.paths.push(path.to_path_buf());
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Builds the windowed app (also used by the self-check to prove the wiring).
 pub fn build(open: Option<PathBuf>, mode: Option<Mode>) -> App {
     let session = Session::load(&session::path());
@@ -108,14 +148,18 @@ pub fn build(open: Option<PathBuf>, mode: Option<Mode>) -> App {
         Mode::Light
     });
     let theme = Theme::new(theme_mode);
+    let (width, height) = session
+        .window
+        .map(|geometry| geometry.size)
+        .unwrap_or((1200.0, 800.0));
     let builder = App::new(AppConfig {
         title: "igui-editor".into(),
-        size: (1200.0, 800.0),
+        size: (width as f64, height as f64),
         ..Default::default()
     })
     .plugin(WinitPlugin::new(WindowConfig {
         title: "igui-editor".into(),
-        size: (1200.0, 800.0),
+        size: (width as f64, height as f64),
         titlebar: TitlebarMode::Native,
         ime: true,
     }))
@@ -128,7 +172,8 @@ pub fn build(open: Option<PathBuf>, mode: Option<Mode>) -> App {
     .plugin(KeyboardPlugin)
     .plugin(ImePlugin)
     .plugin(TextMeasurePlugin)
-    .plugin(ClipboardPlugin);
+    .plugin(ClipboardPlugin)
+    .plugin(DropPlugin);
     // The window service is registered by `WinitPlugin`; dialogs attach their
     // sheets to it once it is filled in on resume.
     let window = builder

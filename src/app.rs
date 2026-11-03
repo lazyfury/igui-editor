@@ -16,6 +16,7 @@ use igui_ui::{Control, ControlData, TextMeasurer};
 use igui_winit::SharedWindow;
 
 use crate::dialogs::{poll_dialog, DialogFuture, Dialogs};
+use crate::drop::SharedDropTarget;
 use crate::input;
 use crate::kit;
 use crate::model::session::{self, Session};
@@ -34,6 +35,10 @@ pub struct EditorApp {
     window: Option<SharedWindow>,
     /// Set while syntax highlighting is still catching up (drives `needs_frame`).
     analysis_behind: bool,
+    /// File-drop state shared with the winit observer.
+    drop: Option<SharedDropTarget>,
+    /// Whether the saved window position was applied.
+    window_restored: bool,
     /// The dialog currently open (native sheet / portal / scripted).
     pending: Option<PendingDialog>,
 }
@@ -74,8 +79,16 @@ impl EditorApp {
         });
         let workspace = workspace_for(open, &session);
         let mut state = AppState::new(Theme::new(theme_mode), workspace, session, config_path);
-        if state.ws.tabs.is_empty() {
-            state.ws.new_tab();
+        // Keep the session's folder in sync with what actually opened (CLI
+        // folder/file, a restored folder, or none).
+        let folder = state.ws.folder().map(Path::to_path_buf);
+        if state.session.folder != folder {
+            state.session.folder = folder;
+            state.config_dirty = true;
+        }
+        let recovered = state.recovery.list();
+        if !recovered.is_empty() {
+            state.recovery_prompt = Some(recovered);
         }
         state.sidebar.selected = state
             .ws
@@ -98,6 +111,8 @@ impl EditorApp {
             window: None,
             pending: None,
             analysis_behind: false,
+            drop: None,
+            window_restored: false,
         }
     }
 
@@ -157,6 +172,13 @@ impl EditorApp {
             self.state.borrow_mut().pending_sidebar_sync = false;
         }
         self.analysis_behind = self.state.borrow_mut().tick_analysis();
+        self.state.borrow_mut().tick_reliability();
+        if !self.window_restored {
+            self.restore_window_position();
+        }
+        self.persist_window_geometry();
+        self.pump_drops();
+        self.state.borrow_mut().search_tick();
         let needs_rebuild = self.state.borrow().needs_rebuild;
         if needs_rebuild {
             self.rebuild();
@@ -185,6 +207,13 @@ impl EditorApp {
         self.state.borrow_mut().viewport = viewport;
         igui_ui::layout(&mut self.tree, viewport);
         self.tree.update();
+        // Both drag handles share this vertical anchor, so their grip bars are
+        // always the same height (including while the find bar is open).
+        let node = self.state.borrow().content_node;
+        let center = node
+            .and_then(|id| self.tree.data::<Control>(id))
+            .map(|control| control.data.rect.center().y);
+        self.state.borrow_mut().content_center_y = center;
     }
 
     pub fn paint(&mut self, ctx: &mut PaintContext) {
@@ -194,7 +223,11 @@ impl EditorApp {
         let mut state = self.state.borrow_mut();
         ui::menu::paint_popup(&mut state, measurer.as_ref(), ctx);
         ui::settings::paint(&mut state, measurer.as_ref(), ctx);
+        ui::quick_open::paint(&mut state, measurer.as_ref(), ctx);
+        ui::project_search::paint(&mut state, measurer.as_ref(), ctx);
+        ui::drop::paint(&state, measurer.as_ref(), ctx);
         ui::modal::paint(&mut state, measurer.as_ref(), ctx);
+        ui::recovery::paint(&state, measurer.as_ref(), ctx);
     }
 
     pub fn event(&mut self, event: &InputEvent) -> EventResult {
@@ -205,6 +238,10 @@ impl EditorApp {
                 button: PointerButton::Left,
             } => {
                 let mut state = self.state.borrow_mut();
+                if state.recovery_prompt.is_some() {
+                    ui::recovery::click(&mut state, *position);
+                    return EventResult::Handled;
+                }
                 if state.modal.is_some() {
                     match ui::modal::hit(&state, *position) {
                         Some(button) => state.resolve_modal(button),
@@ -221,6 +258,14 @@ impl EditorApp {
                 // toggles that menu (including closing the open one).
                 if state.settings_open {
                     ui::settings::click(&mut state, *position);
+                    return EventResult::Handled;
+                }
+                if state.quick_open.open {
+                    ui::quick_open::click(&mut state, *position);
+                    return EventResult::Handled;
+                }
+                if state.search.open {
+                    ui::project_search::click(&mut state, *position);
                     return EventResult::Handled;
                 }
                 if ui::menu::handle_bar_click(&mut state, *position) {
@@ -281,10 +326,20 @@ impl EditorApp {
             InputEvent::KeyDown { key } => {
                 let modifiers = igui_ui::modifiers(&self.tree);
                 let mut state = self.state.borrow_mut();
+                if state.recovery_prompt.is_some() {
+                    ui::recovery::on_key(&mut state, *key, modifiers);
+                    return EventResult::Handled;
+                }
                 if state.modal.is_some() {
                     return input::modal_key(&mut state, *key);
                 }
                 if state.settings_open && ui::settings::on_key(&mut state, *key, modifiers) {
+                    return EventResult::Handled;
+                }
+                if state.quick_open.open && ui::quick_open::on_key(&mut state, *key, modifiers) {
+                    return EventResult::Handled;
+                }
+                if state.search.open && ui::project_search::on_key(&mut state, *key, modifiers) {
                     return EventResult::Handled;
                 }
                 if state.menu_open.is_some() && *key == Key::Escape {
@@ -313,7 +368,15 @@ impl EditorApp {
             }
             InputEvent::TextInput { text } => {
                 let mut state = self.state.borrow_mut();
-                if state.settings_open {
+                if state.settings_open || state.recovery_prompt.is_some() {
+                    return EventResult::Handled;
+                }
+                if state.quick_open.open {
+                    ui::quick_open::on_text(&mut state, text);
+                    return EventResult::Handled;
+                }
+                if state.search.open {
+                    ui::project_search::on_text(&mut state, text);
                     return EventResult::Handled;
                 }
                 if state.find.open && matches!(state.focus, Focus::Find | Focus::Replace) {
@@ -325,7 +388,15 @@ impl EditorApp {
             }
             InputEvent::Ime(ime) => {
                 let mut state = self.state.borrow_mut();
-                if state.settings_open {
+                if state.settings_open || state.recovery_prompt.is_some() {
+                    return EventResult::Handled;
+                }
+                if state.quick_open.open {
+                    ui::quick_open::on_ime(&mut state, ime);
+                    return EventResult::Handled;
+                }
+                if state.search.open {
+                    ui::project_search::on_ime(&mut state, ime);
                     return EventResult::Handled;
                 }
                 if state.find.open && matches!(state.focus, Focus::Find | Focus::Replace) {
@@ -348,7 +419,10 @@ impl EditorApp {
     }
 
     pub fn needs_frame(&self) -> bool {
-        self.pending.is_some() || self.analysis_behind || self.state.borrow().message.is_some()
+        self.pending.is_some()
+            || self.analysis_behind
+            || self.state.borrow().search_busy()
+            || self.state.borrow().message.is_some()
     }
 
     /// Starts a requested dialog (one at a time) and polls the open one. The
@@ -407,6 +481,85 @@ impl EditorApp {
         }
     }
 
+    /// Drains file-drop state collected by the winit observer.
+    fn pump_drops(&mut self) {
+        let Some(drop) = self.drop.clone() else {
+            return;
+        };
+        let (hovered, paths) = {
+            let mut drop = drop.borrow_mut();
+            (drop.hovered, std::mem::take(&mut drop.paths))
+        };
+        {
+            let mut state = self.state.borrow_mut();
+            if state.drop_hover != hovered {
+                state.drop_hover = hovered;
+                state.dirty = true;
+            }
+        }
+        if !paths.is_empty() {
+            self.drop_paths(paths);
+        }
+    }
+
+    /// Handles dropped paths (also used by the self-check).
+    pub fn drop_paths(&mut self, paths: Vec<PathBuf>) {
+        self.state.borrow_mut().open_dropped(paths);
+    }
+
+    fn restore_window_position(&mut self) {
+        if self.window_restored {
+            return;
+        }
+        let (Some(shared), Some(geometry)) =
+            (self.window.clone(), self.state.borrow().session.window)
+        else {
+            return;
+        };
+        let window = shared.borrow().as_ref().cloned();
+        let Some(window) = window else {
+            return;
+        };
+        let scale = window.scale_factor();
+        let x = (geometry.position.0 * scale as f32) as i32;
+        let y = (geometry.position.1 * scale as f32) as i32;
+        window.set_outer_position(winit::dpi::PhysicalPosition::new(x, y));
+        self.window_restored = true;
+    }
+
+    /// Saves the live window size/position (logical px) when it changed.
+    fn persist_window_geometry(&mut self) {
+        let Some(shared) = self.window.clone() else {
+            return;
+        };
+        let window = shared.borrow().as_ref().cloned();
+        let Some(window) = window else {
+            return;
+        };
+        if window.is_maximized() || window.fullscreen().is_some() {
+            return;
+        }
+        let scale = window.scale_factor();
+        if scale <= 0.0 {
+            return;
+        }
+        let size = window.inner_size();
+        let position = window.outer_position().ok();
+        let size = (
+            size.width as f32 / scale as f32,
+            size.height as f32 / scale as f32,
+        );
+        let position = position
+            .map(|position| {
+                (
+                    position.x as f32 / scale as f32,
+                    position.y as f32 / scale as f32,
+                )
+            })
+            .unwrap_or((0.0, 0.0));
+        self.state.borrow_mut().set_window_geometry(size, position);
+    }
+
     fn focus_editor(&mut self) {
         if let Some(id) = self.editor_id {
             igui_ui::set_focus(&mut self.tree, id);
@@ -422,7 +575,12 @@ impl EditorApp {
                     doc.name(),
                     if doc.is_dirty() { " •" } else { "" }
                 ),
-                None => "igui-editor".to_string(),
+                None => state
+                    .ws
+                    .folder()
+                    .and_then(|folder| folder.file_name())
+                    .map(|name| format!("{} — igui-editor", name.to_string_lossy()))
+                    .unwrap_or_else(|| "igui-editor".to_string()),
             }
         };
         if self.state.borrow().title == title {
@@ -449,24 +607,43 @@ impl EditorApp {
     }
 }
 
-/// Session-aware startup: an explicit CLI path wins; otherwise the stored tabs
-/// are reopened (missing files are skipped).
+/// Session-aware startup.
+///
+/// - An explicit CLI **folder** opens it as the workspace (no tab).
+/// - An explicit CLI **file** opens it, with its directory as the workspace.
+/// - Otherwise the stored folder is restored (v1 sessions infer it from the
+///   first tab), then the stored tabs are reopened.
+/// - With neither, the app starts in the welcome state: no folder, no buffer.
 fn workspace_for(open: Option<PathBuf>, session: &Session) -> Workspace {
     if let Some(path) = open {
+        if path.is_dir() {
+            return Workspace::new(path);
+        }
         return Workspace::with_file(path).unwrap_or_else(|error| {
             eprintln!("igui-editor: {error}");
-            Workspace::new(std::env::current_dir().unwrap_or_default())
+            Workspace::detached()
         });
     }
-    let mut root = None;
-    for path in &session.tabs {
-        if path.is_file() {
-            root = path.parent().map(Path::to_path_buf);
-            break;
-        }
+    let mut workspace = Workspace::detached();
+    let folder = session
+        .folder
+        .clone()
+        .filter(|path| path.is_dir())
+        .or_else(|| {
+            // v1 sessions have no `folder` key: keep the old behaviour.
+            if session.version < 2 {
+                session
+                    .tabs
+                    .iter()
+                    .find(|path| path.is_file())
+                    .and_then(|path| path.parent().map(Path::to_path_buf))
+            } else {
+                None
+            }
+        });
+    if let Some(folder) = folder {
+        let _ = workspace.set_folder(folder);
     }
-    let mut workspace =
-        Workspace::new(root.unwrap_or_else(|| std::env::current_dir().unwrap_or_default()));
     for path in &session.tabs {
         if path.is_file() {
             let _ = workspace.open(path);
@@ -511,8 +688,8 @@ fn build_shell(tree: &mut SceneTree, state: &Rc<RefCell<AppState>>) -> (NodeId, 
         kit::flex(tree, sidebar, 0.0, Some(sidebar_width), 0.0);
         kit::min_size(tree, sidebar, sidebar_width, 0.0);
         let divider = ui::sidebar::build_divider(tree, body, state.clone());
-        kit::flex(tree, divider, 0.0, Some(4.0), 0.0);
-        kit::min_size(tree, divider, 4.0, 0.0);
+        kit::flex(tree, divider, 0.0, Some(ui::handle::HANDLE_WIDTH), 0.0);
+        kit::min_size(tree, divider, ui::handle::HANDLE_WIDTH, 0.0);
         sidebar_node = Some(sidebar);
     }
     state.borrow_mut().sidebar_node = sidebar_node;
@@ -533,27 +710,53 @@ fn build_shell(tree: &mut SceneTree, state: &Rc<RefCell<AppState>>) -> (NodeId, 
 
     let editor = match view {
         ViewMode::Edit => {
+            {
+                let mut state = state.borrow_mut();
+                state.split_editor = None;
+                state.split_preview = None;
+                state.split_dragging = false;
+            }
             let editor = ui::editor::build(tree, main, state.clone());
             kit::flex(tree, editor, 1.0, None, 1.0);
             kit::min_size(tree, editor, 0.0, 0.0);
+            state.borrow_mut().content_node = Some(editor);
             Some(editor)
         }
         ViewMode::Preview => {
+            {
+                let mut state = state.borrow_mut();
+                state.split_editor = None;
+                state.split_preview = None;
+                state.split_dragging = false;
+            }
             let preview = ui::preview::build(tree, main, state.clone());
             kit::flex(tree, preview, 1.0, None, 1.0);
             kit::min_size(tree, preview, 0.0, 0.0);
+            state.borrow_mut().content_node = Some(preview);
             None
         }
         ViewMode::Split => {
             let split = kit::node(tree, main, "split");
             kit::set_container(tree, split, kit::tight_row());
             kit::flex(tree, split, 1.0, None, 1.0);
+            let ratio = state.borrow().split_of_active();
             let editor = ui::editor::build(tree, split, state.clone());
-            kit::flex(tree, editor, 1.0, None, 1.0);
+            kit::flex_percent(tree, editor, ratio);
             kit::min_size(tree, editor, 0.0, 0.0);
+            let divider = ui::split::build(tree, split, state.clone());
+            kit::flex(tree, divider, 0.0, Some(ui::handle::HANDLE_WIDTH), 0.0);
+            kit::min_size(tree, divider, ui::handle::HANDLE_WIDTH, 0.0);
             let preview = ui::preview::build(tree, split, state.clone());
             kit::flex(tree, preview, 1.0, None, 1.0);
             kit::min_size(tree, preview, 0.0, 0.0);
+            {
+                let mut state = state.borrow_mut();
+                state.content_node = Some(editor);
+                state.split_editor = Some(editor);
+                state.split_preview = Some(preview);
+                state.split_dragging = false;
+                state.split_divider = Rect::ZERO;
+            }
             Some(editor)
         }
     };
@@ -562,7 +765,13 @@ fn build_shell(tree: &mut SceneTree, state: &Rc<RefCell<AppState>>) -> (NodeId, 
     kit::flex(tree, status, 0.0, Some(m.status_h), 0.0);
     kit::min_size(tree, status, 0.0, m.status_h);
 
-    state.borrow_mut().built_view = view;
+    {
+        let mut state = state.borrow_mut();
+        state.built_view = view;
+        if view == ViewMode::Split {
+            state.built_split = state.split_of_active();
+        }
+    }
     if let Some(editor) = editor {
         igui_ui::set_focus(tree, editor);
     }
@@ -580,6 +789,10 @@ impl AppLogic for EditorApp {
         }
         if let Some(window) = ctx.service::<SharedWindow>() {
             self.window = Some(window.clone());
+            self.restore_window_position();
+        }
+        if let Some(drop) = ctx.service::<SharedDropTarget>() {
+            self.drop = Some(drop.clone());
         }
         self.sync_title();
     }

@@ -19,7 +19,7 @@ use igui_ui::{Container, PaintEnv, PointerPhase, TextMeasurer};
 
 use crate::kit::{self, RectExt};
 use crate::model::markdown::{self, Align, Block, BlockKind, Run, Style, Table};
-use crate::state::{AppState, ViewMode};
+use crate::state::AppState;
 use crate::theme::{Mode, Theme};
 
 const PAD: f32 = 18.0;
@@ -165,9 +165,6 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     let measurer = env.measurer;
 
     kit::fill(env.ctx, rect, p.bg);
-    if state.view_of_active() == ViewMode::Split {
-        kit::vline(env.ctx, rect.left(), rect.top(), rect.bottom(), p.border);
-    }
 
     let view = Rect::from_min_size(
         Vec2::new(rect.left() + 1.0, rect.top()),

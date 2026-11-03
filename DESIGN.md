@@ -1,6 +1,6 @@
 # igui-editor — design
 
-Agreed direction (M1–M3 implemented). This document records the decisions so
+Agreed direction (M1–M4 implemented). This document records the decisions so
 future work does not re-litigate them.
 
 ## Product
@@ -134,13 +134,38 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    8 MB: no preview (banner, editing still works); 32 MB: opening is refused;
    preview above 512 KB renders a prefix plus a truncation banner. Limits are
    constants, documented in the README, not heuristics.
-18. **Sidebar resize and tab overflow avoid rebuilds.** The 4 px handle owns the
-   only separator line (the sidebar paints no right border) and a centered light
-   grip bar; hover brightens both and dragging tints the handle and turns line +
-   grip accent. It updates the sidebar's flex basis and calls `mark_dirty` during
-   the drag (no tree rebuild). Tabs shrink to 96 px, then scroll horizontally
-   with the active tab kept visible. Both states persist (sidebar width in the
-   session).
+18. **Sidebar resize and tab overflow avoid rebuilds.** The sidebar and split
+   dividers share one 4 px drag-handle implementation (`ui::handle`; see
+   [§Drag handle](#drag-handle-specification)), so their visuals cannot drift.
+   It updates the sidebar's flex basis and calls `mark_dirty` during the drag (no
+   tree rebuild). Tabs shrink to 96 px, then scroll horizontally with the active
+   tab kept visible. Both states persist (sidebar width, split ratio).
+19. **A workspace folder is optional.** `Workspace { root, folder_open, tree }`:
+   `folder_open == false` means no folder (welcome state, empty sidebar, Quick
+   Open/project search refuse). Opening a file never implicitly opens a folder;
+   a CLI folder, Open Folder or a dropped folder does. The folder is stored in
+   the session (`folder=`) instead of being inferred from tabs; v1 sessions
+   infer it from the first tab for compatibility. Closing the last tab returns
+   to the welcome state instead of creating a hidden untitled buffer.
+20. **Drag & drop is a host observer into a shared target.** `winit` reports
+   `HoveredFile`/`DroppedFile`; a `DropPlugin` (app crate, not the engine) writes
+   them into `drop::DropTarget` and `EditorApp::update` drains it. Files open as
+   tabs; the first folder becomes the workspace; the hover flag paints a themed
+   overlay. No new engine `InputEvent` variants.
+21. **Quick Open is an index + fuzzy ranking, rebuilt on open.** The walker
+   skips VCS/build/hidden entries and caps at 20k files; `model::fuzzy` scores
+   relative paths (name prefix > substring > subsequence, recent bonus). The
+   panel reuses the overlay pattern; no filesystem watcher in M4.
+22. **Project search runs off the UI thread with hard caps.** A worker scans the
+   same index rules, skips binary/1 MB files, streams hits over `mpsc` and is
+   cancelled with an `AtomicBool` when the query changes; caps are 5k files /
+   500 hits / 20 per file. The panel debounces 120 ms, keeps the UI responsive
+   and jumps to the selected match.
+23. **Reliability is explicit.** Autosave writes dirty files with a path after
+   2 s idle; every dirty buffer (including untitled) gets a raw `.txt` +
+   metadata snapshot under `<config>/recovery/`, and a startup prompt offers
+   Restore All / Discard All. Window size/position persist in the session
+   (restored unless maximized). Session format is version 2.
 
 ## Theme spec (geek / compact / no corners)
 
@@ -186,6 +211,30 @@ Palette:
 Monospace face candidates, first installed wins:
 SF Mono, Menlo, JetBrains Mono, Fira Code, DejaVu Sans Mono. CJK falls back via
 the font server's normal per-character discovery.
+
+## Drag handle specification
+
+One implementation (`ui::handle`) paints both the sidebar divider and the
+Markdown split divider. Any new resize handle must reuse it.
+
+| Property | Value |
+|---|---|
+| Layout / hit area | 4 px (`HANDLE_WIDTH`) along the pane edge; mouse filter `Stop` |
+| Cursor | `ColResize` while hovered |
+| Background | `panel` at rest · `hover` on hover · `accent` at 16% while dragging |
+| Divider line | one 1 px line centered on the strip; `border` → `dim` → `accent` |
+| Grip | 2 × 28 px (`GRIP_WIDTH` × `GRIP_HEIGHT`), nudged 1 px **toward the app centre** (`GripSide::Right` for the sidebar, `GripSide::Left` for the split handle); `faint` → `text` → `accent` |
+| Grip anchor | shared **content-band centre** (the editor/preview control's rect centre, recomputed after every layout) so both grips always share one `y`; clamped into the handle; falls back to the handle centre before the first layout |
+| Drag | pointer capture; live layout, no tree rebuild; drag math owned by the caller (width vs ratio) |
+| Double-click | split handle resets the ratio to 50%; the sidebar has no double-click action |
+| Corners | square — no radius anywhere |
+| Persistence | sidebar width and split ratio are stored in the session |
+
+Each seam has exactly **one** line: the sidebar paints no right border and the
+preview paints no left border, so only the handle's line separates the panes.
+The split divider and the sidebar divider use the same handle (line + grip), and
+both grips use the shared content-band centre so they are level — including
+when the find bar changes the content top.
 
 ## Milestones
 

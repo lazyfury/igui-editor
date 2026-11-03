@@ -111,7 +111,20 @@ fn paint(state: &AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     } else {
         let text = "no document";
         kit::text(env.ctx, text, left, baseline, m.font_small, p.faint);
-        left += kit::width(measurer, text, m.font_small) + 12.0;
+        left += kit::width(measurer, text, m.font_small) + 14.0;
+        let folder = state
+            .ws
+            .folder()
+            .and_then(|folder| folder.file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "no folder open".into());
+        let folder = kit::truncate(
+            measurer,
+            &folder,
+            m.font_small,
+            (right - left - 8.0).max(0.0),
+        );
+        kit::text(env.ctx, &folder, left, baseline, m.font_small, p.faint);
     }
 
     // A transient message takes priority over the directory hint.

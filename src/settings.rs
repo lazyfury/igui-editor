@@ -29,6 +29,8 @@ pub struct Settings {
     pub indent_guides: bool,
     /// Syntax highlighting on/off.
     pub syntax: bool,
+    /// Autosave dirty files (with a path) after the idle delay.
+    pub autosave: bool,
     /// Sidebar width in logical pixels.
     pub sidebar_width: f32,
 }
@@ -41,6 +43,7 @@ impl Default for Settings {
             line_numbers: true,
             indent_guides: true,
             syntax: true,
+            autosave: true,
             sidebar_width: 232.0,
         }
     }
@@ -55,6 +58,7 @@ impl Settings {
             line_numbers: self.line_numbers,
             indent_guides: self.indent_guides,
             syntax: self.syntax,
+            autosave: self.autosave,
             sidebar_width: clamp_sidebar(self.sidebar_width),
         }
     }
@@ -132,17 +136,19 @@ pub enum Row {
     LineNumbers,
     IndentGuides,
     Syntax,
+    Autosave,
     SidebarWidth,
     Reset,
 }
 
-pub const ROWS: [Row; 8] = [
+pub const ROWS: [Row; 9] = [
     Row::Theme,
     Row::FontSize,
     Row::TabWidth,
     Row::LineNumbers,
     Row::IndentGuides,
     Row::Syntax,
+    Row::Autosave,
     Row::SidebarWidth,
     Row::Reset,
 ];
@@ -156,6 +162,7 @@ impl Row {
             Row::LineNumbers => "Line Numbers",
             Row::IndentGuides => "Indent Guides",
             Row::Syntax => "Syntax Highlight",
+            Row::Autosave => "Autosave",
             Row::SidebarWidth => "Sidebar Width",
             Row::Reset => "Reset to Defaults",
         }

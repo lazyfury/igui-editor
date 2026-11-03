@@ -14,7 +14,11 @@ pub const MAX_OPEN_BYTES: u64 = 32 * 1024 * 1024;
 
 #[derive(Debug)]
 pub struct Workspace {
+    /// Folder shown in the sidebar; `None` means "no folder open" (files can
+    /// still be opened as standalone tabs).
     pub root: PathBuf,
+    /// Whether `root` is an open folder (drives the sidebar and project tools).
+    pub folder_open: bool,
     pub tree: FsTree,
     pub tabs: Vec<Document>,
     pub active: usize,
@@ -30,6 +34,7 @@ impl Workspace {
         let tree = FsTree::new(&root);
         Self {
             root,
+            folder_open: true,
             tree,
             tabs: Vec::new(),
             active: 0,
@@ -38,11 +43,44 @@ impl Workspace {
         }
     }
 
+    /// A workspace with **no folder open** (welcome state). Files can still be
+    /// opened; the sidebar shows "no folder" until one is chosen.
+    pub fn detached() -> Self {
+        Self {
+            root: home_dir(),
+            folder_open: false,
+            tree: FsTree::empty(),
+            tabs: Vec::new(),
+            active: 0,
+            untitled_seq: 1,
+            next_id: 1,
+        }
+    }
+
+    /// Opens `path` as the workspace folder.
+    pub fn set_folder(&mut self, path: impl Into<PathBuf>) -> Result<(), String> {
+        let path = path.into();
+        let root = std::fs::canonicalize(&path).unwrap_or(path);
+        if !root.is_dir() {
+            return Err(format!("not a directory: {}", root.display()));
+        }
+        self.root = root.clone();
+        self.folder_open = true;
+        self.tree = FsTree::new(&root);
+        Ok(())
+    }
+
+    /// The open folder, if any.
+    pub fn folder(&self) -> Option<&Path> {
+        self.folder_open.then_some(self.root.as_path())
+    }
+
     /// A workspace rooted at the file's parent, with that file open.
     pub fn with_file(path: impl Into<PathBuf>) -> Result<Self, String> {
         let path = path.into();
         let root = path
             .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
         let mut workspace = Self::new(root);
@@ -75,7 +113,7 @@ impl Workspace {
         let doc =
             Document::open(id, &path).map_err(|error| format!("{}: {error}", path.display()))?;
         // Make sure the file is visible in the sidebar (expand its ancestors).
-        if path.starts_with(&self.root) {
+        if self.folder_open && path.starts_with(&self.root) {
             if let Some(parent) = path.parent() {
                 self.tree.expand_to(parent);
             }
@@ -83,6 +121,22 @@ impl Workspace {
         self.tabs.push(doc);
         self.active = self.tabs.len() - 1;
         Ok(self.active)
+    }
+
+    /// Adds a recovered buffer from a crash snapshot.
+    pub fn add_recovered(&mut self, entry: &super::recovery::RecoveryEntry) -> usize {
+        let id = self.take_id();
+        let doc = Document::from_snapshot(
+            id,
+            entry.name.clone(),
+            entry.path.clone(),
+            entry.text.clone(),
+            entry.caret,
+            entry.anchor,
+        );
+        self.tabs.push(doc);
+        self.active = self.tabs.len() - 1;
+        self.active
     }
 
     /// A fresh untitled buffer, focused.
@@ -165,6 +219,12 @@ impl Workspace {
             .map(|()| format!("saved {name}"))
             .map_err(|error| format!("save failed: {error}"))
     }
+}
+
+fn home_dir() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default()
 }
 
 /// Canonical directory + the (possibly not yet existing) file name, so a path

@@ -29,6 +29,11 @@ igui_winit = { path = "../igui/crates/window/igui_winit" }
 igui_backend_wgpu = { path = "../igui/crates/platform/wgpu/igui_backend_wgpu" }
 # Markdown -> block model for the preview pane (M2).
 pulldown-cmark = { version = "0.13", default-features = false }
+winit = "0.30"
+# Headless pipeline: `--selfcheck` records the DrawList and asserts on it.
+igui_headless = { path = "../igui/crates/app/igui_headless" }
+igui_backend_recording = { path = "../igui/crates/platform/recording/igui_backend_recording" }
+igui_profile = { path = "../igui/crates/debug/igui_profile" }
 # Native file dialogs (M2). `rfd` keeps its platform backend behind cfg:
 # Linux needs the XDG portal backend, macOS/Windows use their system APIs.
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -36,12 +41,7 @@ rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "a
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 rfd = { version = "0.15", default-features = false }
-winit = "0.30"
 
-# Headless pipeline: `--selfcheck` records the DrawList and asserts on it.
-igui_headless = { path = "../igui/crates/app/igui_headless" }
-igui_backend_recording = { path = "../igui/crates/platform/recording/igui_backend_recording" }
-igui_profile = { path = "../igui/crates/debug/igui_profile" }
 
 # Independent app: not a member of the igui workspace, so the engine's gate
 # stays untouched. It only consumes the crates above through path deps.

@@ -56,7 +56,15 @@ pub fn shortcut(state: &mut AppState, key: Key, modifiers: Modifiers) -> Option<
                 state.toggle_settings();
                 return Some(EventResult::Handled);
             }
+            'p' => {
+                state.open_quick_open();
+                return Some(EventResult::Handled);
+            }
             'f' => {
+                if shift {
+                    state.open_project_search();
+                    return Some(EventResult::Handled);
+                }
                 let replace = modifiers.alt;
                 if state.find.open {
                     state.focus = if replace { Focus::Replace } else { Focus::Find };

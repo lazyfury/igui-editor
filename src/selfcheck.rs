@@ -15,6 +15,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use igui_backend_recording::{RecordedFrame, RecordingBackend};
 use igui_core::{InputEvent, Key, Modifiers, PointerButton, Rect, Size, Vec2, ViewportSize};
@@ -24,6 +25,8 @@ use igui_render::{DrawCommand, PaintContext, RenderBackend};
 use crate::app::EditorApp;
 use crate::dialogs::{Call, ScriptedDialogs};
 use crate::kit::RectExt;
+use crate::model::recovery::RecoveryStore;
+use crate::model::session::WindowGeometry;
 use crate::state::{Action, Focus, Menu, ModalButton, ViewMode};
 use crate::theme::Mode;
 
@@ -38,8 +41,11 @@ const NOTES_MD: &str = "# Notes\n\n## Notes\n\n- square corners\n- compact rows\
 
 pub fn run() -> Result<(), String> {
     let dir = fixture()?;
-    let result = check(&dir);
+    let result = check(&dir).and_then(|()| check_workspace_and_recovery(&dir));
     let _ = fs::remove_dir_all(&dir);
+    if result.is_ok() {
+        println!("selfcheck ok: main flow + workspace/recovery checks");
+    }
     result
 }
 
@@ -944,6 +950,17 @@ fn check(dir: &Path) -> Result<(), String> {
     if !harness.app.state().highlight.is_active() {
         return Err("turning syntax highlighting back on failed".into());
     }
+    harness.key(Key::ArrowDown); // Autosave
+    harness.key(Key::Enter);
+    harness.frame()?;
+    if harness.app.state().settings.autosave || harness.app.state().session.autosave {
+        return Err("the autosave toggle did not take effect".into());
+    }
+    harness.key(Key::Enter);
+    harness.frame()?;
+    if !harness.app.state().settings.autosave {
+        return Err("turning autosave back on failed".into());
+    }
     harness.key(Key::ArrowDown); // Sidebar Width
     harness.key(Key::ArrowRight);
     harness.frame()?;
@@ -957,7 +974,7 @@ fn check(dir: &Path) -> Result<(), String> {
         }
     }
     // Persist an 8-space tab width for the session-restore assertion.
-    for _ in 0..4 {
+    for _ in 0..5 {
         harness.key(Key::ArrowUp); // -> Tab Width row
     }
     harness.key(Key::ArrowRight);
@@ -998,8 +1015,8 @@ fn check(dir: &Path) -> Result<(), String> {
     harness.key(Key::Escape);
     harness.frame()?;
 
-    // Sidebar drag: one centered divider line plus a light grip bar. The
-    // sidebar no longer draws its own border, so there is exactly one line.
+    // Sidebar drag: one centered divider line. The sidebar no longer draws its
+    // own border, so there is exactly one line.
     let dark = crate::theme::Theme::new(Mode::Dark);
     let (drag_from, drag_to, width_before, divider_height) = {
         let state = harness.app.state();
@@ -1017,16 +1034,15 @@ fn check(dir: &Path) -> Result<(), String> {
     if (idle_line.center().x - drag_from.x).abs() > 3.0 {
         return Err("the divider line is not centered on the handle".into());
     }
-    let idle_grip = find_fill(
+    find_fill_near_x(
         &frame,
         dark.p.faint.to_rgba8(),
-        crate::ui::sidebar::GRIP_WIDTH,
-        crate::ui::sidebar::GRIP_HEIGHT,
+        crate::ui::handle::GRIP_WIDTH,
+        crate::ui::handle::GRIP_HEIGHT,
+        crate::ui::handle::grip_center_x(drag_from.x, crate::ui::handle::GripSide::Right),
+        0.6,
     )
-    .ok_or("the sidebar handle has no idle grip bar")?;
-    if (idle_grip.center().x - (drag_from.x + 1.0)).abs() > 1.5 {
-        return Err("the grip bar is not centered on the divider line".into());
-    }
+    .ok_or("the sidebar handle has no idle grip")?;
     if count_vertical_lines(&frame, drag_from.x - 4.0, drag_from.x + 5.0, divider_height) != 1 {
         return Err("the sidebar shows more than one divider line".into());
     }
@@ -1041,16 +1057,15 @@ fn check(dir: &Path) -> Result<(), String> {
     if find_fill(&frame, dark.p.accent.to_rgba8(), 1.0, divider_height).is_none() {
         return Err("the divider line did not turn accent while dragging".into());
     }
-    if find_fill(
+    find_fill_near_x(
         &frame,
         dark.p.accent.to_rgba8(),
-        crate::ui::sidebar::GRIP_WIDTH,
-        crate::ui::sidebar::GRIP_HEIGHT,
+        crate::ui::handle::GRIP_WIDTH,
+        crate::ui::handle::GRIP_HEIGHT,
+        crate::ui::handle::grip_center_x(drag_from.x, crate::ui::handle::GripSide::Right),
+        0.6,
     )
-    .is_none()
-    {
-        return Err("the grip bar did not highlight while dragging".into());
-    }
+    .ok_or("the sidebar grip did not turn accent while dragging")?;
     if find_fill(
         &frame,
         dark.p.accent.alpha_mul(0.16).to_rgba8(),
@@ -1083,7 +1098,7 @@ fn check(dir: &Path) -> Result<(), String> {
             return Err("the sidebar width was not persisted".into());
         }
     }
-    // Hovering brightens the same single line and the grip.
+    // Hovering brightens the same single line.
     let (hover, hover_height) = {
         let state = harness.app.state();
         (
@@ -1099,16 +1114,15 @@ fn check(dir: &Path) -> Result<(), String> {
     if find_fill(&frame, dark.p.dim.to_rgba8(), 1.0, hover_height).is_none() {
         return Err("hovering the divider did not brighten the line".into());
     }
-    if find_fill(
+    find_fill_near_x(
         &frame,
         dark.p.text.to_rgba8(),
-        crate::ui::sidebar::GRIP_WIDTH,
-        crate::ui::sidebar::GRIP_HEIGHT,
+        crate::ui::handle::GRIP_WIDTH,
+        crate::ui::handle::GRIP_HEIGHT,
+        crate::ui::handle::grip_center_x(hover.x, crate::ui::handle::GripSide::Right),
+        0.6,
     )
-    .is_none()
-    {
-        return Err("hovering the divider did not brighten the grip".into());
-    }
+    .ok_or("hovering the divider did not brighten the grip")?;
 
     // Large-file behavior: preview truncation and the open guard.
     harness.dialogs.push(Some(dir.join("large.md")));
@@ -1206,6 +1220,355 @@ fn check(dir: &Path) -> Result<(), String> {
         }
     }
 
+    // ================= M4: quick open, search, split, reliability =====
+
+    // Quick Open over the workspace.
+    harness.shortcut(
+        Key::Character('p'),
+        Modifiers {
+            meta: true,
+            ..Modifiers::NONE
+        },
+    );
+    let frame = harness.frame()?;
+    if !harness.app.state().quick_open.open {
+        return Err("⌘P did not open Quick Open".into());
+    }
+    expect(&texts(&frame), "Type a file name", "Quick Open placeholder")?;
+    harness.type_text("main");
+    let frame = harness.frame()?;
+    {
+        let state = harness.app.state();
+        if !state
+            .quick_open
+            .results
+            .first()
+            .is_some_and(|path| path.ends_with("main.rs"))
+        {
+            return Err(format!(
+                "Quick Open did not find main.rs (results={:?})",
+                state.quick_open.results
+            ));
+        }
+    }
+    expect(&texts(&frame), "main.rs", "Quick Open result row")?;
+    harness.key(Key::Enter);
+    harness.frame()?;
+    if harness.app.state().quick_open.open {
+        return Err("Enter did not close Quick Open".into());
+    }
+    if harness.app.state().ws.active_doc().map(|doc| doc.name()) != Some("main.rs") {
+        return Err("Quick Open did not open the selected file".into());
+    }
+
+    // Project search: debounce, worker, results, jump.
+    harness.shortcut(
+        Key::Character('f'),
+        Modifiers {
+            meta: true,
+            shift: true,
+            ..Modifiers::NONE
+        },
+    );
+    harness.frame()?;
+    if !harness.app.state().search.open {
+        return Err("⇧⌘F did not open project search".into());
+    }
+    harness.type_text("hello");
+    let mut frames = 0;
+    loop {
+        std::thread::sleep(Duration::from_millis(15));
+        harness.frame()?;
+        frames += 1;
+        let state = harness.app.state();
+        let done = !state.search.scanning
+            && state.search.pending.is_none()
+            && !state.search.hits.is_empty();
+        drop(state);
+        if done || frames > 300 {
+            break;
+        }
+    }
+    {
+        let state = harness.app.state();
+        if state.search.hits.is_empty() {
+            return Err("project search returned no hits for `hello`".into());
+        }
+        if !state
+            .search
+            .hits
+            .iter()
+            .any(|hit| hit.preview.contains("hello"))
+        {
+            return Err("project search hits have no matching preview".into());
+        }
+    }
+    let frame = harness.frame()?;
+    expect(&texts(&frame), "results", "project search footer")?;
+    harness.key(Key::Enter);
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        let selected = state.ws.active_doc().and_then(|doc| doc.selected_text());
+        if selected != Some("hello") {
+            return Err(format!(
+                "project search jump did not select the match (got {selected:?})"
+            ));
+        }
+    }
+    harness.key(Key::Escape);
+    harness.frame()?;
+    if harness.app.state().search.open {
+        return Err("Esc did not close project search".into());
+    }
+
+    // Split drag: divider ratio, persistence, double-click reset.
+    let notes_click = sidebar_click_position(&harness.app, "notes.md")?;
+    harness.click(notes_click);
+    harness.frame()?;
+    {
+        let mut state = harness.app.state_mut();
+        state.set_view(crate::state::ViewMode::Split);
+    }
+    harness.frame()?;
+    let (divider, ratio_before) = {
+        let state = harness.app.state();
+        if state.built_view != crate::state::ViewMode::Split {
+            return Err("notes.md did not open in split view".into());
+        }
+        (state.split_divider, state.split_of_active())
+    };
+    if divider.width() < 1.0 {
+        return Err("the split divider has no geometry".into());
+    }
+    // The split handle follows the same drag-handle spec as the sidebar.
+    let dark = crate::theme::Theme::new(Mode::Dark);
+    let frame = harness.frame()?;
+    find_fill_near_x(
+        &frame,
+        dark.p.border.to_rgba8(),
+        1.0,
+        divider.height(),
+        divider.center().x,
+        3.0,
+    )
+    .ok_or("the split handle has no idle line")?;
+    find_fill_near_x(
+        &frame,
+        dark.p.faint.to_rgba8(),
+        crate::ui::handle::GRIP_WIDTH,
+        crate::ui::handle::GRIP_HEIGHT,
+        crate::ui::handle::grip_center_x(divider.center().x, crate::ui::handle::GripSide::Left),
+        0.6,
+    )
+    .ok_or("the split handle has no idle grip")?;
+    if count_vertical_lines(
+        &frame,
+        divider.left() - 6.0,
+        divider.right() + 6.0,
+        divider.height(),
+    ) != 1
+    {
+        return Err("the split preview shows more than one divider line".into());
+    }
+    // Both grips share the content-band centre, so their y matches exactly.
+    let sidebar_x = crate::ui::handle::grip_center_x(
+        harness.app.state().sidebar.rect.right() + crate::ui::handle::HANDLE_WIDTH * 0.5,
+        crate::ui::handle::GripSide::Right,
+    );
+    let split_x =
+        crate::ui::handle::grip_center_x(divider.center().x, crate::ui::handle::GripSide::Left);
+    let sidebar_y = grip_center_y(&frame, dark.p.faint.to_rgba8(), sidebar_x)
+        .ok_or("the sidebar grip is missing in split view")?;
+    let split_y = grip_center_y(&frame, dark.p.faint.to_rgba8(), split_x)
+        .ok_or("the split grip is missing in split view")?;
+    if (sidebar_y - split_y).abs() > 0.6 {
+        return Err(format!(
+            "the two grips are not level (sidebar {sidebar_y}, split {split_y})"
+        ));
+    }
+    if (split_y - divider.center().y).abs() > 0.6 {
+        return Err(format!(
+            "grips do not follow the content-band centre (grip {split_y}, divider {})",
+            divider.center().y
+        ));
+    }
+    let idle_grip_y = split_y;
+    let drag_to = Vec2::new(divider.center().x + 60.0, divider.center().y);
+    harness.event(InputEvent::PointerDown {
+        position: divider.center(),
+        button: PointerButton::Left,
+    });
+    let frame = harness.frame()?;
+    find_fill_near_x(
+        &frame,
+        dark.p.accent.to_rgba8(),
+        1.0,
+        divider.height(),
+        divider.center().x,
+        3.0,
+    )
+    .ok_or("the split handle line did not turn accent while dragging")?;
+    find_fill_near_x(
+        &frame,
+        dark.p.accent.to_rgba8(),
+        crate::ui::handle::GRIP_WIDTH,
+        crate::ui::handle::GRIP_HEIGHT,
+        crate::ui::handle::grip_center_x(divider.center().x, crate::ui::handle::GripSide::Left),
+        0.6,
+    )
+    .ok_or("the split handle grip did not turn accent while dragging")?;
+    harness.event(InputEvent::PointerMove { position: drag_to });
+    harness.event(InputEvent::PointerUp {
+        position: drag_to,
+        button: PointerButton::Left,
+    });
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        let ratio = state.split_of_active();
+        if ratio <= ratio_before + 0.05 {
+            return Err(format!(
+                "dragging the split divider did not change the ratio ({ratio_before} -> {ratio})"
+            ));
+        }
+        if (state.session.split - ratio).abs() > 0.001 {
+            return Err("the split ratio was not stored in the session".into());
+        }
+    }
+    let divider = harness.app.state().split_divider;
+    harness.event(InputEvent::PointerDown {
+        position: divider.center(),
+        button: PointerButton::Left,
+    });
+    harness.event(InputEvent::DoubleClick {
+        position: divider.center(),
+    });
+    harness.event(InputEvent::PointerUp {
+        position: divider.center(),
+        button: PointerButton::Left,
+    });
+    harness.frame()?;
+    if (harness.app.state().split_of_active() - 0.5).abs() > 0.01 {
+        return Err("double-clicking the split divider did not reset it to 50%".into());
+    }
+
+    // Opening the find bar shifts the content band down: both grips follow it
+    // together (and stay level).
+    harness.shortcut(
+        Key::Character('f'),
+        Modifiers {
+            meta: true,
+            ..Modifiers::NONE
+        },
+    );
+    let frame = harness.frame()?;
+    let divider = harness.app.state().split_divider;
+    let sidebar_x = crate::ui::handle::grip_center_x(
+        harness.app.state().sidebar.rect.right() + crate::ui::handle::HANDLE_WIDTH * 0.5,
+        crate::ui::handle::GripSide::Right,
+    );
+    let split_x =
+        crate::ui::handle::grip_center_x(divider.center().x, crate::ui::handle::GripSide::Left);
+    let sidebar_find = grip_center_y(&frame, dark.p.faint.to_rgba8(), sidebar_x)
+        .ok_or("the sidebar grip disappeared with the find bar open")?;
+    let split_find = grip_center_y(&frame, dark.p.faint.to_rgba8(), split_x)
+        .ok_or("the split grip disappeared with the find bar open")?;
+    if (sidebar_find - split_find).abs() > 0.6 {
+        return Err(format!(
+            "grips are not level with the find bar open (sidebar {sidebar_find}, split {split_find})"
+        ));
+    }
+    if split_find <= idle_grip_y + 10.0 {
+        return Err("the find bar did not move the grips down together".into());
+    }
+    harness.key(Key::Escape);
+    let frame = harness.frame()?;
+    let divider = harness.app.state().split_divider;
+    let split_x =
+        crate::ui::handle::grip_center_x(divider.center().x, crate::ui::handle::GripSide::Left);
+    let split_after = grip_center_y(&frame, dark.p.faint.to_rgba8(), split_x)
+        .ok_or("the split grip disappeared after closing the find bar")?;
+    if (split_after - idle_grip_y).abs() > 0.6 {
+        return Err("closing the find bar did not restore the grip height".into());
+    }
+
+    // Autosave: a dirty file is written after an idle flush.
+    harness.type_text(" autosave-marker");
+    harness.app.state_mut().force_reliability_flush();
+    harness.frame()?;
+    let notes_saved =
+        fs::read_to_string(&notes_path).map_err(|error| format!("read back: {error}"))?;
+    if !notes_saved.contains("autosave-marker") {
+        return Err("autosave did not write the dirty buffer".into());
+    }
+    if harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .is_some_and(|doc| doc.is_dirty())
+    {
+        return Err("autosave did not clear the dirty flag".into());
+    }
+
+    // Recovery snapshot for an untitled buffer, removed when discarded.
+    harness.shortcut(
+        Key::Character('n'),
+        Modifiers {
+            meta: true,
+            ..Modifiers::NONE
+        },
+    );
+    harness.type_text("recover me");
+    harness.app.state_mut().force_reliability_flush();
+    let untitled_name = harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .map(|doc| doc.name().to_string())
+        .unwrap_or_default();
+    if harness.app.state().recovery.list().is_empty() {
+        return Err("a dirty untitled buffer was not snapshotted".into());
+    }
+    harness.shortcut(
+        Key::Character('w'),
+        Modifiers {
+            meta: true,
+            ..Modifiers::NONE
+        },
+    );
+    harness.frame()?;
+    let discard = {
+        let state = harness.app.state();
+        state
+            .modal_buttons
+            .iter()
+            .find(|(button, _)| *button == ModalButton::Discard)
+            .map(|(_, rect)| rect.center())
+            .ok_or("no Discard button for the recovered buffer")?
+    };
+    harness.click(discard);
+    harness.frame()?;
+    if harness
+        .app
+        .state()
+        .recovery
+        .list()
+        .iter()
+        .any(|entry| entry.name == untitled_name)
+    {
+        return Err("discarding a buffer left its recovery snapshot behind".into());
+    }
+
+    // Window geometry is persisted.
+    harness
+        .app
+        .state_mut()
+        .set_window_geometry((1111.0, 777.0), (33.0, 44.0));
+    harness.frame()?;
+
     // -- theme toggle (persisted) ---------------------------------------
     harness.shortcut(
         Key::Character('l'),
@@ -1299,14 +1662,214 @@ fn check(dir: &Path) -> Result<(), String> {
                 state.settings, final_settings
             ));
         }
+        if state.session.window
+            != Some(WindowGeometry {
+                size: (1111.0, 777.0),
+                position: (33.0, 44.0),
+            })
+        {
+            return Err(format!(
+                "session restore lost the window geometry ({:?})",
+                state.session.window
+            ));
+        }
+        if (state.session.split - 0.5).abs() > 0.01 {
+            return Err(format!(
+                "session restore lost the split ratio ({})",
+                state.session.split
+            ));
+        }
+        if !state.ws.folder_open
+            || state.ws.root.file_name().and_then(|name| name.to_str()) != Some("src")
+        {
+            return Err(format!(
+                "session restore lost the workspace folder ({:?})",
+                state.ws.root
+            ));
+        }
     }
 
     let _ = restored_dialogs;
     println!(
-        "selfcheck ok: {} commands in the final frame, {} controls",
+        "selfcheck: main flow ok ({} commands in the final frame, {} controls)",
         frame.command_count(),
         harness.app.control_count()
     );
+    Ok(())
+}
+
+/// Welcome/no-folder state, drag & drop, CLI folder and the recovery prompt.
+fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
+    // -- no folder, no document: welcome + empty sidebar -----------------
+    let welcome_dir = dir.join("welcome");
+    fs::create_dir_all(&welcome_dir).map_err(|error| format!("fixture: {error}"))?;
+    let mut harness = Harness::new(
+        None,
+        welcome_dir.join("session.conf"),
+        ScriptedDialogs::new(vec![]),
+    );
+    let frame = harness.frame()?;
+    let painted = texts(&frame);
+    expect(&painted, "igui-editor", "welcome title")?;
+    expect(&painted, "no folder open", "welcome subtitle")?;
+    expect(&painted, "Open Folder…", "welcome actions")?;
+    expect(&painted, "NO FOLDER OPEN", "sidebar empty state")?;
+    expect(
+        &painted,
+        "or drop files / folders here",
+        "sidebar drop hint",
+    )?;
+    {
+        let state = harness.app.state();
+        if state.ws.folder_open || !state.ws.tabs.is_empty() {
+            return Err("a folder-less startup must show the welcome state".into());
+        }
+    }
+
+    // Drop hover overlay.
+    harness.app.state_mut().drop_hover = true;
+    let frame = harness.frame()?;
+    expect(&texts(&frame), "Drop to open", "drop overlay")?;
+    harness.app.state_mut().drop_hover = false;
+    harness.frame()?;
+
+    // Dropping a file opens a tab without opening a folder.
+    harness.app.drop_paths(vec![dir.join("notes.md")]);
+    let frame = harness.frame()?;
+    {
+        let state = harness.app.state();
+        if state.ws.folder_open {
+            return Err("dropping a file must not open a folder".into());
+        }
+        if state.ws.active_doc().map(|doc| doc.name()) != Some("notes.md") {
+            return Err("dropping a file did not open it".into());
+        }
+    }
+    expect(&texts(&frame), "# Notes", "dropped file content")?;
+
+    // Dropping a folder opens it as the workspace.
+    harness.app.drop_paths(vec![dir.join("src")]);
+    let frame = harness.frame()?;
+    {
+        let state = harness.app.state();
+        if !state.ws.folder_open {
+            return Err("dropping a folder did not open it".into());
+        }
+        if state.ws.root.file_name().and_then(|name| name.to_str()) != Some("src") {
+            return Err(format!("dropped folder root is wrong: {:?}", state.ws.root));
+        }
+    }
+    expect(&texts(&frame), "lib.rs", "dropped folder sidebar")?;
+    drop(harness);
+
+    // -- CLI folder argument --------------------------------------------
+    let cli_dir = dir.join("cli");
+    fs::create_dir_all(&cli_dir).map_err(|error| format!("fixture: {error}"))?;
+    let mut harness = Harness::new(
+        Some(dir.join("src")),
+        cli_dir.join("session.conf"),
+        ScriptedDialogs::new(vec![]),
+    );
+    let frame = harness.frame()?;
+    {
+        let state = harness.app.state();
+        if !state.ws.folder_open || !state.ws.tabs.is_empty() {
+            return Err("a CLI folder must open the folder without a tab".into());
+        }
+    }
+    expect(&texts(&frame), "igui-editor", "CLI folder welcome")?;
+    expect(&texts(&frame), "lib.rs", "CLI folder sidebar")?;
+    drop(harness);
+
+    // -- recovery prompt: restore ---------------------------------------
+    let restore_dir = dir.join("recovery-restore");
+    fs::create_dir_all(&restore_dir).map_err(|error| format!("fixture: {error}"))?;
+    let store = RecoveryStore::new(restore_dir.join("recovery"));
+    store
+        .save(
+            7,
+            "recovered.txt",
+            Some(Path::new("/tmp/original.txt")),
+            "recovered body\n",
+            3,
+            1,
+        )
+        .map_err(|error| format!("recovery fixture: {error}"))?;
+    let mut harness = Harness::new(
+        None,
+        restore_dir.join("session.conf"),
+        ScriptedDialogs::new(vec![]),
+    );
+    let frame = harness.frame()?;
+    expect(
+        &texts(&frame),
+        "Recover unsaved changes?",
+        "recovery prompt",
+    )?;
+    if harness.app.state().recovery_prompt.is_none() {
+        return Err("the recovery prompt was not loaded at startup".into());
+    }
+    let restore_button = {
+        let state = harness.app.state();
+        let count = state
+            .recovery_prompt
+            .as_ref()
+            .map_or(0, |entries| entries.len());
+        crate::ui::recovery::layout(state.viewport.logical_rect(), count)
+            .restore
+            .center()
+    };
+    harness.click(restore_button);
+    let frame = harness.frame()?;
+    {
+        let state = harness.app.state();
+        if state.recovery_prompt.is_some() {
+            return Err("Restore All did not close the recovery prompt".into());
+        }
+        let Some(doc) = state.ws.active_doc() else {
+            return Err("Restore All did not add a buffer".into());
+        };
+        if doc.text() != "recovered body\n" {
+            return Err("Restore All lost the snapshot text".into());
+        }
+        if doc.path() != Some(Path::new("/tmp/original.txt")) {
+            return Err("Restore All lost the original path".into());
+        }
+    }
+    expect(
+        &texts(&frame),
+        "recovered body",
+        "restored buffer is painted",
+    )?;
+    if !store.list().is_empty() {
+        return Err("Restore All did not clear the snapshots".into());
+    }
+    drop(harness);
+
+    // -- recovery prompt: discard ---------------------------------------
+    let discard_dir = dir.join("recovery-discard");
+    fs::create_dir_all(&discard_dir).map_err(|error| format!("fixture: {error}"))?;
+    let store = RecoveryStore::new(discard_dir.join("recovery"));
+    store
+        .save(9, "discard.txt", None, "discard me", 0, 0)
+        .map_err(|error| format!("recovery fixture: {error}"))?;
+    let mut harness = Harness::new(
+        None,
+        discard_dir.join("session.conf"),
+        ScriptedDialogs::new(vec![]),
+    );
+    harness.frame()?;
+    harness.key(Key::Escape);
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        if state.recovery_prompt.is_some() || !state.ws.tabs.is_empty() {
+            return Err("Discard All did not clear the prompt and buffers".into());
+        }
+    }
+    if !store.list().is_empty() {
+        return Err("Discard All did not delete the snapshots".into());
+    }
     Ok(())
 }
 
@@ -1370,6 +1933,39 @@ fn draw_text_has_color(frame: &RecordedFrame, needle: &str, color: [u8; 4]) -> b
             text == needle && paint.color.to_rgba8() == color
         }
         _ => false,
+    })
+}
+
+fn grip_center_y(frame: &RecordedFrame, color: [u8; 4], center_x: f32) -> Option<f32> {
+    find_fill_near_x(
+        frame,
+        color,
+        crate::ui::handle::GRIP_WIDTH,
+        crate::ui::handle::GRIP_HEIGHT,
+        center_x,
+        2.0,
+    )
+    .map(|rect| rect.center().y)
+}
+
+fn find_fill_near_x(
+    frame: &RecordedFrame,
+    color: [u8; 4],
+    width: f32,
+    height: f32,
+    center_x: f32,
+    tolerance: f32,
+) -> Option<Rect> {
+    frame.commands().iter().find_map(|command| match command {
+        DrawCommand::FillRect { rect, paint }
+            if paint.color.to_rgba8() == color
+                && (rect.size.width - width).abs() < 0.01
+                && (rect.size.height - height).abs() < 0.01
+                && (rect.center().x - center_x).abs() <= tolerance =>
+        {
+            Some(*rect)
+        }
+        _ => None,
     })
 }
 
@@ -1457,6 +2053,21 @@ fn check_status_overlap(
         }
     }
     Ok(())
+}
+
+fn sidebar_click_position(app: &EditorApp, name: &str) -> Result<Vec2, String> {
+    let state = app.state();
+    let rows = state.ws.tree.rows();
+    let index = rows
+        .iter()
+        .position(|row| row.name == name)
+        .ok_or_else(|| format!("{name} is not in the sidebar rows"))?;
+    let m = state.theme.m;
+    let rect = state.sidebar.rect;
+    Ok(Vec2::new(
+        rect.left() + 60.0,
+        rect.top() + crate::ui::sidebar::HEADER_H + index as f32 * m.row_h + m.row_h * 0.5,
+    ))
 }
 
 fn draw_position(frame: &RecordedFrame, needle: &str) -> Option<Vec2> {

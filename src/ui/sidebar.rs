@@ -15,61 +15,25 @@ use crate::kit::{self, RectExt};
 use crate::state::AppState;
 
 pub const HEADER_H: f32 = 28.0;
-/// Resize grip: a 2 x 28 bar centered in the 4 px handle.
-pub const GRIP_WIDTH: f32 = 2.0;
-pub const GRIP_HEIGHT: f32 = 28.0;
 
 /// The 4 px divider that resizes the sidebar (drag, column-resize cursor).
 pub fn build_divider(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>) -> NodeId {
     let id = kit::node(tree, parent, "sidebar-divider");
     kit::set_container(tree, id, Container::Leaf);
-    kit::set_cursor(tree, id, igui_core::Cursor::ColResize);
+    kit::set_cursor(tree, id, crate::ui::handle::cursor());
     kit::draw(tree, id, {
         let state = state.clone();
         move |env, rect, interact| {
             let state = state.borrow();
-            let theme = state.theme;
-            let p = theme.p;
-            let dragging = state.sidebar_drag.is_some();
-            // One centered divider line (the sidebar no longer draws its own
-            // border) plus a light grip bar that signals "drag me".
-            let background = if dragging {
-                p.accent.alpha_mul(0.16)
-            } else if interact.hovered {
-                p.hover
-            } else {
-                p.bg
-            };
-            kit::fill(env.ctx, rect, background);
-            let line_color = if dragging {
-                p.accent
-            } else if interact.hovered {
-                p.dim
-            } else {
-                p.border
-            };
-            kit::vline(
-                env.ctx,
-                (rect.center().x - 0.5).round(),
-                rect.top(),
-                rect.bottom(),
-                line_color,
+            crate::ui::handle::paint(
+                env,
+                rect,
+                &state.theme,
+                interact.hovered,
+                state.sidebar_drag.is_some(),
+                crate::ui::handle::GripSide::Right,
+                state.content_center_y,
             );
-            let grip_height = GRIP_HEIGHT.min(rect.height() * 0.5);
-            // The 1 px divider line lands on the right half of the 4 px handle,
-            // so nudge the grip 1 px right to read as centered on the line.
-            let grip = Rect::from_center_size(
-                Vec2::new(rect.center().x + 1.0, rect.center().y),
-                Size::new(GRIP_WIDTH, grip_height),
-            );
-            let grip_color = if dragging {
-                p.accent
-            } else if interact.hovered {
-                p.text
-            } else {
-                p.faint
-            };
-            kit::fill(env.ctx, grip, grip_color);
         }
     });
     kit::on_pointer(tree, id, {
@@ -168,22 +132,24 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         m.font_small,
         p.faint,
     );
-    let root_name = state
-        .ws
-        .root
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| state.ws.root.display().to_string());
-    let root_name = kit::truncate_left(measurer, &root_name, m.font_small, rect.width() - 96.0);
-    kit::text_right(
-        env.ctx,
-        measurer,
-        &root_name,
-        rect.right() - 10.0,
-        baseline,
-        m.font_small,
-        p.dim,
-    );
+    if state.ws.folder_open {
+        let root_name = state
+            .ws
+            .root
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| state.ws.root.display().to_string());
+        let root_name = kit::truncate_left(measurer, &root_name, m.font_small, rect.width() - 96.0);
+        kit::text_right(
+            env.ctx,
+            measurer,
+            &root_name,
+            rect.right() - 10.0,
+            baseline,
+            m.font_small,
+            p.dim,
+        );
+    }
     kit::hline(
         env.ctx,
         rect.left(),
@@ -191,6 +157,59 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         header.bottom() - 1.0,
         p.border,
     );
+
+    // Empty state: no folder open yet (welcome screen in the editor).
+    if !state.ws.folder_open {
+        state.sidebar.actions.clear();
+        let left = rect.left() + 12.0;
+        kit::text(
+            env.ctx,
+            "NO FOLDER OPEN",
+            left,
+            header.bottom() + 22.0,
+            m.font_small,
+            p.faint,
+        );
+        let mut y = header.bottom() + 44.0;
+        for (action, label) in [
+            (crate::state::Action::OpenFolder, "Open Folder…"),
+            (crate::state::Action::Open, "Open File…"),
+            (crate::state::Action::New, "New Buffer"),
+        ] {
+            let row = Rect::from_min_size(
+                Vec2::new(rect.left() + 8.0, y),
+                Size::new((rect.width() - 16.0).max(40.0), 26.0),
+            );
+            kit::text(
+                env.ctx,
+                label,
+                row.left() + 8.0,
+                kit::baseline(measurer, row, m.font_ui),
+                m.font_ui,
+                p.accent,
+            );
+            kit::text_right(
+                env.ctx,
+                measurer,
+                action.shortcut(),
+                row.right() - 10.0,
+                kit::baseline(measurer, row, m.font_small),
+                m.font_small,
+                p.faint,
+            );
+            state.sidebar.actions.push((action, row));
+            y += 28.0;
+        }
+        let hint = kit::truncate(
+            measurer,
+            "or drop files / folders here",
+            m.font_small,
+            rect.width() - 24.0,
+        );
+        kit::text(env.ctx, &hint, left, y + 16.0, m.font_small, p.faint);
+        state.sidebar.scroll = 0.0;
+        return;
+    }
 
     // Rows, scrolled and clipped to the area under the header.
     let rows = state.ws.tree.rows();
@@ -327,6 +346,18 @@ fn click(state: &mut AppState, pos: Vec2) {
     if !view.contains(pos) || pos.y < view.top() + HEADER_H {
         return;
     }
+    if !state.ws.folder_open {
+        let action = state
+            .sidebar
+            .actions
+            .iter()
+            .find(|(_, rect)| rect.contains(pos))
+            .map(|(action, _)| action.clone());
+        if let Some(action) = action {
+            state.run(action);
+        }
+        return;
+    }
     let row_h = state.theme.m.row_h;
     let index = ((pos.y - view.top() - HEADER_H + state.sidebar.scroll) / row_h).floor() as usize;
     let rows = state.ws.tree.rows();
@@ -349,6 +380,9 @@ fn click(state: &mut AppState, pos: Vec2) {
 
 /// Row under `pos`, for hover feedback.
 pub fn hover_at(state: &AppState, pos: Vec2) -> Option<usize> {
+    if !state.ws.folder_open {
+        return None;
+    }
     let view = state.sidebar.rect;
     if !view.contains(pos) || pos.y < view.top() + HEADER_H {
         return None;

@@ -23,7 +23,7 @@ use igui_scene::SceneTree;
 use igui_ui::{Container, PaintEnv, PointerPhase, TextMeasurer};
 
 use crate::kit::{self, RectExt};
-use crate::state::{AppState, Drag, Focus};
+use crate::state::{Action, AppState, Drag, Focus};
 
 pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>) -> NodeId {
     let id = kit::node(tree, parent, "editor");
@@ -46,7 +46,22 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
             let measurer = igui_ui::text_measurer(tree);
             let mut state = state.borrow_mut();
             match phase {
-                PointerPhase::Down => pointer_down(&mut state, pos, shift, measurer.as_ref()),
+                PointerPhase::Down => {
+                    if state.ws.active_doc().is_none() {
+                        let action = state
+                            .editor
+                            .welcome_actions
+                            .iter()
+                            .find(|(_, rect)| rect.contains(pos))
+                            .map(|(action, _)| action.clone());
+                        if let Some(action) = action {
+                            state.run(action);
+                        }
+                        state.editor.drag = Drag::None;
+                    } else {
+                        pointer_down(&mut state, pos, shift, measurer.as_ref());
+                    }
+                }
                 PointerPhase::Move => pointer_move(&mut state, pos, measurer.as_ref()),
                 PointerPhase::Up => state.editor.drag = Drag::None,
                 PointerPhase::DoubleClick => {
@@ -391,7 +406,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     kit::fill(env.ctx, rect, p.bg);
 
     if state.ws.active_doc().is_none() {
-        paint_empty(env, rect, p.faint);
+        paint_welcome(state, env, rect);
         state.editor.text_rect = rect;
         return;
     }
@@ -853,16 +868,83 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     editor.hthumb = hthumb;
 }
 
-fn paint_empty(env: &mut PaintEnv<'_>, rect: Rect, color: igui_core::Color) {
+fn paint_welcome(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
+    let theme = state.theme;
+    let m = theme.m;
+    let p = theme.p;
     let measurer = env.measurer;
-    let (text, size) = ("⌘N  new buffer    ·    pick a file in the sidebar", 12.0);
-    let width = kit::width(measurer, text, size);
+    state.editor.welcome_actions.clear();
+    state.editor.caret_rect = Rect::ZERO;
+
+    let mut actions = vec![Action::Open, Action::OpenFolder, Action::New];
+    if state.ws.folder_open {
+        actions.push(Action::QuickOpen);
+        actions.push(Action::ProjectSearch);
+    }
+    let row_h = 26.0;
+    let row_w = 380.0_f32.min((rect.width() - 48.0).max(220.0));
+    let total_h = 64.0 + actions.len() as f32 * (row_h + 6.0) + 34.0;
+    let left = rect.center().x - row_w * 0.5;
+    let top = (rect.center().y - total_h * 0.5).max(rect.top() + 24.0);
+
+    let title = Rect::from_min_size(Vec2::new(left, top), Size::new(row_w, 24.0));
+    kit::text_center(
+        env.ctx,
+        measurer,
+        "igui-editor",
+        title,
+        top + 18.0,
+        18.0,
+        p.text,
+    );
+    let subtitle = if state.ws.folder_open {
+        "no document open — pick a file in the sidebar"
+    } else {
+        "no folder open"
+    };
+    kit::text_center(
+        env.ctx,
+        measurer,
+        subtitle,
+        Rect::from_min_size(Vec2::new(left, top + 26.0), Size::new(row_w, 20.0)),
+        top + 44.0,
+        m.font_ui,
+        p.dim,
+    );
+
+    let mut y = top + 60.0;
+    for action in actions {
+        let row = Rect::from_min_size(Vec2::new(left, y), Size::new(row_w, row_h));
+        env.ctx.stroke_rect(row, 1.0, p.border);
+        kit::text(
+            env.ctx,
+            &action.label(),
+            row.left() + 12.0,
+            kit::baseline(measurer, row, m.font_ui),
+            m.font_ui,
+            p.text,
+        );
+        kit::text_right(
+            env.ctx,
+            measurer,
+            action.shortcut(),
+            row.right() - 12.0,
+            kit::baseline(measurer, row, m.font_small),
+            m.font_small,
+            p.faint,
+        );
+        state.editor.welcome_actions.push((action, row));
+        y += row_h + 6.0;
+    }
+
+    let hint = "tip: drop files or a folder onto the window";
+    let hint_width = kit::width(measurer, hint, m.font_small);
     kit::text(
         env.ctx,
-        text,
-        rect.center().x - width * 0.5,
-        rect.center().y,
-        size,
-        color,
+        hint,
+        rect.center().x - hint_width * 0.5,
+        y + 16.0,
+        m.font_small,
+        p.faint,
     );
 }

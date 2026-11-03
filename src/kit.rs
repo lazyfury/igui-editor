@@ -232,6 +232,18 @@ pub fn flex(tree: &mut SceneTree, id: NodeId, grow: f32, basis_px: Option<f32>, 
     }
 }
 
+/// Sets a percentage main-axis basis (`0.0..=1.0`).
+pub fn flex_percent(tree: &mut SceneTree, id: NodeId, percent: f32) {
+    if let Some(control) = tree.data_mut::<Control>(id) {
+        control.data.layout = LayoutStyle {
+            grow: 0.0,
+            shrink: 1.0,
+            basis: SizeBasis::Percent(percent),
+            ..LayoutStyle::default()
+        };
+    }
+}
+
 /// Sets the minimum size of `id`.
 pub fn min_size(tree: &mut SceneTree, id: NodeId, width: f32, height: f32) {
     if let Some(control) = tree.data_mut::<Control>(id) {
