@@ -32,10 +32,17 @@ pub const MAX_DEPTH: usize = 12;
 pub const MAX_RESULTS: usize = 50;
 
 /// A snapshot of the workspace files.
+///
+/// `displays` and `lower` are parallel to `files` and computed once at build
+/// time. Quick Open re-ranks the index on every keystroke, so rebuilding
+/// relative paths and lowercasing 20k paths per keypress would dominate the
+/// palette's cost.
 #[derive(Clone, Debug, Default)]
 pub struct FileIndex {
     pub root: PathBuf,
     pub files: Vec<PathBuf>,
+    pub displays: Vec<String>,
+    pub lower: Vec<String>,
 }
 
 impl FileIndex {
@@ -72,32 +79,49 @@ impl FileIndex {
                 }
             }
         }
-        Self { root, files }
+        let mut displays = Vec::with_capacity(files.len());
+        let mut lower = Vec::with_capacity(files.len());
+        for path in &files {
+            let display = display_path(&root, path);
+            lower.push(display.to_lowercase());
+            displays.push(display);
+        }
+        Self {
+            root,
+            files,
+            displays,
+            lower,
+        }
     }
 
     /// Ranks files for `query`, best first (workspace-relative paths shown).
+    /// Only the capped results clone their `PathBuf`; the index data itself is
+    /// borrowed for scoring.
     pub fn query(&self, query: &str, recent: impl Fn(&Path) -> bool) -> Vec<(PathBuf, i32)> {
-        let relative: Vec<(PathBuf, String)> = self
+        let query_lower = query.to_lowercase();
+        let mut scored: Vec<(&PathBuf, i32)> = self
             .files
             .iter()
-            .map(|path| {
-                let display = path
-                    .strip_prefix(&self.root)
-                    .unwrap_or(path)
-                    .to_string_lossy()
-                    .into_owned();
-                (path.clone(), display)
+            .zip(&self.displays)
+            .zip(&self.lower)
+            .filter_map(|((path, display), lower)| {
+                let recent = recent(path);
+                let score = if query_lower.is_empty() {
+                    // Keep the convenience API on the empty-query path; it
+                    // returns before allocating a lowercase copy.
+                    fuzzy::score(query, display, recent)
+                } else {
+                    fuzzy::score_lower(&query_lower, lower, recent)
+                };
+                score.map(|score| (path, score))
             })
             .collect();
-        let mut scored: Vec<(PathBuf, i32)> = relative
-            .iter()
-            .filter_map(|(path, display)| {
-                fuzzy::score(query, display, recent(path)).map(|score| (path.clone(), score))
-            })
-            .collect();
-        scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
         scored.truncate(MAX_RESULTS);
         scored
+            .into_iter()
+            .map(|(path, score)| (path.clone(), score))
+            .collect()
     }
 }
 
@@ -153,6 +177,23 @@ mod tests {
         assert!(!names.iter().any(|name| name.starts_with("target")));
         assert!(!names.iter().any(|name| name.contains(".git")));
         assert!(!names.iter().any(|name| name.contains(".hidden")));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn index_caches_display_and_lowercase_paths() {
+        let dir = fixture("cache");
+        let index = FileIndex::build(&dir);
+        assert_eq!(index.files.len(), index.displays.len());
+        assert_eq!(index.files.len(), index.lower.len());
+        assert!(index
+            .displays
+            .iter()
+            .all(|display| !display.starts_with('/')));
+        assert!(index
+            .lower
+            .iter()
+            .all(|lower| *lower == lower.to_lowercase()));
         let _ = fs::remove_dir_all(dir);
     }
 

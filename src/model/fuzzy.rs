@@ -12,18 +12,28 @@ pub fn score(query: &str, path: &str, recent: bool) -> Option<i32> {
     }
     let query = query.to_lowercase();
     let path_lower = path.to_lowercase();
-    let name = path_lower.rsplit('/').next().unwrap_or(&path_lower);
-    if !is_subsequence(&query, &path_lower) {
+    score_lower(&query, &path_lower, recent)
+}
+
+/// [`score`] for callers that already keep lowercased paths (Quick Open's file
+/// index). `query_lower` and `path_lower` must be lowercase.
+pub fn score_lower(query_lower: &str, path_lower: &str, recent: bool) -> Option<i32> {
+    if query_lower.is_empty() {
+        return Some(if recent { 10 } else { 0 });
+    }
+    let query = query_lower;
+    let name = path_lower.rsplit('/').next().unwrap_or(path_lower);
+    if !is_subsequence(query, path_lower) {
         return None;
     }
     let mut score = 100;
-    if name.starts_with(&query) {
+    if name.starts_with(query) {
         score += 400;
-    } else if name.contains(&query) {
+    } else if name.contains(query) {
         score += 250;
-    } else if is_subsequence(&query, name) {
+    } else if is_subsequence(query, name) {
         score += 120;
-    } else if path_lower.contains(&query) {
+    } else if path_lower.contains(query) {
         score += 60;
     }
     if recent {
@@ -93,6 +103,21 @@ mod tests {
         let with_recent = score("rs", "src/main.rs", true).unwrap();
         let without = score("rs", "src/main.rs", false).unwrap();
         assert_eq!(with_recent - without, 200);
+    }
+
+    #[test]
+    fn lowercased_paths_score_identically() {
+        for (query, path, recent) in [
+            ("win", "deploy/window_manager.rs", false),
+            ("README", "docs/readme.md", true),
+            ("", "src/main.rs", false),
+            ("xyz", "src/main.rs", false),
+        ] {
+            assert_eq!(
+                score(query, path, recent),
+                score_lower(&query.to_lowercase(), &path.to_lowercase(), recent)
+            );
+        }
     }
 
     #[test]
