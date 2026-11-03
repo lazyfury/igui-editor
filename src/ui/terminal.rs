@@ -161,20 +161,25 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         ),
     );
     state.terminal.rect = body;
-    // Use the editor's typography and a cell width based on a capital glyph
-    // rather than the space advance. With a proportional CJK face the space
-    // advance is much narrower than a real character, which made terminal
-    // glyphs overlap.
+    // Use the editor's typography and measure each glyph for its display
+    // advance. A proportional fallback such as PingFang has no single
+    // monospace cell width: using the space advance overlaps glyphs, while
+    // using the widest glyph leaves a visible gap after every narrow letter.
+    // The terminal still uses a nominal column width for PTY sizing, but the
+    // painter advances by the actual glyph width within each row.
     let editor = state.editor_metrics();
     let font = editor.font;
-    let cell_w = env
-        .measurer
-        .advance('M', font)
-        .max(env.measurer.advance('0', font))
-        .max(env.measurer.advance('W', font))
-        .max(env.measurer.advance('中', font))
-        .max(1.0);
+    let cell_w = env.measurer.advance('M', font).max(1.0);
     let line_h = editor.line_h.max(font + 4.0);
+    let cell_advance = |text: &str| {
+        if text.is_empty() {
+            cell_w
+        } else {
+            env.measurer
+                .measure_run_weighted(text, font, igui_core::FontWeight::NORMAL)
+                .max(1.0)
+        }
+    };
     let cols = (body.width() / cell_w).floor().max(8.0) as u16;
     let rows = (body.height() / line_h).floor().max(2.0) as u16;
     if cols != state.terminal.cols || rows != state.terminal.rows {
@@ -197,48 +202,48 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     env.ctx.save();
     env.ctx.clip_rect(body);
     for row in 0..rows {
+        let mut x = body.left();
         for col in 0..cols {
             let Some(cell) = screen.cell(row, col) else {
                 continue;
             };
+            let text = cell.contents();
+            let advance = cell_advance(text);
             let fg = ansi_color(cell.fgcolor(), p.text);
             let bg = ansi_color(cell.bgcolor(), p.bg);
             if bg != p.bg {
                 env.ctx.fill_rect(
                     Rect::from_min_size(
-                        Vec2::new(
-                            body.left() + col as f32 * cell_w,
-                            body.top() + row as f32 * line_h,
-                        ),
-                        Size::new(cell_w, line_h),
+                        Vec2::new(x, body.top() + row as f32 * line_h),
+                        Size::new(advance, line_h),
                     ),
                     bg,
                 );
             }
-            let text = cell.contents();
             if !text.is_empty() && text != " " {
                 env.ctx.draw_text_weighted(
                     text,
-                    Vec2::new(
-                        body.left() + col as f32 * cell_w,
-                        body.top() + row as f32 * line_h + line_h - 4.0,
-                    ),
+                    Vec2::new(x, body.top() + row as f32 * line_h + line_h - 4.0),
                     font,
                     igui_core::FontWeight::NORMAL,
                     igui_render::TextAlign::Left,
                     fg,
                 );
             }
+            x += advance;
         }
     }
     let (crow, ccol) = screen.cursor_position();
     let crow = crow.min(rows.saturating_sub(1));
     let ccol = ccol.min(cols.saturating_sub(1));
+    let mut cursor_x = body.left();
+    for col in 0..ccol {
+        if let Some(cell) = screen.cell(crow, col) {
+            cursor_x += cell_advance(cell.contents());
+        }
+    }
     let caret = Rect::from_min_size(
-        Vec2::new(
-            body.left() + ccol as f32 * cell_w,
-            body.top() + crow as f32 * line_h,
-        ),
+        Vec2::new(cursor_x, body.top() + crow as f32 * line_h),
         Size::new(cell_w.max(2.0), line_h),
     );
     state.terminal.caret_rect = caret;
