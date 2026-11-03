@@ -8,7 +8,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use igui_core::{NodeId, Rect, Size, Vec2};
+use igui_core::{Key, Modifiers, NodeId, Rect, Size, Vec2};
 use igui_scene::SceneTree;
 use igui_ui::{Container, PaintEnv, TextMeasurer};
 
@@ -136,7 +136,11 @@ pub fn popup_layout(
     let mut widest = POPUP_W;
     for item in items.iter().flatten() {
         let label = kit::width(measurer, &item.label(), 12.0);
-        let hint = kit::width(measurer, item.shortcut(), 11.0);
+        let hint = kit::width(
+            measurer,
+            &state.keymap.shortcut_label(item).unwrap_or_default(),
+            11.0,
+        );
         widest = widest.max(label + hint + 64.0);
     }
     let mut height = POPUP_PAD * 2.0;
@@ -225,12 +229,12 @@ pub fn paint_popup(
                     m.font_ui,
                     if enabled { p.text } else { p.faint },
                 );
-                let hint = action.shortcut();
+                let hint = state.keymap.shortcut_label(action).unwrap_or_default();
                 if !hint.is_empty() {
                     kit::text_right(
                         ctx,
                         measurer,
-                        hint,
+                        &hint,
                         item_rect.right() - 12.0,
                         baseline,
                         m.font_small,
@@ -239,6 +243,139 @@ pub fn paint_popup(
                 }
             }
         }
+    }
+}
+
+/// Indices of enabled items in the open menu (separators and disabled
+/// commands are skipped, so arrow keys never land on a dead row).
+fn enabled_items(state: &AppState) -> Vec<usize> {
+    let Some(menu) = state.menu_open else {
+        return Vec::new();
+    };
+    state::items(menu, state)
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| {
+            item.as_ref()
+                .filter(|action| action.enabled(state))
+                .map(|_| index)
+        })
+        .collect()
+}
+
+fn move_selection(state: &mut AppState, forward: bool) {
+    let enabled = enabled_items(state);
+    let Some(first) = enabled.first().copied() else {
+        return;
+    };
+    let next = match state
+        .menu_hover
+        .and_then(|current| enabled.iter().position(|index| *index == current))
+    {
+        Some(position) if forward => enabled[(position + 1) % enabled.len()],
+        Some(position) => enabled[(position + enabled.len() - 1) % enabled.len()],
+        None if forward => first,
+        None => *enabled.last().unwrap_or(&first),
+    };
+    state.menu_hover = Some(next);
+    state.dirty = true;
+}
+
+fn switch_menu(state: &mut AppState, delta: isize) {
+    let Some(menu) = state.menu_open else {
+        return;
+    };
+    let current = Menu::ALL.iter().position(|item| *item == menu).unwrap_or(0);
+    let next = (current as isize + delta).rem_euclid(Menu::ALL.len() as isize) as usize;
+    state.menu_open = Some(Menu::ALL[next]);
+    state.menu_hover = None;
+    move_selection(state, delta > 0);
+    state.dirty = true;
+}
+
+fn activate(state: &mut AppState) -> bool {
+    let enabled = enabled_items(state);
+    let Some(index) = state
+        .menu_hover
+        .filter(|index| enabled.contains(index))
+        .or_else(|| enabled.first().copied())
+    else {
+        return false;
+    };
+    let Some(menu) = state.menu_open else {
+        return false;
+    };
+    let action = state::items(menu, state)
+        .get(index)
+        .and_then(|item| item.clone());
+    let Some(action) = action else {
+        return false;
+    };
+    state.menu_open = None;
+    state.menu_hover = None;
+    state.run(action);
+    true
+}
+
+/// Opens the File menu from the keyboard (`F10`), or closes an open menu.
+pub fn toggle_keyboard(state: &mut AppState) {
+    if state.menu_open.is_some() {
+        state.menu_open = None;
+        state.menu_hover = None;
+    } else {
+        state.menu_open = Some(Menu::File);
+        state.menu_hover = None;
+        move_selection(state, true);
+    }
+    state.dirty = true;
+}
+
+/// Keyboard handling while a menu is open. Returns `true` when consumed.
+/// Modifier chords fall through so global shortcuts keep working.
+pub fn on_key(state: &mut AppState, key: Key, modifiers: Modifiers) -> bool {
+    if state.menu_open.is_none() {
+        return false;
+    }
+    if modifiers.meta || modifiers.ctrl || modifiers.alt {
+        return false;
+    }
+    match key {
+        Key::Escape => {
+            state.menu_open = None;
+            state.menu_hover = None;
+            state.dirty = true;
+            true
+        }
+        Key::ArrowDown => {
+            move_selection(state, true);
+            true
+        }
+        Key::ArrowUp => {
+            move_selection(state, false);
+            true
+        }
+        Key::ArrowLeft => {
+            switch_menu(state, -1);
+            true
+        }
+        Key::ArrowRight => {
+            switch_menu(state, 1);
+            true
+        }
+        Key::Home => {
+            state.menu_hover = enabled_items(state).first().copied();
+            state.dirty = true;
+            true
+        }
+        Key::End => {
+            state.menu_hover = enabled_items(state).last().copied();
+            state.dirty = true;
+            true
+        }
+        Key::Enter | Key::Space => activate(state),
+        // While a menu owns the keyboard, no plain key may edit the document
+        // behind it (Tab, Delete, function keys, …).
+        _ => true,
     }
 }
 
@@ -303,4 +440,89 @@ pub fn hover_at(state: &AppState, pos: Vec2, measurer: &dyn TextMeasurer) -> Opt
     }
     hits.iter()
         .position(|(item, item_rect)| item.is_some() && item_rect.contains(pos))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::session::Session;
+    use crate::model::Workspace;
+    use crate::theme::Theme;
+
+    fn state() -> AppState {
+        let dir = std::env::temp_dir().join(format!(
+            "igui-editor-menu-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let mut ws = Workspace::new(&dir);
+        ws.new_tab();
+        AppState::new(
+            Theme::dark(),
+            ws,
+            Session::default(),
+            dir.join("session.conf"),
+        )
+    }
+
+    #[test]
+    fn f10_opens_the_file_menu_with_the_first_enabled_item() {
+        let mut state = state();
+        toggle_keyboard(&mut state);
+        assert_eq!(state.menu_open, Some(Menu::File));
+        assert_eq!(state.menu_hover, Some(0));
+        assert!(on_key(&mut state, Key::Escape, Modifiers::NONE));
+        assert!(state.menu_open.is_none());
+    }
+
+    #[test]
+    fn arrows_skip_separators_and_enter_runs_the_selection() {
+        let mut state = state();
+        toggle_keyboard(&mut state);
+        let tabs = state.ws.tabs.len();
+        assert!(on_key(&mut state, Key::ArrowDown, Modifiers::NONE));
+        assert_eq!(state.menu_hover, Some(1));
+        assert!(on_key(&mut state, Key::ArrowUp, Modifiers::NONE));
+        assert_eq!(state.menu_hover, Some(0));
+        assert!(on_key(&mut state, Key::Enter, Modifiers::NONE));
+        assert!(state.menu_open.is_none());
+        assert_eq!(state.ws.tabs.len(), tabs + 1, "Enter must run New");
+    }
+
+    #[test]
+    fn left_and_right_switch_the_open_menu() {
+        let mut state = state();
+        toggle_keyboard(&mut state);
+        assert!(on_key(&mut state, Key::ArrowRight, Modifiers::NONE));
+        assert_eq!(state.menu_open, Some(Menu::Edit));
+        assert!(on_key(&mut state, Key::ArrowLeft, Modifiers::NONE));
+        assert_eq!(state.menu_open, Some(Menu::File));
+    }
+
+    #[test]
+    fn plain_keys_do_not_reach_the_document_while_a_menu_is_open() {
+        let mut state = state();
+        toggle_keyboard(&mut state);
+        assert!(on_key(&mut state, Key::Tab, Modifiers::NONE));
+        assert_eq!(state.menu_open, Some(Menu::File));
+    }
+
+    #[test]
+    fn modified_keys_fall_through_to_global_shortcuts() {
+        let mut state = state();
+        toggle_keyboard(&mut state);
+        assert!(!on_key(
+            &mut state,
+            Key::Character('s'),
+            Modifiers {
+                meta: true,
+                ..Modifiers::NONE
+            }
+        ));
+        assert_eq!(state.menu_open, Some(Menu::File));
+    }
 }

@@ -241,10 +241,11 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                 m.font_ui,
                 p.accent,
             );
+            let hint = state.keymap.shortcut_label(&action).unwrap_or_default();
             kit::text_right(
                 env.ctx,
                 measurer,
-                action.shortcut(),
+                &hint,
                 row.right() - 10.0,
                 kit::baseline(measurer, row, m.font_small),
                 m.font_small,

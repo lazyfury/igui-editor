@@ -5,6 +5,23 @@ use super::*;
 impl AppState {
     // -- document lifecycle ---------------------------------------------
 
+    /// Focuses tab `index` (no-op when out of range or already active) and
+    /// refreshes the view state that depends on the active document.
+    pub fn activate_tab(&mut self, index: usize) {
+        if index >= self.ws.tabs.len() || index == self.ws.active {
+            return;
+        }
+        self.ws.select(index);
+        self.tabs.reveal_active = true;
+        self.editor.preedit = None;
+        self.editor.drag = Drag::None;
+        self.focus = Focus::Editor;
+        self.find.dirty = true;
+        self.sync_layout();
+        self.sync_session_tabs();
+        self.dirty = true;
+    }
+
     /// Closes every tab except `keep` (context menu). Dirty targets require a
     /// single discard confirmation.
     pub fn request_close_others(&mut self, keep: usize) {

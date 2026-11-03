@@ -3705,6 +3705,76 @@ fn check_keymaps(dir: &Path) -> Result<(), String> {
         doc.undo();
     }
 
+    // F10 opens the File menu; arrows move the selection and Enter runs it.
+    // The painted hint comes from the active keymap, not a duplicate table.
+    set_keymap(&mut harness, KeymapId::VsCode);
+    harness.key(Key::F10);
+    let menu_frame = harness.frame()?;
+    if harness.app.state().menu_open != Some(Menu::File) {
+        return Err("F10 did not open the File menu".into());
+    }
+    let expected_hint = if cfg!(target_os = "macos") {
+        "⌘N"
+    } else {
+        "Ctrl+N"
+    };
+    if !texts(&menu_frame)
+        .iter()
+        .any(|text| text.contains(expected_hint))
+    {
+        return Err(format!(
+            "File menu hint does not follow the keymap ({expected_hint})"
+        ));
+    }
+    let before_tabs = harness.app.state().ws.tabs.len();
+    harness.key(Key::ArrowDown);
+    harness.key(Key::ArrowUp);
+    harness.key(Key::Enter);
+    harness.frame()?;
+    if harness.app.state().ws.tabs.len() != before_tabs + 1 {
+        return Err("menu keyboard navigation did not run New".into());
+    }
+
+    // Direct tab access and cycling.
+    harness.shortcut(Key::Character('n'), primary);
+    harness.shortcut(Key::Character('n'), primary);
+    harness.frame()?;
+    let tabs = harness.app.state().ws.tabs.len();
+    harness.shortcut(Key::Character('2'), primary);
+    harness.frame()?;
+    if harness.app.state().ws.active != 1 {
+        return Err("Cmd/Ctrl+2 did not select the second tab".into());
+    }
+    harness.shortcut(Key::Character('9'), primary);
+    harness.frame()?;
+    if harness.app.state().ws.active != tabs - 1 {
+        return Err("Cmd/Ctrl+9 did not select the last tab".into());
+    }
+    let tab_modifiers = if cfg!(target_os = "macos") {
+        Modifiers {
+            ctrl: true,
+            ..Modifiers::NONE
+        }
+    } else {
+        primary
+    };
+    harness.shortcut(Key::Tab, tab_modifiers);
+    harness.frame()?;
+    if harness.app.state().ws.active != 0 {
+        return Err("Next Tab did not wrap to the first tab".into());
+    }
+    harness.shortcut(
+        Key::Tab,
+        Modifiers {
+            shift: true,
+            ..tab_modifiers
+        },
+    );
+    harness.frame()?;
+    if harness.app.state().ws.active != tabs - 1 {
+        return Err("Previous Tab did not wrap to the last tab".into());
+    }
+
     // Settings row cycles to the next profile and persists its session value.
     let mut state = harness.app.state_mut();
     let before = state.settings.keymap;

@@ -662,6 +662,13 @@ impl EditorApp {
                 if state.search.open && ui::project_search::on_key(&mut state, *key, modifiers) {
                     return EventResult::Handled;
                 }
+                if !modifiers.meta && !modifiers.ctrl && !modifiers.alt && *key == Key::F10 {
+                    ui::menu::toggle_keyboard(&mut state);
+                    return EventResult::Handled;
+                }
+                if ui::menu::on_key(&mut state, *key, modifiers) {
+                    return EventResult::Handled;
+                }
                 if state.problems.open && *key == Key::Escape {
                     ui::problems::close(&mut state);
                     return EventResult::Handled;
@@ -740,12 +747,6 @@ impl EditorApp {
                     state.dirty = true;
                     return EventResult::Handled;
                 }
-                if state.menu_open.is_some() && *key == Key::Escape {
-                    state.menu_open = None;
-                    state.menu_hover = None;
-                    state.dirty = true;
-                    return EventResult::Handled;
-                }
                 if state.find.open && input::find_key(&mut state, *key, modifiers).is_handled() {
                     return EventResult::Handled;
                 }
@@ -789,7 +790,10 @@ impl EditorApp {
                     return EventResult::Handled;
                 }
                 let mut state = self.state.borrow_mut();
-                if state.settings_open || state.recovery_prompt.is_some() {
+                if state.settings_open
+                    || state.recovery_prompt.is_some()
+                    || state.menu_open.is_some()
+                {
                     return EventResult::Handled;
                 }
                 if state.lsp.hover.is_some() || state.lsp.completion.is_some() {

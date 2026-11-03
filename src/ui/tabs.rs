@@ -225,17 +225,7 @@ fn click(state: &mut AppState, pos: Vec2) {
                 state.request_close_tab(index);
                 return;
             }
-            if state.ws.active != index {
-                state.ws.select(index);
-                state.tabs.reveal_active = true;
-                state.editor.preedit = None;
-                state.editor.drag = crate::state::Drag::None;
-                state.focus = crate::state::Focus::Editor;
-                state.find.dirty = true;
-                state.sync_layout();
-                state.sync_session_tabs();
-                state.dirty = true;
-            }
+            state.activate_tab(index);
             state.tab_drag = Some(crate::state::TabDrag {
                 from: index,
                 start: pos,

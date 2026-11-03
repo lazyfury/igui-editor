@@ -129,53 +129,58 @@ impl KeyChord {
         })
     }
 
+    /// Human label for menus. macOS uses the compact symbol form (`⇧⌘M`);
+    /// other platforms spell modifiers out (`Ctrl+Shift+M`).
     pub fn label(self) -> String {
-        let mut parts: Vec<String> = Vec::new();
-        if self.primary {
-            parts.push(
-                (if cfg!(target_os = "macos") {
-                    "⌘"
-                } else {
-                    "Ctrl"
-                })
-                .to_string(),
-            );
+        let macos = cfg!(target_os = "macos");
+        let mut parts: Vec<&str> = Vec::new();
+        if macos {
+            // Conventional symbol order: ⌃⌥⇧⌘.
+            if self.ctrl {
+                parts.push("⌃");
+            }
+            if self.alt {
+                parts.push("⌥");
+            }
+            if self.shift {
+                parts.push("⇧");
+            }
+            if self.meta {
+                parts.push("Meta");
+            }
+            if self.primary {
+                parts.push("⌘");
+            }
+        } else {
+            if self.primary {
+                parts.push("Ctrl");
+            }
+            if self.meta {
+                parts.push("Meta");
+            }
+            if self.ctrl {
+                parts.push("Ctrl");
+            }
+            if self.alt {
+                parts.push("Alt");
+            }
+            if self.shift {
+                parts.push("Shift");
+            }
         }
-        if self.meta {
-            parts.push("Meta".into());
+        let key = key_label(self.key);
+        let key = if macos && key.chars().count() == 1 {
+            key.to_uppercase()
+        } else {
+            key
+        };
+        if macos {
+            format!("{}{key}", parts.concat())
+        } else if parts.is_empty() {
+            key
+        } else {
+            format!("{}+{key}", parts.join("+"))
         }
-        if self.ctrl {
-            parts.push(
-                (if cfg!(target_os = "macos") {
-                    "⌃"
-                } else {
-                    "Ctrl"
-                })
-                .to_string(),
-            );
-        }
-        if self.alt {
-            parts.push(
-                (if cfg!(target_os = "macos") {
-                    "⌥"
-                } else {
-                    "Alt"
-                })
-                .to_string(),
-            );
-        }
-        if self.shift {
-            parts.push(
-                (if cfg!(target_os = "macos") {
-                    "⇧"
-                } else {
-                    "Shift"
-                })
-                .to_string(),
-            );
-        }
-        parts.push(key_label(self.key));
-        parts.join("+")
     }
 }
 
@@ -352,6 +357,23 @@ impl Keymap {
         for (sequence, action) in global {
             self.bind(Scope::Global, sequence, action);
         }
+        // Direct tab access: `primary+1..8` selects by index, `primary+9` the
+        // last tab (VS Code convention). Ctrl+Tab is a literal Ctrl on macOS
+        // (Cmd+Tab belongs to the OS) and the primary chord elsewhere.
+        for slot in 1..=9 {
+            self.bind(
+                Scope::Global,
+                &format!("primary+{slot}"),
+                Action::SelectTab(slot),
+            );
+        }
+        if cfg!(target_os = "macos") {
+            self.bind(Scope::Global, "ctrl+tab", Action::NextTab);
+            self.bind(Scope::Global, "ctrl+shift+tab", Action::PreviousTab);
+        } else {
+            self.bind(Scope::Global, "primary+tab", Action::NextTab);
+            self.bind(Scope::Global, "primary+shift+tab", Action::PreviousTab);
+        }
     }
 
     fn add_vscode(&mut self) {
@@ -462,6 +484,29 @@ impl Keymap {
             Resolution::None
         }
     }
+
+    /// Display label for the binding that runs `action` (global first, then the
+    /// first scope-specific binding). Menus and the welcome screen use this so
+    /// they cannot drift from the active profile.
+    pub fn shortcut_label(&self, action: &Action) -> Option<String> {
+        let binding = self
+            .bindings
+            .iter()
+            .find(|binding| binding.action == *action && binding.scope == Scope::Global)
+            .or_else(|| {
+                self.bindings
+                    .iter()
+                    .find(|binding| binding.action == *action)
+            })?;
+        Some(
+            binding
+                .sequence
+                .iter()
+                .map(|chord| chord.label())
+                .collect::<Vec<_>>()
+                .join(" "),
+        )
+    }
 }
 
 /// Stable ids accepted by `keymaps.json`; they mirror the command names used in
@@ -505,6 +550,17 @@ fn action_from_id(id: &str) -> Option<Action> {
         "lsp.hover" => Action::LspHover,
         "lsp.completion" => Action::LspCompletion,
         "lsp.definition" => Action::LspDefinition,
+        "tabs.next" => Action::NextTab,
+        "tabs.previous" => Action::PreviousTab,
+        "tabs.select1" => Action::SelectTab(1),
+        "tabs.select2" => Action::SelectTab(2),
+        "tabs.select3" => Action::SelectTab(3),
+        "tabs.select4" => Action::SelectTab(4),
+        "tabs.select5" => Action::SelectTab(5),
+        "tabs.select6" => Action::SelectTab(6),
+        "tabs.select7" => Action::SelectTab(7),
+        "tabs.select8" => Action::SelectTab(8),
+        "tabs.select9" => Action::SelectTab(9),
         _ => return None,
     })
 }
@@ -604,6 +660,49 @@ mod tests {
         assert_eq!(
             keymap.resolve(Scope::Editor, &[chord("g")]),
             Resolution::None
+        );
+    }
+    #[test]
+    fn shortcut_labels_follow_the_active_profile_and_platform() {
+        let vscode = Keymap::for_id(KeymapId::VsCode);
+        let save = vscode.shortcut_label(&Action::Save).expect("save binding");
+        if cfg!(target_os = "macos") {
+            assert!(save.contains('⌘'), "{save}");
+        } else {
+            assert!(save.contains("Ctrl"), "{save}");
+        }
+        // Editor-scope bindings are still discoverable in the welcome screen.
+        assert!(vscode
+            .shortcut_label(&Action::DuplicateLine)
+            .is_some_and(|label| label.contains('↓')));
+        // The label follows the profile: JetBrains duplicates with primary+D.
+        let idea = Keymap::for_id(KeymapId::JetBrains);
+        let duplicate = idea
+            .shortcut_label(&Action::DuplicateLine)
+            .expect("idea duplicate binding");
+        assert!(duplicate.ends_with('D'), "{duplicate}");
+    }
+
+    #[test]
+    fn tab_chords_select_and_cycle() {
+        let keymap = Keymap::for_id(KeymapId::VsCode);
+        let sequence = |value: &str| parse_sequence(value).expect("chord");
+        assert_eq!(
+            keymap.resolve(Scope::Global, &sequence("primary+2")),
+            Resolution::Command(Action::SelectTab(2))
+        );
+        assert_eq!(
+            keymap.resolve(Scope::Global, &sequence("primary+9")),
+            Resolution::Command(Action::SelectTab(9))
+        );
+        let next = if cfg!(target_os = "macos") {
+            "ctrl+tab"
+        } else {
+            "primary+tab"
+        };
+        assert_eq!(
+            keymap.resolve(Scope::Global, &sequence(next)),
+            Resolution::Command(Action::NextTab)
         );
     }
 }

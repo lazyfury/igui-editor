@@ -5,7 +5,8 @@
 //! ```
 //!
 //! - `model/`: pure document + workspace logic (unit-tested, no UI).
-//! - `state.rs`: shared app state written by callbacks and read by painters.
+//! - `state/`: shared app state written by callbacks and read by painters
+//!   (one domain implementation per child module).
 //! - `ui/`: one module per shell region (menubar, sidebar, tabs, editor, status).
 //! - `app.rs`: shell construction, input routing, `igui_app` glue.
 //! - `host.rs`: winit + wgpu plugins (native only).

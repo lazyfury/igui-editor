@@ -12,7 +12,8 @@
 //! - `syntax/`: the syntax-highlighting **extension API**, built-in providers
 //!   (Rust, C, C++, JS, TS, Go, GDScript, JSON, TOML, Markdown) and declarative
 //!   JSON language packs (`load_language_packs`, `<config>/languages/*.json`).
-//! - `state.rs`: shared app state written by callbacks and read by painters.
+//! - `state/`: shared app state written by callbacks and read by painters
+//!   (one domain implementation per child module).
 //! - `ui/`: one module per shell region and overlay.
 //! - `app.rs`: shell construction, input routing, `igui_app` glue.
 //! - `host.rs`: winit + wgpu plugins, native dialogs, CJK-capable face.

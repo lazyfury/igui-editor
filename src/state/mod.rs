@@ -184,14 +184,11 @@ pub enum Action {
     SetLanguage(Option<String>),
     OpenRecent(PathBuf),
     ClearRecent,
+    NextTab,
+    PreviousTab,
+    /// Selects a tab by 1-based slot; slot 9 means "last tab".
+    SelectTab(usize),
 }
-
-/// Platform's primary accelerator label.
-pub const ACCEL: &str = if cfg!(target_os = "macos") {
-    "⌘"
-} else {
-    "Ctrl+"
-};
 
 impl Action {
     pub fn label(&self) -> String {
@@ -238,6 +235,9 @@ impl Action {
             Action::SetLanguage(None) => "Auto (by extension)".into(),
             Action::SetLanguage(Some(name)) => name.clone(),
             Action::ClearRecent => "Clear Recent".into(),
+            Action::NextTab => "Next Tab".into(),
+            Action::PreviousTab => "Previous Tab".into(),
+            Action::SelectTab(slot) => format!("Tab {slot}"),
             Action::OpenRecent(path) => {
                 let name = path
                     .file_name()
@@ -245,127 +245,6 @@ impl Action {
                     .unwrap_or_else(|| path.display().to_string());
                 format!("Recent: {name}")
             }
-        }
-    }
-
-    pub fn shortcut(&self) -> &'static str {
-        match self {
-            Action::New => match ACCEL {
-                "⌘" => "⌘N",
-                _ => "Ctrl+N",
-            },
-            Action::NewFile => match ACCEL {
-                "⌘" => "⇧⌘N",
-                _ => "Ctrl+Shift+N",
-            },
-            Action::Open => match ACCEL {
-                "⌘" => "⌘O",
-                _ => "Ctrl+O",
-            },
-            Action::OpenFolder => match ACCEL {
-                "⌘" => "⇧⌘O",
-                _ => "Ctrl+Shift+O",
-            },
-            Action::CloseFolder => "",
-            Action::Save => match ACCEL {
-                "⌘" => "⌘S",
-                _ => "Ctrl+S",
-            },
-            Action::SaveAs => match ACCEL {
-                "⌘" => "⇧⌘S",
-                _ => "Ctrl+Shift+S",
-            },
-            Action::CloseTab => match ACCEL {
-                "⌘" => "⌘W",
-                _ => "Ctrl+W",
-            },
-            Action::Undo => match ACCEL {
-                "⌘" => "⌘Z",
-                _ => "Ctrl+Z",
-            },
-            Action::Redo => match ACCEL {
-                "⌘" => "⇧⌘Z",
-                _ => "Ctrl+Shift+Z",
-            },
-            Action::Cut => match ACCEL {
-                "⌘" => "⌘X",
-                _ => "Ctrl+X",
-            },
-            Action::Copy => match ACCEL {
-                "⌘" => "⌘C",
-                _ => "Ctrl+C",
-            },
-            Action::Paste => match ACCEL {
-                "⌘" => "⌘V",
-                _ => "Ctrl+V",
-            },
-            Action::SelectAll => match ACCEL {
-                "⌘" => "⌘A",
-                _ => "Ctrl+A",
-            },
-            Action::Find => match ACCEL {
-                "⌘" => "⌘F",
-                _ => "Ctrl+F",
-            },
-            Action::QuickOpen => match ACCEL {
-                "⌘" => "⌘P",
-                _ => "Ctrl+P",
-            },
-            Action::ProjectSearch => match ACCEL {
-                "⌘" => "⇧⌘F",
-                _ => "Ctrl+Shift+F",
-            },
-            Action::LspHover => "F1",
-            Action::LspCompletion => match ACCEL {
-                "⌘" => "⌘I",
-                _ => "Ctrl+I",
-            },
-            Action::LspDefinition => "F12",
-            Action::ToggleTerminal => match ACCEL {
-                "⌘" => "⌃`",
-                _ => "Ctrl+`",
-            },
-            Action::Settings => match ACCEL {
-                "⌘" => "⌘,",
-                _ => "Ctrl+,",
-            },
-            Action::ToggleSidebar => match ACCEL {
-                "⌘" => "⌘B",
-                _ => "Ctrl+B",
-            },
-            Action::ToggleOutline => match ACCEL {
-                "⌘" => "⌘⌥O",
-                _ => "Ctrl+Alt+O",
-            },
-            Action::ToggleTheme => match ACCEL {
-                "⌘" => "⇧⌘L",
-                _ => "Ctrl+Shift+L",
-            },
-            Action::SetView(_) => match ACCEL {
-                "⌘" => "⇧⌘M",
-                _ => "Ctrl+Shift+M",
-            },
-            Action::ToggleScrollSync => match ACCEL {
-                "⌘" => "⇧⌘Y",
-                _ => "Ctrl+Shift+Y",
-            },
-            Action::ToggleSoftWrap => match ACCEL {
-                "⌘" => "⌥Z",
-                _ => "Alt+Z",
-            },
-            Action::SetLanguage(_) => "",
-            Action::FindReplace
-            | Action::FindNext
-            | Action::FindPrevious
-            | Action::CycleView
-            | Action::DeleteLine
-            | Action::DuplicateLine
-            | Action::MoveLineUp
-            | Action::MoveLineDown
-            | Action::DeleteWordBackward
-            | Action::DeleteWordForward
-            | Action::ToggleComment => "",
-            Action::OpenRecent(_) | Action::ClearRecent => "",
         }
     }
 
@@ -414,6 +293,10 @@ impl Action {
             Action::SetLanguage(_) => doc.is_some(),
             Action::OpenRecent(path) => path.is_file(),
             Action::ClearRecent => !state.session.recent.is_empty(),
+            Action::NextTab | Action::PreviousTab => state.ws.tabs.len() > 1,
+            Action::SelectTab(slot) => {
+                !state.ws.tabs.is_empty() && (*slot >= 9 || *slot <= state.ws.tabs.len())
+            }
         }
     }
 
@@ -1471,6 +1354,39 @@ mod tests {
             Session::default(),
             std::env::temp_dir().join("igui-editor-test-session.conf"),
         )
+    }
+
+    fn state_with_tabs(count: usize) -> AppState {
+        let mut state = state();
+        while state.ws.tabs.len() < count {
+            state.ws.new_tab();
+        }
+        state
+    }
+
+    #[test]
+    fn tab_commands_select_by_slot_and_wrap() {
+        let mut state = state_with_tabs(3);
+        state.run(Action::SelectTab(2));
+        assert_eq!(state.ws.active, 1);
+        state.run(Action::SelectTab(9));
+        assert_eq!(state.ws.active, 2, "slot 9 means the last tab");
+        state.run(Action::NextTab);
+        assert_eq!(state.ws.active, 0, "next wraps");
+        state.run(Action::PreviousTab);
+        assert_eq!(state.ws.active, 2, "previous wraps");
+        state.run(Action::SelectTab(8));
+        assert_eq!(state.ws.active, 2, "out-of-range slots are no-ops");
+    }
+
+    #[test]
+    fn activating_a_tab_returns_focus_to_the_editor() {
+        let mut state = state_with_tabs(2);
+        state.focus = Focus::Find;
+        state.activate_tab(0);
+        assert_eq!(state.ws.active, 0);
+        assert_eq!(state.focus, Focus::Editor);
+        assert!(state.tabs.reveal_active);
     }
 
     #[test]

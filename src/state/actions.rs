@@ -228,6 +228,25 @@ impl AppState {
             Action::SetLanguage(name) => self.set_language(name),
             Action::OpenRecent(path) => self.open_path(path),
             Action::ClearRecent => self.clear_recent(),
+            Action::NextTab => {
+                let len = self.ws.tabs.len();
+                if len > 1 {
+                    self.activate_tab((self.ws.active + 1) % len);
+                }
+            }
+            Action::PreviousTab => {
+                let len = self.ws.tabs.len();
+                if len > 1 {
+                    self.activate_tab((self.ws.active + len - 1) % len);
+                }
+            }
+            Action::SelectTab(slot) => {
+                let len = self.ws.tabs.len();
+                if len > 0 {
+                    let index = if slot >= 9 { len - 1 } else { slot - 1 };
+                    self.activate_tab(index);
+                }
+            }
         }
         self.dirty = true;
     }
