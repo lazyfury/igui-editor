@@ -93,7 +93,7 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    Text and IME events follow the `Focus` value (`Editor` / `Find` / `Replace`).
    Global commands therefore work in every mode, and a field edit can never leak
    into the document. Shortcuts now go through the command/keymap layer in
-   `keymap.rs`; see [`DESIGN-keymaps.md`](DESIGN-keymaps.md) for profiles and
+   `keymap.rs`; see [`keymaps.md`](keymaps.md) for profiles and
    the remaining Vim scope.
 10. **Find state is a value, matching is pure.** `model::find` maps `(text,
    matcher)` to byte ranges; `FindState` holds two `igui_ui::TextEdit` fields
@@ -137,7 +137,7 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
 17. **Large files degrade explicitly.** 2 MB/20k lines: no highlighting;
    8 MB: no preview (banner, editing still works); 32 MB: opening is refused;
    preview above 512 KB renders a prefix plus a truncation banner. Limits are
-   constants, documented in the README, not heuristics.
+   constants, documented in [`keys.md`](keys.md), not heuristics.
 18. **Sidebar resize and tab overflow avoid rebuilds.** The sidebar and split
    dividers share one 4 px drag-handle implementation (`ui::handle`; see
    [§Drag handle](#drag-handle-specification)), so their visuals cannot drift.

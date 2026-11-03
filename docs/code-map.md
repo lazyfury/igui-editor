@@ -1,0 +1,79 @@
+# Code map
+
+```
+src/
+  model/doc.rs        text buffer, caret/selection, movement, delta undo stack
+  model/find.rs       plain-text matcher (case / whole-word)
+  model/git.rs        git status/diff/stage/commit worker + porcelain parser
+  model/pty.rs        portable-pty PTY session
+  model/fuzzy.rs      Quick Open ranking
+  model/workspace_index.rs  ignored-dir file index (Quick Open)
+  model/search.rs     background project search (worker + caps)
+  keymap.rs           chord parser, profiles, user override resolver
+  vim.rs              Normal/Insert/Visual key handling (Vim profile)
+  syntax/pack.rs      declarative JSON language packs
+  model/lsp.rs        stdio/TCP JSON-RPC client, diagnostics, hover/completion,
+                      native Godot symbols
+  model/bbcode.rs     Godot BBCode -> text spans + clickable references
+  model/docs.rs       native symbol -> docs view text + link ranges
+  services/lsp.rs     built-in Rust language-server spec (rust-analyzer)
+  services/godot.rs   built-in Godot GDScript language-server spec (TCP)
+  model/recovery.rs   crash snapshots (txt + metadata)
+  model/replace.rs    replace-in-files planning/apply (conflict + open skip)
+  model/fs_tree.rs    lazy sidebar tree (dirs first, hidden entries skipped)
+  model/markdown.rs   Markdown event stream -> flat block model
+  model/session.rs    key=value session file (atomic write, escaping, v10)
+  model/workspace.rs  tabs + file IO (open/save/move/close folder)
+  model/wrap.rs       soft-wrap display rows + visual row/column mapping
+  dialogs.rs          `Dialogs` trait + scripted test double
+  drop.rs             shared file-drop target (winit observer -> update)
+  native.rs           Finder/Dock/quit request queue (main-thread)
+  macos/              Apple Event open, Dock menu, recent + quit guard
+  services/           native service registry + built-in plugin descriptors
+  ui/git.rs           GIT sidebar tab + diff overlay + commit prompt
+  ui/lsp.rs           hover card + completion list overlays
+  ui/problems.rs      severity-colored PROBLEMS popup and diagnostic hover
+  ui/docs_view.rs     dedicated read-only docs tab view (wrap + link hit-test)
+  ui/outline.rs       right document-symbol outline
+  ui/tree.rs          shared Explorer/outline tree row renderer
+  ui/tree_menu.rs     file-tree context menu
+  ui/settings.rs      settings + Keymap row
+  ui/terminal.rs      vt100 cell renderer + terminal key encoding
+  input.rs            keyboard dispatch: modal -> find -> shortcuts -> tree
+  state/mod.rs        AppState value, constructors, menus and hit rects
+  state/actions.rs    command dispatch (menus, shortcuts, keymap actions)
+  state/{tabs,files,find,modal,workspace}.rs  document lifecycle and dialogs
+  state/{terminal,git,lsp,search}.rs  native services and workers
+  state/{settings,view,reliability,services,new_file,quick_open}.rs
+                      settings, layout, autosave/recovery and prompt state
+  theme.rs            geek palette + compact metrics
+  kit.rs              control-node construction and text/line helpers
+  ui/menu.rs          menu bar + app-level drop-down overlay
+  ui/sidebar.rs       file tree
+  ui/tabs.rs          tab strip (drag reorder, close targets)
+  ui/tab_menu.rs      right-click tab menu (close variants / path / reveal)
+  ui/editor.rs        gutter, text, selection, caret, scrollbars, IME preedit
+  ui/find_bar.rs      find / replace strip
+  ui/quick_open.rs    Quick Open palette
+  ui/new_file.rs      quick-create-file prompt
+  ui/project_search.rs  project search panel
+  ui/split.rs         draggable editor/preview divider
+  ui/recovery.rs      startup recovery prompt
+  ui/drop.rs          drop overlay
+  ui/preview.rs       rendered Markdown pane (cached primitive layout)
+  ui/modal.rs         close-dirty / close-many / external / replace modals
+  ui/status.rs        file / position / facts / messages
+  app.rs              shell construction, input routing, igui_app glue
+  host.rs             winit + wgpu plugins, native dialogs, CJK-capable face
+  selfcheck.rs        --selfcheck
+  bench.rs            benchmark entry points (`--features bench`)
+benches/
+  markdown.rs         Markdown parse/layout/paint/typing benchmark
+docs/                 progressive-disclosure documentation (see docs/README.md)
+AGENTS.md             agent rules, file routing, mandatory checks
+packaging/
+  icon.png            1254×1254 app-icon source
+  build-icon.sh       sips/iconutil -> AppIcon.icns
+  package-macos.sh    release build + .app bundle + ad-hoc signature
+  Info.plist.in       bundle metadata template
+```
