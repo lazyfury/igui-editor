@@ -1,0 +1,44 @@
+[package]
+name = "igui-editor"
+version = "0.1.0"
+edition = "2021"
+# Hosts `igui_winit` / `igui_backend_wgpu`, whose dependency graph needs 1.85.
+rust-version = "1.85"
+publish = false
+description = "A compact, square-cornered text/Markdown editor built on igui"
+
+[[bin]]
+name = "igui-editor"
+path = "src/main.rs"
+
+[dependencies]
+# The UI is built on the workspace's backend-neutral layers (path deps: this
+# app lives outside the igui checkout and never modifies it).
+igui_core = { path = "../igui/crates/core/igui_core" }
+igui_render = { path = "../igui/crates/core/igui_render" }
+igui_scene = { path = "../igui/crates/core/igui_scene" }
+igui_ui = { path = "../igui/crates/core/igui_ui" }
+igui_font = { path = "../igui/crates/assets/igui_font" }
+# Application runtime + native platform plugins.
+igui_app = { path = "../igui/crates/app/igui_app" }
+igui_winit = { path = "../igui/crates/window/igui_winit" }
+igui_backend_wgpu = { path = "../igui/crates/platform/wgpu/igui_backend_wgpu" }
+# Markdown -> block model for the preview pane (M2).
+pulldown-cmark = { version = "0.13", default-features = false }
+# Native file dialogs (M2). `rfd` keeps its platform backend behind cfg:
+# Linux needs the XDG portal backend, macOS/Windows use their system APIs.
+[target.'cfg(target_os = "linux")'.dependencies]
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "async-std"] }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+rfd = { version = "0.15", default-features = false }
+winit = "0.30"
+
+# Headless pipeline: `--selfcheck` records the DrawList and asserts on it.
+igui_headless = { path = "../igui/crates/app/igui_headless" }
+igui_backend_recording = { path = "../igui/crates/platform/recording/igui_backend_recording" }
+igui_profile = { path = "../igui/crates/debug/igui_profile" }
+
+# Independent app: not a member of the igui workspace, so the engine's gate
+# stays untouched. It only consumes the crates above through path deps.
+[workspace]

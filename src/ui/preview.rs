@@ -1,0 +1,927 @@
+//! Markdown preview pane: a read-only, scrollable rendering of the active
+//! document.
+//!
+//! The layout is a flat list of draw primitives computed from the block model
+//! (`model::markdown`) at a given width. The cache is keyed by
+//! `(document id, revision, width, theme mode)`, so typing only relayouts when
+//! the document actually changed and a resize/theme switch invalidates it too.
+//!
+//! The pane is display-only in M2: links are styled but do not navigate, images
+//! render as `▢ alt`, tables are not rendered yet (M3).
+
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use igui_core::{Color, FontWeight, NodeId, Rect, Size, Vec2};
+use igui_render::TextAlign;
+use igui_scene::SceneTree;
+use igui_ui::{Container, PaintEnv, PointerPhase, TextMeasurer};
+
+use crate::kit::{self, RectExt};
+use crate::model::markdown::{self, Align, Block, BlockKind, Run, Style, Table};
+use crate::state::{AppState, ViewMode};
+use crate::theme::{Mode, Theme};
+
+const PAD: f32 = 18.0;
+const BODY: f32 = 13.0;
+const BODY_LINE: f32 = 20.0;
+const SCROLLBAR: f32 = 8.0;
+
+/// One backend-neutral preview drawing primitive (content-space coordinates).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Prim {
+    Text {
+        x: f32,
+        baseline: f32,
+        text: String,
+        size: f32,
+        weight: FontWeight,
+        color: Color,
+        /// Inline-code background.
+        bg: Option<Rect>,
+        underline: bool,
+        strike: bool,
+    },
+    Fill {
+        rect: Rect,
+        color: Color,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CacheKey {
+    doc: u64,
+    rev: u64,
+    width: u32,
+    mode: Mode,
+}
+
+#[derive(Clone, Debug)]
+struct Cache {
+    key: CacheKey,
+    prims: Vec<Prim>,
+    height: f32,
+}
+
+/// Preview scroll + cached layout, stored on the app state.
+#[derive(Default)]
+pub struct PreviewUi {
+    pub scroll: f32,
+    pub total_h: f32,
+    ///  The visible pane (for wheel/scrollbar hit tests).
+    pub rect: Rect,
+    pub vbar: Rect,
+    pub vthumb: Rect,
+    /// Grab offset while the scrollbar thumb is dragged.
+    pub drag_grab: Option<f32>,
+    cache: Option<Cache>,
+    /// Parsed blocks and the `(document id, revision)` they came from.
+    blocks: Vec<Block>,
+    parsed_key: Option<(u64, u64)>,
+}
+
+impl std::fmt::Debug for PreviewUi {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreviewUi")
+            .field("scroll", &self.scroll)
+            .field("total_h", &self.total_h)
+            .field("rect", &self.rect)
+            .finish()
+    }
+}
+
+pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>) -> NodeId {
+    let id = kit::node(tree, parent, "preview");
+    kit::set_container(tree, id, Container::Leaf);
+    kit::clip(tree, id, true);
+    kit::draw(tree, id, {
+        let state = state.clone();
+        move |env, rect, _| {
+            let mut state = state.borrow_mut();
+            paint(&mut state, env, rect);
+        }
+    });
+    kit::on_scroll(tree, id, {
+        let state = state.clone();
+        move |tree, _id, delta| {
+            let mut state = state.borrow_mut();
+            state.preview.scroll += delta.y;
+            state.dirty = true;
+            igui_ui::request_paint(tree);
+        }
+    });
+    kit::on_pointer(tree, id, {
+        let state = state.clone();
+        move |tree, _id, phase, _rect, pos| {
+            let mut state = state.borrow_mut();
+            match phase {
+                PointerPhase::Down => {
+                    // Clicking the rendered pane returns typing to the document
+                    // (split view) or leaves nothing to type into (preview only).
+                    state.focus = crate::state::Focus::Editor;
+                    if state.preview.vbar.contains(pos) && state.preview.vthumb.width() > 0.0 {
+                        state.preview.drag_grab = Some(pos.y - state.preview.vthumb.top());
+                        scroll_to(&mut state, pos.y);
+                    }
+                }
+                PointerPhase::Move => {
+                    if state.preview.drag_grab.is_some() {
+                        scroll_to(&mut state, pos.y);
+                    }
+                }
+                PointerPhase::Up => state.preview.drag_grab = None,
+                PointerPhase::DoubleClick => {}
+            }
+            state.dirty = true;
+            igui_ui::request_paint(tree);
+        }
+    });
+    id
+}
+
+fn scroll_to(state: &mut AppState, y: f32) {
+    let Some(grab) = state.preview.drag_grab else {
+        return;
+    };
+    let bar = state.preview.vbar;
+    let thumb_h = state.preview.vthumb.height();
+    let travel = (bar.height() - thumb_h).max(1.0);
+    let top = (y - grab).clamp(bar.top(), bar.bottom() - thumb_h);
+    let ratio = (top - bar.top()) / travel;
+    let max = (state.preview.total_h - bar.height()).max(0.0);
+    state.preview.scroll = ratio * max;
+}
+
+fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
+    let theme = state.theme;
+    let p = theme.p;
+    let measurer = env.measurer;
+
+    kit::fill(env.ctx, rect, p.bg);
+    if state.view_of_active() == ViewMode::Split {
+        kit::vline(env.ctx, rect.left(), rect.top(), rect.bottom(), p.border);
+    }
+
+    let view = Rect::from_min_size(
+        Vec2::new(rect.left() + 1.0, rect.top()),
+        Size::new(
+            (rect.width() - SCROLLBAR - 1.0).max(16.0),
+            rect.height().max(16.0),
+        ),
+    );
+    state.preview.rect = rect;
+
+    let Some(doc) = state.ws.active_doc() else {
+        return;
+    };
+    let doc_id = doc.id();
+    let rev = doc.rev();
+    let key = (doc_id, rev);
+    if state.preview.parsed_key != Some(key) {
+        let text = doc.text().to_string();
+        state.preview.blocks = markdown::parse(&text);
+        state.preview.parsed_key = Some(key);
+    }
+    let key = CacheKey {
+        doc: doc_id,
+        rev,
+        width: view.width().round() as u32,
+        mode: theme.mode,
+    };
+    if state
+        .preview
+        .cache
+        .as_ref()
+        .is_none_or(|cache| cache.key != key)
+    {
+        let (prims, height) = layout(&state.preview.blocks, measurer, view.width(), &theme);
+        state.preview.cache = Some(Cache { key, prims, height });
+    }
+    let Some(cache) = &state.preview.cache else {
+        return;
+    };
+    state.preview.total_h = cache.height;
+    let max_scroll = (cache.height - view.height()).max(0.0);
+    state.preview.scroll = state.preview.scroll.clamp(0.0, max_scroll);
+
+    env.ctx.save();
+    env.ctx.clip_rect(view);
+    let offset = Vec2::new(view.left(), view.top() - state.preview.scroll);
+    for prim in &cache.prims {
+        match prim {
+            Prim::Fill { rect, color } => {
+                env.ctx.fill_rect(rect.translate(offset), *color);
+            }
+            Prim::Text {
+                x,
+                baseline,
+                text,
+                size,
+                weight,
+                color,
+                bg,
+                underline,
+                strike,
+            } => {
+                if let Some(bg) = bg {
+                    env.ctx.fill_rect(bg.translate(offset), p.raised);
+                }
+                let baseline = *baseline + offset.y;
+                env.ctx.draw_text_weighted(
+                    text.as_str(),
+                    Vec2::new(*x + offset.x, baseline),
+                    *size,
+                    *weight,
+                    igui_render::TextAlign::Left,
+                    *color,
+                );
+                if *underline {
+                    env.ctx.fill_rect(
+                        Rect::from_min_size(
+                            Vec2::new(*x + offset.x, baseline + 2.0),
+                            Size::new(kit::width(measurer, text, *size), 1.0),
+                        ),
+                        *color,
+                    );
+                }
+                if *strike {
+                    env.ctx.fill_rect(
+                        Rect::from_min_size(
+                            Vec2::new(*x + offset.x, baseline - size * 0.28),
+                            Size::new(kit::width(measurer, text, *size), 1.0),
+                        ),
+                        p.faint,
+                    );
+                }
+            }
+        }
+    }
+    env.ctx.restore();
+
+    // Scrollbar (only when the content overflows).
+    let vbar = Rect::from_min_size(
+        Vec2::new(rect.right() - SCROLLBAR, rect.top()),
+        Size::new(SCROLLBAR, rect.height()),
+    );
+    let mut vthumb = Rect::ZERO;
+    if max_scroll > 0.0 {
+        let thumb_h = (view.height() * view.height() / cache.height)
+            .min(view.height())
+            .max(1.0);
+        let travel = (view.height() - thumb_h).max(0.0);
+        let y = vbar.top() + (state.preview.scroll / max_scroll) * travel;
+        vthumb = Rect::from_min_size(
+            Vec2::new(vbar.left() + 2.0, y),
+            Size::new(SCROLLBAR - 4.0, thumb_h),
+        );
+        env.ctx.fill_rect(vthumb, p.border);
+    }
+    state.preview.vbar = vbar;
+    state.preview.vthumb = vthumb;
+}
+
+// -- layout ------------------------------------------------------------------
+
+fn layout(
+    blocks: &[Block],
+    measurer: &dyn TextMeasurer,
+    width: f32,
+    theme: &Theme,
+) -> (Vec<Prim>, f32) {
+    let p = theme.p;
+    let content_w = (width - PAD * 2.0).max(40.0);
+    let mut prims = Vec::new();
+    let mut y = PAD;
+
+    for block in blocks {
+        let quote_x = block.quote as f32 * 12.0;
+        let indent_x = block.indent as f32 * 18.0;
+        let x = PAD + quote_x + indent_x;
+        let max_w = (content_w - quote_x - indent_x).max(30.0);
+        let base_color = if block.quote > 0 { p.dim } else { p.text };
+        let start_y = y;
+
+        match &block.kind {
+            BlockKind::Heading { level, runs } => {
+                let (size, weight): (f32, FontWeight) = match level {
+                    1 => (21.0, FontWeight::BOLD),
+                    2 => (18.0, FontWeight::BOLD),
+                    3 => (16.0, FontWeight::SEMI_BOLD),
+                    4 => (14.0, FontWeight::SEMI_BOLD),
+                    _ => (13.0, FontWeight::MEDIUM),
+                };
+                let line_h = (size * 1.4).round();
+                y = place_runs(
+                    &mut prims,
+                    measurer,
+                    runs,
+                    x,
+                    max_w,
+                    y,
+                    size,
+                    line_h,
+                    weight,
+                    p.text,
+                    theme,
+                    TextAlign::Left,
+                );
+                y += if *level <= 2 { 12.0 } else { 8.0 };
+            }
+            BlockKind::Paragraph(runs) => {
+                y = place_runs(
+                    &mut prims,
+                    measurer,
+                    runs,
+                    x,
+                    max_w,
+                    y,
+                    BODY,
+                    BODY_LINE,
+                    FontWeight::NORMAL,
+                    base_color,
+                    theme,
+                    TextAlign::Left,
+                );
+                y += 8.0;
+            }
+            BlockKind::Item {
+                ordered,
+                number,
+                runs,
+            } => {
+                let marker = if *ordered {
+                    format!("{number}.")
+                } else {
+                    "•".to_string()
+                };
+                let marker_w = kit::width(measurer, &marker, BODY) + 8.0;
+                prims.push(Prim::Text {
+                    x,
+                    baseline: baseline(y, BODY_LINE, BODY, measurer),
+                    text: marker,
+                    size: BODY,
+                    weight: FontWeight::NORMAL,
+                    color: p.faint,
+                    bg: None,
+                    underline: false,
+                    strike: false,
+                });
+                y = place_runs(
+                    &mut prims,
+                    measurer,
+                    runs,
+                    x + marker_w,
+                    (max_w - marker_w).max(20.0),
+                    y,
+                    BODY,
+                    BODY_LINE,
+                    FontWeight::NORMAL,
+                    base_color,
+                    theme,
+                    TextAlign::Left,
+                );
+                y += 2.0;
+            }
+            BlockKind::Code { lang, lines } => {
+                let line_h = 18.0;
+                let height = lines.len().max(1) as f32 * line_h + 16.0;
+                prims.push(Prim::Fill {
+                    rect: Rect::from_min_size(Vec2::new(PAD, y), Size::new(content_w, height)),
+                    color: p.raised,
+                });
+                if !lang.is_empty() {
+                    let label = lang.to_uppercase();
+                    prims.push(Prim::Text {
+                        x: PAD + content_w - kit::width(measurer, &label, 10.0) - 8.0,
+                        baseline: y + 12.0,
+                        text: label,
+                        size: 10.0,
+                        weight: FontWeight::NORMAL,
+                        color: p.faint,
+                        bg: None,
+                        underline: false,
+                        strike: false,
+                    });
+                }
+                for (index, line) in lines.iter().enumerate() {
+                    if line.is_empty() {
+                        continue;
+                    }
+                    prims.push(Prim::Text {
+                        x: PAD + 10.0,
+                        baseline: y + 8.0 + index as f32 * line_h + 13.0,
+                        text: line.clone(),
+                        size: 12.0,
+                        weight: FontWeight::NORMAL,
+                        color: p.text,
+                        bg: None,
+                        underline: false,
+                        strike: false,
+                    });
+                }
+                y += height + 10.0;
+            }
+            BlockKind::Rule => {
+                prims.push(Prim::Fill {
+                    rect: Rect::from_min_size(Vec2::new(PAD, y + 4.0), Size::new(content_w, 1.0)),
+                    color: p.border,
+                });
+                y += 16.0;
+            }
+            BlockKind::Image { alt } => {
+                prims.push(Prim::Text {
+                    x,
+                    baseline: baseline(y, BODY_LINE, BODY, measurer),
+                    text: format!("▢ {alt}"),
+                    size: BODY,
+                    weight: FontWeight::NORMAL,
+                    color: p.faint,
+                    bg: None,
+                    underline: false,
+                    strike: false,
+                });
+                y += BODY_LINE + 4.0;
+            }
+            BlockKind::Table(table) => {
+                y = layout_table(&mut prims, measurer, table, x, max_w, y, theme);
+                y += 12.0;
+            }
+        }
+
+        if block.quote > 0 {
+            for level in 0..block.quote {
+                let lx = PAD + level as f32 * 12.0 - 6.0;
+                prims.push(Prim::Fill {
+                    rect: Rect::from_min_size(
+                        Vec2::new(lx, start_y),
+                        Size::new(2.0, (y - start_y).max(4.0)),
+                    ),
+                    color: p.accent,
+                });
+            }
+        }
+    }
+
+    (prims, y + PAD)
+}
+
+fn baseline(top: f32, line_h: f32, size: f32, measurer: &dyn TextMeasurer) -> f32 {
+    top + (line_h - size) * 0.5 + measurer.ascent(size)
+}
+
+#[derive(Debug)]
+struct Token {
+    segments: Vec<(String, Style)>,
+    /// Advance width at the block's base weight (bold runs measured bold).
+    width: f32,
+    space_before: bool,
+    hard_break: bool,
+}
+
+fn tokenize(
+    runs: &[Run],
+    measurer: &dyn TextMeasurer,
+    size: f32,
+    weight: FontWeight,
+) -> Vec<Token> {
+    let mut tokens: Vec<Token> = Vec::new();
+    let mut segments: Vec<(String, Style)> = Vec::new();
+    let mut pending_space = false;
+    let mut space_before = false;
+
+    let measure = |segments: &[(String, Style)]| -> f32 {
+        segments
+            .iter()
+            .map(|(text, style)| {
+                kit::width_weighted(measurer, text, size, style_weight(*style, weight))
+            })
+            .sum()
+    };
+    let flush =
+        |tokens: &mut Vec<Token>, segments: &mut Vec<(String, Style)>, space_before: bool| {
+            if segments.is_empty() {
+                return;
+            }
+            let width = measure(segments);
+            tokens.push(Token {
+                segments: std::mem::take(segments),
+                width,
+                space_before,
+                hard_break: false,
+            });
+        };
+
+    for run in runs {
+        for ch in run.text.chars() {
+            if ch == '\n' {
+                flush(&mut tokens, &mut segments, space_before);
+                space_before = false;
+                pending_space = false;
+                tokens.push(Token {
+                    segments: Vec::new(),
+                    width: 0.0,
+                    space_before: false,
+                    hard_break: true,
+                });
+            } else if ch.is_whitespace() {
+                flush(&mut tokens, &mut segments, space_before);
+                space_before = false;
+                pending_space = true;
+            } else {
+                if segments.is_empty() {
+                    space_before = pending_space && !tokens.is_empty();
+                    pending_space = false;
+                }
+                if let Some((text, style)) = segments.last_mut() {
+                    if *style == run.style {
+                        text.push(ch);
+                        continue;
+                    }
+                }
+                segments.push((ch.to_string(), run.style));
+            }
+        }
+    }
+    flush(&mut tokens, &mut segments, space_before);
+    tokens
+}
+
+/// Splits a token wider than the line into character chunks, so long words and
+/// CJK paragraphs wrap instead of overflowing.
+fn split_long_tokens(
+    tokens: Vec<Token>,
+    measurer: &dyn TextMeasurer,
+    size: f32,
+    weight: FontWeight,
+    max_w: f32,
+) -> Vec<Token> {
+    let mut out = Vec::new();
+    for token in tokens {
+        if token.hard_break || token.width <= max_w || token.segments.is_empty() {
+            out.push(token);
+            continue;
+        }
+        let mut segments: Vec<(String, Style)> = Vec::new();
+        let mut width = 0.0;
+        let mut space_before = token.space_before;
+        for (text, style) in &token.segments {
+            for ch in text.chars() {
+                let advance = kit::width_weighted(
+                    measurer,
+                    &ch.to_string(),
+                    size,
+                    style_weight(*style, weight),
+                );
+                if width + advance > max_w && !segments.is_empty() {
+                    out.push(Token {
+                        segments: std::mem::take(&mut segments),
+                        width,
+                        space_before,
+                        hard_break: false,
+                    });
+                    width = 0.0;
+                    space_before = false;
+                }
+                if let Some((last, last_style)) = segments.last_mut() {
+                    if last_style == style {
+                        last.push(ch);
+                        width += advance;
+                        continue;
+                    }
+                }
+                segments.push((ch.to_string(), *style));
+                width += advance;
+            }
+        }
+        if !segments.is_empty() {
+            out.push(Token {
+                segments,
+                width,
+                space_before,
+                hard_break: false,
+            });
+        }
+    }
+    out
+}
+
+fn wrap_tokens(tokens: Vec<Token>, max_w: f32, space_w: f32) -> Vec<Vec<Token>> {
+    let mut lines: Vec<Vec<Token>> = Vec::new();
+    let mut line: Vec<Token> = Vec::new();
+    let mut used = 0.0;
+    for token in tokens {
+        if token.hard_break {
+            lines.push(std::mem::take(&mut line));
+            used = 0.0;
+            continue;
+        }
+        let separator = if !line.is_empty() && token.space_before {
+            space_w
+        } else {
+            0.0
+        };
+        if !line.is_empty() && used + separator + token.width > max_w {
+            lines.push(std::mem::take(&mut line));
+            used = 0.0;
+        }
+        let separator = if !line.is_empty() && token.space_before {
+            space_w
+        } else {
+            0.0
+        };
+        used += separator + token.width;
+        line.push(token);
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
+
+#[allow(clippy::too_many_arguments)]
+fn place_runs(
+    prims: &mut Vec<Prim>,
+    measurer: &dyn TextMeasurer,
+    runs: &[Run],
+    x0: f32,
+    max_w: f32,
+    y_start: f32,
+    size: f32,
+    line_h: f32,
+    weight: FontWeight,
+    color: Color,
+    theme: &Theme,
+    align: TextAlign,
+) -> f32 {
+    let p = theme.p;
+    let max_w = max_w.max(8.0);
+    let space_w = measurer.advance(' ', size);
+    let tokens = tokenize(runs, measurer, size, weight);
+    let tokens = split_long_tokens(tokens, measurer, size, weight, max_w);
+    let lines = wrap_tokens(tokens, max_w, space_w);
+    let ascent = measurer.ascent(size);
+
+    let mut y = y_start;
+    for line in &lines {
+        let total: f32 = line
+            .iter()
+            .enumerate()
+            .map(|(index, token)| {
+                token.width
+                    + if index > 0 && token.space_before {
+                        space_w
+                    } else {
+                        0.0
+                    }
+            })
+            .sum();
+        let offset = match align {
+            TextAlign::Left => 0.0,
+            TextAlign::Center => ((max_w - total) * 0.5).max(0.0),
+            TextAlign::Right => (max_w - total).max(0.0),
+        };
+        let baseline = y + (line_h - size) * 0.5 + ascent;
+        let mut x = x0 + offset;
+        for (index, token) in line.iter().enumerate() {
+            if index > 0 && token.space_before {
+                x += space_w;
+            }
+            for (text, style) in &token.segments {
+                let run_weight = style_weight(*style, weight);
+                let advance = kit::width_weighted(measurer, text, size, run_weight);
+                emit(
+                    prims,
+                    measurer,
+                    text,
+                    x,
+                    baseline,
+                    size,
+                    run_weight,
+                    run_color(*style, color, p),
+                    *style,
+                );
+                x += advance;
+            }
+        }
+        y += line_h;
+    }
+    y
+}
+
+/// Natural (unwrapped) width of a cell's runs.
+fn runs_width(measurer: &dyn TextMeasurer, runs: &[Run], size: f32, weight: FontWeight) -> f32 {
+    let mut width = 0.0;
+    let mut pending_space = false;
+    for run in runs {
+        for ch in run.text.chars() {
+            if ch.is_whitespace() {
+                pending_space = true;
+                continue;
+            }
+            if pending_space && width > 0.0 {
+                width += measurer.advance(' ', size);
+            }
+            pending_space = false;
+            width += kit::width_weighted(
+                measurer,
+                &ch.to_string(),
+                size,
+                style_weight(run.style, weight),
+            );
+        }
+    }
+    width
+}
+
+const TABLE_PAD_X: f32 = 8.0;
+const TABLE_PAD_Y: f32 = 6.0;
+const TABLE_MIN_COL: f32 = 56.0;
+const TABLE_MAX_COL: f32 = 320.0;
+
+/// Lays out one table: natural column widths (shrunk to fit), header row with a
+/// raised background, one rule per row and square outer borders.
+fn layout_table(
+    prims: &mut Vec<Prim>,
+    measurer: &dyn TextMeasurer,
+    table: &Table,
+    x: f32,
+    max_w: f32,
+    y: f32,
+    theme: &Theme,
+) -> f32 {
+    let p = theme.p;
+    let columns = table.columns();
+    let mut widths = vec![TABLE_MIN_COL; columns];
+    for (column, width) in widths.iter_mut().enumerate() {
+        let mut widest: f32 = 0.0;
+        if let Some(cell) = table.header.get(column) {
+            widest = widest.max(runs_width(measurer, cell, BODY, FontWeight::BOLD));
+        }
+        for row in &table.rows {
+            if let Some(cell) = row.get(column) {
+                widest = widest.max(runs_width(measurer, cell, BODY, FontWeight::NORMAL));
+            }
+        }
+        *width = (widest + TABLE_PAD_X * 2.0).clamp(TABLE_MIN_COL, TABLE_MAX_COL);
+    }
+    let natural: f32 = widths.iter().sum();
+    if natural > max_w {
+        let scale = max_w / natural;
+        for width in &mut widths {
+            *width = (*width * scale).max(TABLE_MIN_COL);
+        }
+    }
+    let total: f32 = widths.iter().sum();
+
+    let mut row_y = y;
+    let header_start = prims.len();
+    let header_h = layout_table_row(
+        prims,
+        measurer,
+        &table.header,
+        &widths,
+        table,
+        x,
+        row_y,
+        theme,
+        true,
+    );
+    prims.insert(
+        header_start,
+        Prim::Fill {
+            rect: Rect::from_min_size(Vec2::new(x, row_y), Size::new(total, header_h)),
+            color: p.raised,
+        },
+    );
+    prims.push(Prim::Fill {
+        rect: Rect::from_min_size(Vec2::new(x, row_y + header_h - 1.0), Size::new(total, 1.0)),
+        color: p.border,
+    });
+    row_y += header_h;
+
+    for row in &table.rows {
+        let height = layout_table_row(prims, measurer, row, &widths, table, x, row_y, theme, false);
+        prims.push(Prim::Fill {
+            rect: Rect::from_min_size(Vec2::new(x, row_y + height - 1.0), Size::new(total, 1.0)),
+            color: p.border,
+        });
+        row_y += height;
+    }
+
+    // Square outer border.
+    prims.push(Prim::Fill {
+        rect: Rect::from_min_size(Vec2::new(x, y), Size::new(total, 1.0)),
+        color: p.border,
+    });
+    prims.push(Prim::Fill {
+        rect: Rect::from_min_size(Vec2::new(x, row_y - 1.0), Size::new(total, 1.0)),
+        color: p.border,
+    });
+    prims.push(Prim::Fill {
+        rect: Rect::from_min_size(Vec2::new(x, y), Size::new(1.0, row_y - y)),
+        color: p.border,
+    });
+    prims.push(Prim::Fill {
+        rect: Rect::from_min_size(Vec2::new(x + total - 1.0, y), Size::new(1.0, row_y - y)),
+        color: p.border,
+    });
+    row_y
+}
+
+#[allow(clippy::too_many_arguments)]
+fn layout_table_row(
+    prims: &mut Vec<Prim>,
+    measurer: &dyn TextMeasurer,
+    cells: &[Vec<Run>],
+    widths: &[f32],
+    table: &Table,
+    x: f32,
+    y: f32,
+    theme: &Theme,
+    header: bool,
+) -> f32 {
+    let p = theme.p;
+    let weight = if header {
+        FontWeight::BOLD
+    } else {
+        FontWeight::NORMAL
+    };
+    let mut bottom = y + BODY_LINE;
+    let mut cell_x = x;
+    for (column, width) in widths.iter().enumerate() {
+        let runs = cells.get(column).map(Vec::as_slice).unwrap_or(&[]);
+        let align = match table.align(column) {
+            Align::Left => TextAlign::Left,
+            Align::Center => TextAlign::Center,
+            Align::Right => TextAlign::Right,
+        };
+        bottom = bottom.max(place_runs(
+            prims,
+            measurer,
+            runs,
+            cell_x + TABLE_PAD_X,
+            (width - TABLE_PAD_X * 2.0).max(8.0),
+            y + TABLE_PAD_Y,
+            BODY,
+            BODY_LINE,
+            weight,
+            p.text,
+            theme,
+            align,
+        ));
+        cell_x += width;
+    }
+    (bottom - y) + TABLE_PAD_Y
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit(
+    prims: &mut Vec<Prim>,
+    measurer: &dyn TextMeasurer,
+    text: &str,
+    x: f32,
+    baseline: f32,
+    size: f32,
+    weight: FontWeight,
+    color: Color,
+    style: Style,
+) {
+    if text.is_empty() {
+        return;
+    }
+    let bg = if style == Style::Code {
+        Some(Rect::from_min_size(
+            Vec2::new(x - 2.0, baseline - size - 1.0),
+            Size::new(kit::width(measurer, text, size) + 4.0, size + 3.0),
+        ))
+    } else {
+        None
+    };
+    prims.push(Prim::Text {
+        x,
+        baseline,
+        text: text.to_string(),
+        size,
+        weight,
+        color,
+        bg,
+        underline: style == Style::Link,
+        strike: style == Style::Strikethrough,
+    });
+}
+
+fn style_weight(style: Style, base: FontWeight) -> FontWeight {
+    match style {
+        Style::Strong => FontWeight::BOLD.max(base),
+        Style::Emphasis if base == FontWeight::NORMAL => FontWeight::MEDIUM,
+        _ => base,
+    }
+}
+
+fn run_color(style: Style, base: Color, p: crate::theme::Palette) -> Color {
+    match style {
+        Style::Code | Style::Link => p.accent,
+        Style::Strikethrough => p.dim,
+        _ => base,
+    }
+}
