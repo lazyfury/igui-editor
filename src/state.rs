@@ -709,8 +709,17 @@ pub struct TerminalState {
     pub session: Option<PtySession>,
     pub parser: Option<vt100::Parser>,
     pub rect: Rect,
+    /// Last grid handed to the parser/PTY; also the spawn size for the next
+    /// session. Never treated as the source of truth (the parser's screen is).
     pub rows: u16,
     pub cols: u16,
+    /// Fixed-pitch family resolved from [`crate::fonts::MONO_FAMILIES`].
+    pub font: Option<String>,
+    /// One column's advance in pixels, as last painted.
+    pub cell_w: f32,
+    /// Whether [`TerminalState::font`] has been probed (needs the backend
+    /// measurer, which is only available during painting).
+    pub font_checked: bool,
     pub cwd: PathBuf,
     pub caret_rect: Rect,
     pub height: f32,
@@ -729,6 +738,9 @@ impl Default for TerminalState {
             rect: Rect::ZERO,
             rows: 24,
             cols: 80,
+            font: None,
+            font_checked: false,
+            cell_w: 0.0,
             cwd: PathBuf::from("."),
             caret_rect: Rect::ZERO,
             height: 220.0,
@@ -1340,6 +1352,13 @@ impl AppState {
             .map(|(text, error, _)| (text.as_str(), *error))
     }
 
+    /// Grid to spawn the next PTY/parser with. The previous session's grid is
+    /// a good first guess (the panel usually reopens at the same size); the
+    /// painter corrects it against the parser as soon as it knows the body.
+    fn terminal_grid(&self) -> (u16, u16) {
+        (self.terminal.rows.max(2), self.terminal.cols.max(8))
+    }
+
     pub fn toggle_terminal(&mut self) {
         if self.terminal.open {
             self.terminal.open = false;
@@ -1362,10 +1381,11 @@ impl AppState {
             .or_else(|| self.git_cwd())
             .or_else(|| self.ws.folder().map(Path::to_path_buf))
             .unwrap_or_else(|| PathBuf::from("."));
-        match PtySession::spawn(&cwd, 24, 80) {
+        let (spawn_rows, spawn_cols) = self.terminal_grid();
+        match PtySession::spawn(&cwd, spawn_rows, spawn_cols) {
             Ok(session) => {
-                let rows = std::num::NonZeroU16::new(24).unwrap();
-                let cols = std::num::NonZeroU16::new(80).unwrap();
+                let rows = std::num::NonZeroU16::new(spawn_rows).unwrap();
+                let cols = std::num::NonZeroU16::new(spawn_cols).unwrap();
                 self.terminal.parser = Some(vt100::Parser::new(rows, cols, 4000));
                 self.terminal.session = Some(session);
                 self.terminal.cwd = cwd;
@@ -1392,10 +1412,11 @@ impl AppState {
                 .or_else(|| self.git_cwd())
                 .or_else(|| self.ws.folder().map(Path::to_path_buf))
                 .unwrap_or_else(|| PathBuf::from("."));
-            if let Ok(session) = PtySession::spawn(&cwd, 24, 80) {
+            let (spawn_rows, spawn_cols) = self.terminal_grid();
+            if let Ok(session) = PtySession::spawn(&cwd, spawn_rows, spawn_cols) {
                 self.terminal.parser = Some(vt100::Parser::new(
-                    std::num::NonZeroU16::new(24).unwrap(),
-                    std::num::NonZeroU16::new(80).unwrap(),
+                    std::num::NonZeroU16::new(spawn_rows).unwrap(),
+                    std::num::NonZeroU16::new(spawn_cols).unwrap(),
                     4000,
                 ));
                 self.terminal.session = Some(session);

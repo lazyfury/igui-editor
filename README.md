@@ -224,7 +224,19 @@ double-click resets). It starts
 `$SHELL`, supports ANSI/256-color cells, cursor, resize, plain text, arrows,
 Ctrl letters, Alt prefixes, application cursor mode (vim/less) and IME candidate
 placement at the terminal cursor. The terminal requests frames while a PTY is
-alive, so full-screen programs repaint without extra input. `Ctrl+\`` closes it
+alive, so full-screen programs repaint without extra input.
+
+`src/fonts.rs` is the project's font policy: the UI/editor keeps the UI family
+(PingFang SC on macOS, the system default elsewhere) while the terminal picks a
+**fixed-pitch** family at runtime (`SF Mono` / `Menlo` / `JetBrains Mono` /
+… — each candidate is accepted only if its glyph advances agree). Every cell is
+painted on `body.left + col * cell_w`, and wide (CJK) glyphs own two columns, so
+`ls -l` columns, colored prompt blocks and the caret stay aligned. This relies
+on the engine's per-draw font family (`DrawCommand::DrawText::family`,
+`PaintContext::draw_text_in`, `TextMeasurer::advance_in`): the terminal is the
+part of the UI that names a family, everything else uses `None`. The grid size
+is always reconciled against the parser's screen, so closing and reopening the
+panel re-sizes the PTY instead of drawing a stale 80×24 screen. `Ctrl+\`` closes it
 and kills the child. Focus is visible through the caret: the active editor caret is accent and
 2 px, the inactive caret dims, and the terminal header text/cursor accent only
 while it owns keyboard focus. Editor and terminal tops have no accent rule.

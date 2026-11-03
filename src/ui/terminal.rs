@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use igui_core::{Color, Key, Modifiers, NodeId, Rect, Size, Vec2};
 use igui_scene::SceneTree;
-use igui_ui::{Container, PaintEnv, PointerPhase};
+use igui_ui::{Container, PaintEnv, PointerPhase, TextMeasurer};
 
 use crate::kit::{self, RectExt};
 use crate::state::{AppState, Focus};
@@ -129,6 +129,66 @@ fn ansi_color(color: vt100::Color, default: Color) -> Color {
     }
 }
 
+/// One column's advance: the widest thing a single cell can paint.
+///
+/// With a fixed-pitch family this is the family's advance. The CJK/emoji
+/// fallback may be wider, so it must fit in two columns or it would overlap
+/// the next cell.
+fn cell_width(measurer: &dyn TextMeasurer, font: f32, family: Option<&str>) -> f32 {
+    measurer
+        .advance_in('M', font, family)
+        .max(measurer.advance_in('中', font, family) / 2.0)
+        .max(1.0)
+}
+
+/// Draw size for a wide (two-column) cell.
+///
+/// The terminal's primary face is fixed-pitch, but CJK/emoji glyphs come from a
+/// fallback face whose `font_size` maps to a different em. Drawing them at the
+/// Latin size makes their advance narrower than the two cells they own, which
+/// leaves a gap after every wide glyph (the prompt read like `新 建 游 戏`).
+/// Scaling the draw size makes the advance exactly `2 * cell_w`: the glyph
+/// fills its cells, columns stay aligned, and nothing is stretched (uniform
+/// scale).
+fn wide_glyph_size(
+    measurer: &dyn TextMeasurer,
+    text: &str,
+    font: f32,
+    family: Option<&str>,
+    cell_w: f32,
+) -> f32 {
+    if text.is_empty() {
+        return font;
+    }
+    let advance = measurer.measure_run_in(text, font, family);
+    if advance <= 0.01 {
+        return font;
+    }
+    (font * (cell_w * 2.0) / advance).clamp(font * 0.5, font * 3.0)
+}
+
+/// Rect of cell `(row, col)` in `body`. `wide` cells span two columns.
+fn cell_rect(body: Rect, cell_w: f32, line_h: f32, row: u16, col: u16, wide: bool) -> Rect {
+    Rect::from_min_size(
+        Vec2::new(
+            body.left() + col as f32 * cell_w,
+            body.top() + row as f32 * line_h,
+        ),
+        Size::new(if wide { cell_w * 2.0 } else { cell_w }, line_h),
+    )
+}
+
+/// Caret rect for a screen cursor position, on the same grid as [`cell_rect`].
+fn caret_rect(body: Rect, cell_w: f32, line_h: f32, row: u16, col: u16) -> Rect {
+    Rect::from_min_size(
+        Vec2::new(
+            body.left() + col as f32 * cell_w,
+            body.top() + row as f32 * line_h,
+        ),
+        Size::new(cell_w.max(2.0), line_h),
+    )
+}
+
 fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     let theme = state.theme;
     let m = theme.m;
@@ -161,91 +221,109 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         ),
     );
     state.terminal.rect = body;
-    // Use the editor's typography and measure each glyph for its display
-    // advance. A proportional fallback such as PingFang has no single
-    // monospace cell width: using the space advance overlaps glyphs, while
-    // using the widest glyph leaves a visible gap after every narrow letter.
-    // The terminal still uses a nominal column width for PTY sizing, but the
-    // painter advances by the actual glyph width within each row.
+
     let editor = state.editor_metrics();
     let font = editor.font;
-    let cell_w = env.measurer.advance('M', font).max(1.0);
     let line_h = editor.line_h.max(font + 4.0);
-    let cell_advance = |text: &str| {
-        if text.is_empty() {
-            cell_w
-        } else {
-            env.measurer
-                .measure_run_weighted(text, font, igui_core::FontWeight::NORMAL)
-                .max(1.0)
-        }
-    };
+    // The terminal is the one part of the UI that paints a cell grid, so it
+    // asks for a fixed-pitch family (see `crate::fonts`) instead of the
+    // editor's UI face. Probing needs the backend measurer, which only exists
+    // while painting, hence the lazy + cached resolution.
+    if !state.terminal.font_checked {
+        state.terminal.font = crate::fonts::mono_family(env.measurer, font);
+        // A failed probe is retried next frame: the first paint may run with
+        // the approximate measurer before the host installs the real one.
+        state.terminal.font_checked = state.terminal.font.is_some();
+    }
+    let family = state.terminal.font.clone();
+    let family = family.as_deref();
+    let cell_w = cell_width(env.measurer, font, family);
     let cols = (body.width() / cell_w).floor().max(8.0) as u16;
     let rows = (body.height() / line_h).floor().max(2.0) as u16;
-    if cols != state.terminal.cols || rows != state.terminal.rows {
-        state.terminal.cols = cols;
-        state.terminal.rows = rows;
-        if let Some(parser) = state.terminal.parser.as_mut() {
-            parser.set_size(
-                std::num::NonZeroU16::new(rows).unwrap(),
-                std::num::NonZeroU16::new(cols).unwrap(),
-            );
-        }
+
+    // The parser's screen is the source of truth for the grid: a freshly
+    // spawned session starts at the *previous* session's size, which may not
+    // match the current panel (reopening after a resize). Comparing against
+    // the cached `rows/cols` instead skips this resize and leaves the shell
+    // painting into a clipped screen.
+    let mut resized = false;
+    let Some(parser) = state.terminal.parser.as_mut() else {
+        return;
+    };
+    let (screen_rows, screen_cols) = parser.screen().size();
+    if rows != screen_rows.get() || cols != screen_cols.get() {
+        parser.set_size(
+            std::num::NonZeroU16::new(rows).unwrap(),
+            std::num::NonZeroU16::new(cols).unwrap(),
+        );
+        resized = true;
+    }
+    if resized {
         if let Some(session) = state.terminal.session.as_mut() {
             session.resize(rows, cols);
         }
     }
+    state.terminal.rows = rows;
+    state.terminal.cols = cols;
+    state.terminal.cell_w = cell_w;
+
     let Some(parser) = state.terminal.parser.as_ref() else {
         return;
     };
     let screen = parser.screen();
+    let rows = rows.min(screen.size().0.get());
+    let cols = cols.min(screen.size().1.get());
     env.ctx.save();
     env.ctx.clip_rect(body);
     for row in 0..rows {
-        let mut x = body.left();
+        let y = body.top() + row as f32 * line_h;
         for col in 0..cols {
             let Some(cell) = screen.cell(row, col) else {
                 continue;
             };
-            let text = cell.contents();
-            let advance = cell_advance(text);
+            // A wide glyph owns both cells; the continuation cell is painted
+            // as part of the lead cell so backgrounds tile exactly.
+            if cell.is_wide_continuation() {
+                continue;
+            }
+            let rect = cell_rect(body, cell_w, line_h, row, col, cell.is_wide());
             let fg = ansi_color(cell.fgcolor(), p.text);
             let bg = ansi_color(cell.bgcolor(), p.bg);
             if bg != p.bg {
-                env.ctx.fill_rect(
-                    Rect::from_min_size(
-                        Vec2::new(x, body.top() + row as f32 * line_h),
-                        Size::new(advance, line_h),
-                    ),
-                    bg,
-                );
+                env.ctx.fill_rect(rect, bg);
             }
+            let text = cell.contents();
             if !text.is_empty() && text != " " {
-                env.ctx.draw_text_weighted(
+                // Wide glyphs (CJK, full-width punctuation) come from the UI
+                // family: the fixed-pitch terminal face has no CJK coverage,
+                // and the generic first-covering fallback is often a
+                // Korean/Japanese face with the wrong regional glyph shapes.
+                // Scaled to two columns so it fills its cells.
+                let (draw_family, draw_font) = if cell.is_wide() {
+                    let wide_family = None;
+                    (
+                        wide_family,
+                        wide_glyph_size(env.measurer, text, font, wide_family, cell_w),
+                    )
+                } else {
+                    (family, font)
+                };
+                env.ctx.draw_text_in(
                     text,
-                    Vec2::new(x, body.top() + row as f32 * line_h + line_h - 4.0),
-                    font,
+                    Vec2::new(rect.left(), y + line_h - 4.0),
+                    draw_font,
                     igui_core::FontWeight::NORMAL,
                     igui_render::TextAlign::Left,
+                    draw_family,
                     fg,
                 );
             }
-            x += advance;
         }
     }
     let (crow, ccol) = screen.cursor_position();
     let crow = crow.min(rows.saturating_sub(1));
     let ccol = ccol.min(cols.saturating_sub(1));
-    let mut cursor_x = body.left();
-    for col in 0..ccol {
-        if let Some(cell) = screen.cell(crow, col) {
-            cursor_x += cell_advance(cell.contents());
-        }
-    }
-    let caret = Rect::from_min_size(
-        Vec2::new(cursor_x, body.top() + crow as f32 * line_h),
-        Size::new(cell_w.max(2.0), line_h),
-    );
+    let caret = caret_rect(body, cell_w, line_h, crow, ccol);
     state.terminal.caret_rect = caret;
     env.ctx.fill_rect(
         Rect::from_min_size(caret.origin, Size::new(2.0, line_h)),
@@ -309,6 +387,100 @@ pub fn encode_key(key: Key, modifiers: Modifiers, application_cursor: bool) -> O
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A measurer with one fixed-pitch family and a proportional default.
+    struct Probe;
+
+    impl TextMeasurer for Probe {
+        fn advance(&self, ch: char, font_size: f32) -> f32 {
+            if ch == '中' {
+                font_size
+            } else {
+                font_size * 0.55
+            }
+        }
+
+        fn line_height(&self, font_size: f32) -> f32 {
+            font_size * 1.4
+        }
+
+        fn advance_in(&self, ch: char, font_size: f32, family: Option<&str>) -> f32 {
+            match (family, ch) {
+                (Some("Mono"), '中') => font_size,
+                (Some("Mono"), _) => font_size * 0.6,
+                _ => self.advance(ch, font_size),
+            }
+        }
+    }
+
+    #[test]
+    fn a_fixed_pitch_family_sets_the_column_advance() {
+        let cell_w = cell_width(&Probe, 14.0, Some("Mono"));
+        assert!((cell_w - 8.4).abs() < 1e-4, "cell_w={cell_w}");
+        // Without the family the default metrics still produce a usable grid.
+        assert!(cell_width(&Probe, 14.0, None) > 1.0);
+    }
+
+    #[test]
+    fn cells_tile_without_overlap_and_wide_cells_span_two_columns() {
+        let body = Rect::from_min_size(Vec2::new(10.0, 20.0), Size::new(400.0, 200.0));
+        let (cell_w, line_h) = (8.0, 20.0);
+        let (first, second) = (
+            cell_rect(body, cell_w, line_h, 2, 3, false),
+            cell_rect(body, cell_w, line_h, 2, 4, false),
+        );
+        assert_eq!(first.left(), body.left() + 3.0 * cell_w);
+        assert_eq!(first.top(), body.top() + 2.0 * line_h);
+        assert_eq!(first.right(), second.left(), "cells must tile exactly");
+        let wide = cell_rect(body, cell_w, line_h, 2, 3, true);
+        assert_eq!(wide.width(), cell_w * 2.0);
+        assert_eq!(
+            wide.right(),
+            cell_rect(body, cell_w, line_h, 2, 5, false).left()
+        );
+    }
+
+    #[test]
+    fn wide_glyphs_are_scaled_to_fill_two_columns() {
+        // 12px advance in a 7.5px column: the wide glyph must grow so its
+        // advance becomes 15px (two columns), not stay 12px with a 3px gap.
+        struct Wide;
+        impl TextMeasurer for Wide {
+            fn advance(&self, _ch: char, font_size: f32) -> f32 {
+                font_size * 0.6
+            }
+            fn line_height(&self, font_size: f32) -> f32 {
+                font_size * 1.4
+            }
+            fn measure_run_in(&self, text: &str, font_size: f32, _family: Option<&str>) -> f32 {
+                // 12px at font_size 14, linear in font_size.
+                font_size
+                    * if text.chars().count() == 1 {
+                        0.857
+                    } else {
+                        0.6
+                    }
+            }
+        }
+        let size = wide_glyph_size(&Wide, "中", 14.0, Some("Menlo"), 7.5);
+        let advance = Wide.measure_run_in("中", size, Some("Menlo"));
+        assert!(
+            (advance - 15.0).abs() < 0.01,
+            "advance={advance} size={size}"
+        );
+        // Degenerate advances keep the Latin size instead of dividing by ~0.
+        assert_eq!(wide_glyph_size(&Wide, "", 14.0, None, 7.5), 14.0);
+    }
+
+    #[test]
+    fn the_caret_sits_on_the_same_grid_as_its_cell() {
+        let body = Rect::from_min_size(Vec2::new(10.0, 20.0), Size::new(400.0, 200.0));
+        let caret = caret_rect(body, 8.0, 20.0, 4, 7);
+        let cell = cell_rect(body, 8.0, 20.0, 4, 7, false);
+        assert_eq!(caret.origin, cell.origin);
+        assert_eq!(caret.size.height, cell.size.height);
+        assert!(caret.size.width >= 2.0);
+    }
 
     #[test]
     fn application_cursor_sequences_follow_vim_mode() {

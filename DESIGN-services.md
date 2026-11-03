@@ -71,6 +71,13 @@ Not exposed: arbitrary git command strings, network/auth UI, libgit2.
 ## Terminal service (first slice implemented)
 
 - `portable-pty` + `vt100`; native cell-grid renderer, no WebView/JS.
+- Font: the panel names a fixed-pitch family per text draw
+  (`src/fonts.rs`: `SF Mono` / `Menlo` / `JetBrains Mono` / …), probed against
+  the backend measurer and cached in `TerminalState`. The editor keeps the UI
+  family. The engine supports this with `DrawCommand::DrawText::family`,
+  `PaintContext::draw_text_in` and `TextMeasurer::advance_in`.
+- Cells are placed at `col * cell_w`; wide glyphs span two columns, and the
+  parser screen (not the cached grid) decides when to resize the parser/PTY.
 - One PTY worker per session; reader thread + writer; resize updates PTY and
   parser; drop kills the child. The first UI has one session and a draggable
   panel whose open/height state persists; multiple sessions are next.

@@ -20,20 +20,14 @@ use crate::drop::{self, SharedDropTarget};
 use crate::model::session::{self, Session};
 use crate::theme::{Mode, Theme};
 
-/// Candidate monospace faces for non-macOS hosts, first hit wins.
-#[cfg(not(target_os = "macos"))]
-const MONO_FACES: &[&str] = &[
-    "/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-Regular.ttf",
-    "/usr/share/fonts/truetype/firacode/FiraCode-Regular.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-];
-
 /// Font configuration.
 ///
-/// macOS uses PingFang SC as the primary face. Seeding SF Mono here is not
-/// enough for Chinese: the engine's first covering fallback on this platform is
-/// a symbol fallback with box glyphs, so CJK needs a real CJK primary family.
-/// Other hosts keep the monospace preference.
+/// The families themselves live in [`crate::fonts`]: the UI/editor keeps the
+/// project's UI family (PingFang SC on macOS, the system default elsewhere) and
+/// the terminal asks for a fixed-pitch family per draw. Seeding a monospace
+/// face as the *UI* default on macOS is not enough for Chinese: the engine's
+/// first covering fallback on this platform is a symbol fallback with box
+/// glyphs, so CJK needs a real CJK primary family.
 pub fn font_config() -> FontConfig {
     let mut config = FontConfig {
         device_pixel_rasterization: true,
@@ -41,11 +35,11 @@ pub fn font_config() -> FontConfig {
     };
     #[cfg(target_os = "macos")]
     {
-        config.default_family = Some("PingFang SC".into());
+        config.default_family = crate::fonts::UI_FAMILY.map(str::to_string);
     }
     #[cfg(not(target_os = "macos"))]
     {
-        for path in MONO_FACES {
+        for path in crate::fonts::FALLBACK_FACE_FILES {
             if std::path::Path::new(path).is_file() {
                 config.default_face = Some(FaceRef::new(*path, 0));
                 break;

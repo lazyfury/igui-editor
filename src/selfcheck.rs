@@ -3259,19 +3259,19 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
     harness
         .app
         .state_mut()
-        .terminal_write(b"printf terminal-selfcheck\n");
+        .terminal_write(b"printf 'terminal-selfcheck \xe4\xb8\xad\xe6\x96\x87\n'");
     let mut seen = String::new();
     for _ in 0..100 {
         harness.frame()?;
         if let Some(parser) = harness.app.state().terminal.parser.as_ref() {
             seen = parser.screen().contents();
         }
-        if seen.contains("terminal-selfcheck") {
+        if seen.contains("terminal-selfcheck") && seen.contains("中文") {
             break;
         }
         std::thread::sleep(Duration::from_millis(20));
     }
-    if !seen.contains("terminal-selfcheck") {
+    if !seen.contains("terminal-selfcheck") || !seen.contains("中文") {
         return Err(format!("terminal output was not parsed: {seen:?}"));
     }
     let frame = harness.frame()?;
@@ -3279,6 +3279,132 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
     let faint = crate::theme::Theme::new(Mode::Dark).p.faint.to_rgba8();
     if !draw_text_has_color(&frame, "TERMINAL", accent) {
         return Err("focused terminal header was not accented".into());
+    }
+    // The parser grid is the source of truth, and every cell is painted on a
+    // fixed column grid (mixing per-glyph advances with the vt100 columns was
+    // the visible terminal misalignment).
+    {
+        let state = harness.app.state();
+        let parser_size = state.terminal.parser.as_ref().map(|p| p.screen().size());
+        if parser_size.map(|(rows, cols)| (rows.get(), cols.get()))
+            != Some((state.terminal.rows, state.terminal.cols))
+        {
+            return Err(format!(
+                "terminal grid mismatch after open: parser={parser_size:?} cached=({}, {})",
+                state.terminal.rows, state.terminal.cols
+            ));
+        }
+        let cell_w = state.terminal.cell_w;
+        if cell_w < 1.0 {
+            return Err("terminal cell width was not recorded".into());
+        }
+        let body = state.terminal.rect;
+        let terminal_font = state.editor_metrics().font;
+        let mut cells = 0;
+        let mut wide = 0;
+        for command in frame.commands() {
+            let DrawCommand::DrawText {
+                text,
+                position,
+                family,
+                font_size,
+                ..
+            } = command
+            else {
+                continue;
+            };
+            if !body.contains(*position) {
+                continue;
+            }
+            cells += 1;
+            let columns = (position.x - body.left()) / cell_w;
+            if (columns - columns.round()).abs() > 0.01 {
+                return Err(format!(
+                    "terminal text is off the cell grid: x={} cell_w={cell_w} left={}",
+                    position.x,
+                    body.left()
+                ));
+            }
+            // Narrow cells use the resolved fixed-pitch family; wide cells
+            // name the UI family (`None`) so CJK comes from the right script,
+            // and are scaled so their advance fills two columns. Without a
+            // resolved fixed-pitch family (headless measurer) every cell is
+            // `None`, so only the family check is meaningful here.
+            if let Some(mono) = state.terminal.font.as_deref() {
+                if family.is_none() {
+                    wide += 1;
+                    if *font_size <= terminal_font + 0.1 {
+                        return Err(format!(
+                            "wide terminal glyph {text:?} was not scaled to two columns: {font_size} (base {terminal_font})"
+                        ));
+                    }
+                } else if family.as_deref() != Some(mono) {
+                    return Err(format!(
+                        "terminal text family {family:?} is neither {mono:?} nor the UI family"
+                    ));
+                }
+            }
+        }
+        if cells == 0 {
+            return Err("terminal output produced no text cells".into());
+        }
+        if state.terminal.font.is_some() && wide == 0 {
+            return Err("terminal output produced no wide cells".into());
+        }
+    }
+    // Force a fixed-pitch family: the headless measurer is approximate (its
+    // space advance differs), so it cannot resolve one on its own. This proves
+    // the resolved family reaches every terminal draw.
+    {
+        let mut state = harness.app.state_mut();
+        state.terminal.font = Some("Menlo".into());
+        state.terminal.font_checked = true;
+    }
+    let forced = harness.frame()?;
+    {
+        let state = harness.app.state();
+        let body = state.terminal.rect;
+        let terminal_font = state.editor_metrics().font;
+        let mut cells = 0;
+        let mut mono = 0;
+        let mut wide = 0;
+        for command in forced.commands() {
+            let DrawCommand::DrawText {
+                text,
+                position,
+                family,
+                font_size,
+                ..
+            } = command
+            else {
+                continue;
+            };
+            if !body.contains(*position) {
+                continue;
+            }
+            cells += 1;
+            match family.as_deref() {
+                Some("Menlo") => mono += 1,
+                // Wide cells deliberately use the UI family (`None`) and are
+                // scaled up so their advance fills two columns.
+                None => {
+                    if *font_size <= terminal_font + 0.1 {
+                        return Err(format!(
+                            "wide terminal glyph {text:?} was not scaled: {font_size} (base {terminal_font})"
+                        ));
+                    }
+                    wide += 1;
+                }
+                other => {
+                    return Err(format!("terminal draw lost its family: {other:?}"));
+                }
+            }
+        }
+        if cells == 0 || mono == 0 || wide == 0 {
+            return Err(format!(
+                "terminal output produced no monospace/wide cells: cells={cells} mono={mono} wide={wide}"
+            ));
+        }
     }
     let handle = harness.app.state().terminal.handle_rect.center();
     let height_before = harness.app.state().terminal.height;
@@ -3322,6 +3448,33 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
     harness.frame()?;
     if harness.app.state().terminal.open {
         return Err("Ctrl+` did not close the terminal".into());
+    }
+    // A reopened session spawns a new parser at the previous grid; the first
+    // paint must re-sync the parser/PTY with the current panel instead of
+    // trusting the cached rows/cols (that left the prompt outside the drawn
+    // area).
+    harness.shortcut(
+        Key::Character('`'),
+        Modifiers {
+            ctrl: true,
+            ..Modifiers::NONE
+        },
+    );
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        if !state.terminal.open || state.terminal.session.is_none() {
+            return Err("reopening the terminal did not spawn a session".into());
+        }
+        let parser_size = state.terminal.parser.as_ref().map(|p| p.screen().size());
+        if parser_size.map(|(rows, cols)| (rows.get(), cols.get()))
+            != Some((state.terminal.rows, state.terminal.cols))
+        {
+            return Err(format!(
+                "terminal grid mismatch after reopen: parser={parser_size:?} cached=({}, {})",
+                state.terminal.rows, state.terminal.cols
+            ));
+        }
     }
     Ok(())
 }

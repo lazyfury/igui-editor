@@ -44,6 +44,7 @@ pub mod syntax;
 pub mod theme;
 
 pub mod drop;
+pub mod fonts;
 pub mod host;
 pub mod selfcheck;
 
