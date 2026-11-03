@@ -8,6 +8,7 @@ pub mod doc;
 pub mod find;
 pub mod fs_tree;
 pub mod fuzzy;
+pub mod git;
 pub mod highlight;
 pub mod markdown;
 pub mod recovery;

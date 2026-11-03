@@ -1,6 +1,6 @@
 # igui-editor — design
 
-Agreed direction (M1–M7 implemented). This document records the decisions so
+Agreed direction (M1–M8 partially implemented). This document records the decisions so
 future work does not re-litigate them.
 
 ## Product
@@ -169,7 +169,7 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    2 s idle; every dirty buffer (including untitled) gets a raw `.txt` +
    metadata snapshot under `<config>/recovery/`, and a startup prompt offers
    Restore All / Discard All. Window size/position persist in the session
-   (restored unless maximized). Session format is version 4.
+   (restored unless maximized). Session format is version 5 (`sidebar_tab`).
 24. **Language packs are data, not code.** `<config>/languages/*.json` packs are
    validated, capped and registered into `SyntaxRegistry` after the built-ins
    (the registry keeps the first registration, so a pack can never shadow a
@@ -232,6 +232,18 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    `replyToApplicationShouldTerminate:` (`Discard & Quit` / `Cancel`).
    Closing the window still follows winit's event-loop exit path; a close guard
    and Dock reopen are follow-ups (they need a host/engine change).
+
+34. **Git and Terminal are native services behind built-in plugins.** A
+   compile-time `BuiltinPlugin` registers a `ServiceManifest` (capabilities,
+   commands, sidebar contributions); Git is the first built-in plugin and the
+   model for a future external extension host. Built-in UI calls the native
+   service directly; DTOs stay serializable so extension transports can mirror
+   the same surface later. Dynamic Rust dylibs are not supported.
+35. **Git read-only uses porcelain, not a shell.** `model::git::GitWorker`
+   serializes `git status --porcelain=v2 -z --branch` and diff requests on a
+   worker thread; the UI reads immutable `RepoStatus`/`GitDiff` snapshots. The
+   GIT sidebar tab is a plugin contribution, and the diff is an app overlay.
+   Stage/unstage/commit are the next slice; network/auth stays in the terminal.
 
 ## Theme spec (geek / compact / no corners)
 
@@ -333,10 +345,14 @@ queue, Dock Recent / New File / Clear, quick file creation (`⇧⌘N`), system
 recent items, dirty quit confirmation. Native macOS top menu / close-guard /
 Dock reopen remain follow-ups.
 
-Next candidates: native macOS top menu (Window/Services/Help) and close guard,
-code-plugin loading (dylib/wasm), per-hit replace and cross-file undo,
-incremental preview layout for very large documents, word-boundary wrapping,
-filesystem watcher for sidebar/search freshness.
+**M8 (in progress)** — native service/built-in plugin registry (Git first),
+Git read-only status panel and diff overlay. Next: Git stage/unstage/commit,
+then the native PTY terminal. Extension host remains deferred.
+
+Next candidates: terminal (PTY + vt100 + shared horizontal handle), Git write
+operations, native macOS top menu/close guard, per-hit replace and cross-file
+undo, incremental preview layout for very large documents, word-boundary
+wrapping.
 
 ## Non-goals for the editor core
 

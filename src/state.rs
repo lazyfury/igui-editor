@@ -18,6 +18,7 @@ use igui_ui::{Clipboard, TextEdit};
 use crate::model::brackets::match_bracket;
 use crate::model::doc::Document;
 use crate::model::find::{find_all, Matcher};
+use crate::model::git::{GitDiff, GitEvent, GitRequest, GitWorker, RepoStatus};
 use crate::model::highlight::HighlightCache;
 use crate::model::recovery::{RecoveryEntry, RecoveryStore};
 use crate::model::replace::{self, PlannedFile};
@@ -25,6 +26,7 @@ use crate::model::search::{SearchHit, SearchMessage, SearchWorker};
 use crate::model::session::{Session, WindowGeometry};
 use crate::model::workspace_index::{display_path, FileIndex};
 use crate::model::Workspace;
+use crate::services::{ServiceRegistry, SidebarContribution};
 use crate::settings::{EditorMetrics, Row, Settings};
 use crate::syntax::{SyntaxProvider, SyntaxRegistry, TokenKind};
 use crate::theme::{Mode, Theme};
@@ -548,6 +550,52 @@ pub struct SidebarUi {
     pub selected: Option<PathBuf>,
     /// Empty-state actions (no folder open).
     pub actions: Vec<(Action, Rect)>,
+    /// Sidebar tab hit rectangles (tab id, rect).
+    pub tabs: Vec<(&'static str, Rect)>,
+}
+
+/// Git panel / diff state. The worker owns the child process; the UI owns only
+/// immutable snapshots.
+pub struct GitState {
+    pub worker: Option<GitWorker>,
+    pub status: RepoStatus,
+    pub loading: bool,
+    pub generation: u64,
+    pub diff_generation: u64,
+    pub cwd: Option<PathBuf>,
+    pub pending: bool,
+    pub selected: Option<PathBuf>,
+    pub diff: Option<GitDiff>,
+    pub diff_loading: bool,
+    pub diff_visible: bool,
+    pub diff_scroll: f32,
+    pub rows: Vec<(PathBuf, bool, Rect)>,
+    pub refresh_rect: Rect,
+    pub scroll: f32,
+    pub error: Option<String>,
+}
+
+impl Default for GitState {
+    fn default() -> Self {
+        Self {
+            worker: None,
+            status: RepoStatus::default(),
+            loading: false,
+            generation: 0,
+            diff_generation: 0,
+            cwd: None,
+            pending: false,
+            selected: None,
+            diff: None,
+            diff_loading: false,
+            diff_visible: false,
+            diff_scroll: 0.0,
+            rows: Vec::new(),
+            refresh_rect: Rect::ZERO,
+            scroll: 0.0,
+            error: None,
+        }
+    }
 }
 
 /// Tab strip hit rectangles captured by the last paint.
@@ -780,6 +828,9 @@ pub struct AppState {
     pub title: String,
     // -- M3 --------------------------------------------------------------
     pub settings: Settings,
+    pub services: ServiceRegistry,
+    pub sidebar_tab: String,
+    pub git: GitState,
     pub syntax: SyntaxRegistry,
     pub highlight: HighlightCache,
     /// Matched bracket byte positions for the caret (`open`, `close`).
@@ -839,6 +890,12 @@ impl AppState {
             .join("recovery");
         let languages: HashMap<PathBuf, String> = session.languages.iter().cloned().collect();
         let sync_scroll = session.sync_scroll;
+        let sidebar_tab = if session.sidebar_tab.is_empty() {
+            "explorer".into()
+        } else {
+            session.sidebar_tab.clone()
+        };
+        let services = crate::services::install_builtins();
         let external = ws
             .tabs
             .iter()
@@ -847,7 +904,7 @@ impl AppState {
                     .map(|path| (path.to_path_buf(), disk_stamp(path)))
             })
             .collect();
-        Self {
+        let mut state = Self {
             theme,
             ws,
             show_sidebar: session.sidebar,
@@ -889,6 +946,9 @@ impl AppState {
             preview: PreviewUi::default(),
             title,
             settings,
+            services,
+            sidebar_tab,
+            git: GitState::default(),
             syntax: SyntaxRegistry::with_builtins(),
             highlight: HighlightCache::new(),
             bracket: None,
@@ -923,7 +983,28 @@ impl AppState {
             sync_rev: u64::MAX,
             last_activity: Instant::now(),
             doc_revs: HashMap::new(),
+        };
+        if !state
+            .services
+            .sidebar_tabs
+            .iter()
+            .any(|tab| tab.id == state.sidebar_tab)
+        {
+            state.sidebar_tab = "explorer".into();
         }
+        state.git.cwd = state.git_cwd_for_tab();
+        state.git.pending = true;
+        state
+    }
+
+    fn git_cwd_for_tab(&self) -> Option<PathBuf> {
+        self.ws
+            .active_doc()
+            .and_then(|doc| {
+                doc.path()
+                    .and_then(|path| path.parent().map(Path::to_path_buf))
+            })
+            .or_else(|| self.ws.folder().map(Path::to_path_buf))
     }
 
     pub fn status(&mut self, message: impl Into<String>) {
@@ -939,6 +1020,131 @@ impl AppState {
         self.message
             .as_ref()
             .map(|(text, error, _)| (text.as_str(), *error))
+    }
+
+    pub fn sidebar_tabs(&self) -> &[SidebarContribution] {
+        &self.services.sidebar_tabs
+    }
+
+    pub fn set_sidebar_tab(&mut self, id: &'static str) {
+        if !self.services.sidebar_tabs.iter().any(|tab| tab.id == id) {
+            return;
+        }
+        if self.sidebar_tab != id {
+            self.sidebar_tab = id.into();
+            self.session.sidebar_tab = id.into();
+            self.config_dirty = true;
+            if id == "git" {
+                self.request_git_refresh();
+            }
+            self.dirty = true;
+        }
+    }
+
+    fn git_cwd(&self) -> Option<PathBuf> {
+        self.ws
+            .active_doc()
+            .and_then(|doc| {
+                doc.path()
+                    .and_then(|path| path.parent().map(Path::to_path_buf))
+            })
+            .or_else(|| self.ws.folder().map(Path::to_path_buf))
+    }
+
+    pub fn request_git_refresh(&mut self) {
+        self.git.pending = true;
+        self.git.cwd = self.git_cwd();
+        self.dirty = true;
+    }
+
+    fn ensure_git_worker(&mut self) {
+        if self.git.worker.is_none() {
+            self.git.worker = Some(GitWorker::spawn());
+        }
+    }
+
+    pub fn open_git_diff(&mut self, path: PathBuf, staged: bool) {
+        self.ensure_git_worker();
+        self.git.selected = Some(path.clone());
+        self.git.diff = None;
+        self.git.diff_loading = true;
+        self.git.diff_visible = true;
+        self.git.diff_scroll = 0.0;
+        self.git.diff_generation += 1;
+        let generation = self.git.diff_generation;
+        let cwd = self
+            .git
+            .cwd
+            .clone()
+            .or_else(|| self.git_cwd())
+            .unwrap_or_else(|| PathBuf::from("."));
+        if let Some(worker) = &self.git.worker {
+            worker.send(GitRequest::Diff {
+                generation,
+                cwd,
+                path,
+                staged,
+            });
+        }
+        self.dirty = true;
+    }
+
+    pub fn close_git_diff(&mut self) {
+        self.git.diff_visible = false;
+        self.git.diff_loading = false;
+        self.git.diff = None;
+        self.git.diff_scroll = 0.0;
+        self.dirty = true;
+    }
+
+    /// Drains Git worker events and issues a pending status request.
+    pub fn tick_git(&mut self) {
+        if let Some(worker) = &self.git.worker {
+            while let Some(event) = worker.try_recv() {
+                match event {
+                    GitEvent::Status { generation, status }
+                        if generation == self.git.generation =>
+                    {
+                        self.git.status = status;
+                        self.git.loading = false;
+                        self.git.error = None;
+                        self.dirty = true;
+                    }
+                    GitEvent::Diff { generation, diff }
+                        if generation == self.git.diff_generation =>
+                    {
+                        self.git.diff = Some(diff);
+                        self.git.diff_loading = false;
+                        self.dirty = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if self.git.pending {
+            self.git.pending = false;
+            self.ensure_git_worker();
+            self.git.generation += 1;
+            let generation = self.git.generation;
+            self.git.loading = true;
+            self.git.error = None;
+            let cwd = self.git.cwd.clone().or_else(|| self.git_cwd());
+            if let Some(cwd) = cwd {
+                if let Some(worker) = &self.git.worker {
+                    worker.send(GitRequest::Status { generation, cwd });
+                }
+            } else {
+                self.git.loading = false;
+                self.git.status = RepoStatus::default();
+            }
+        }
+        // Drop stale worker errors so the panel does not keep a previous repo.
+        if let Some(status) = self.git.status.error.take() {
+            if !status.is_empty() {
+                self.git.error = Some(status);
+                self.dirty = true;
+            }
+        }
     }
 
     /// Opens the quick-create-file prompt.
@@ -2006,6 +2212,7 @@ impl AppState {
     pub fn after_tabs_changed(&mut self) {
         self.ws.validate_active();
         self.tabs.reveal_active = true;
+        self.request_git_refresh();
         self.sync_layout();
         self.sync_session_tabs();
         self.find.dirty = true;
@@ -2036,6 +2243,7 @@ impl AppState {
                     .unwrap_or_default();
                 self.sidebar.selected = Some(path.clone());
                 self.tabs.reveal_active = true;
+                self.request_git_refresh();
                 self.remember_disk(&path);
                 self.session.push_recent(&path);
                 crate::macos::note_recent(&path);
@@ -2100,6 +2308,7 @@ impl AppState {
             self.session.push_recent(&path);
             self.config_dirty = true;
             self.sidebar.selected = Some(path.clone());
+            self.request_git_refresh();
             self.remember_disk(&path);
             crate::macos::note_recent(&path);
         }
@@ -2411,6 +2620,7 @@ impl AppState {
         self.sidebar.selected = None;
         self.settings_open = false;
         self.session.folder = Some(self.ws.root.clone());
+        self.request_git_refresh();
         self.quick_open.index = None;
         if self.quick_open.open {
             self.close_quick_open();
@@ -2525,6 +2735,7 @@ impl AppState {
         self.sidebar.selected = None;
         self.sidebar.actions.clear();
         self.session.folder = None;
+        self.request_git_refresh();
         self.config_dirty = true;
         if self.quick_open.open {
             self.close_quick_open();

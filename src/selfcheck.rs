@@ -2790,6 +2790,117 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
     if !restored.state().session.soft_wrap {
         return Err("soft wrap was not restored from the session".into());
     }
+
+    // -- built-in Git plugin: status panel + read-only diff ----------------
+    let repo = dir.join("git-repo");
+    fs::create_dir_all(&repo).map_err(|error| format!("fixture: {error}"))?;
+    let git = |args: &[&str]| -> Result<(), String> {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(args)
+            .output()
+            .map_err(|error| format!("git fixture: {error}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "git fixture failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        Ok(())
+    };
+    git(&["init", "-q"])?;
+    git(&["config", "user.email", "selfcheck@example.com"])?;
+    git(&["config", "user.name", "selfcheck"])?;
+    let tracked = repo.join("tracked.txt");
+    fs::write(&tracked, "one\n").map_err(|error| format!("fixture: {error}"))?;
+    git(&["add", "tracked.txt"])?;
+    git(&["commit", "-qm", "initial"])?;
+    fs::write(&tracked, "two\n").map_err(|error| format!("fixture: {error}"))?;
+    fs::write(repo.join("new.txt"), "new\n").map_err(|error| format!("fixture: {error}"))?;
+    let mut harness = Harness::new(
+        Some(tracked.clone()),
+        repo.join("session.conf"),
+        ScriptedDialogs::new(vec![]),
+    );
+    for _ in 0..50 {
+        harness.frame()?;
+        if harness.app.state().git.status.is_repo() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    {
+        let state = harness.app.state();
+        if !state.git.status.is_repo() {
+            return Err(format!("Git status did not arrive: {:?}", state.git.error));
+        }
+        let git_tab = state
+            .sidebar
+            .tabs
+            .iter()
+            .find(|(id, _)| *id == "git")
+            .map(|(_, rect)| rect.center())
+            .ok_or("no GIT sidebar tab")?;
+        drop(state);
+        harness.click(git_tab);
+    }
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        if state.sidebar_tab != "git" {
+            return Err("clicking GIT did not switch the sidebar".into());
+        }
+        if !state
+            .git
+            .status
+            .changes
+            .iter()
+            .any(|entry| entry.path == Path::new("tracked.txt"))
+            || !state
+                .git
+                .status
+                .changes
+                .iter()
+                .any(|entry| entry.path == Path::new("new.txt"))
+        {
+            return Err(format!(
+                "Git panel status is missing files: {:?}",
+                state.git.status
+            ));
+        }
+    }
+    let row = harness
+        .app
+        .state()
+        .git
+        .rows
+        .iter()
+        .find(|(path, _, _)| path == Path::new("tracked.txt"))
+        .map(|(_, _, rect)| rect.center())
+        .ok_or("Git panel has no tracked.txt row")?;
+    harness.click(row);
+    for _ in 0..50 {
+        harness.frame()?;
+        if !harness.app.state().git.diff_loading {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    {
+        let state = harness.app.state();
+        if !state.git.diff_visible {
+            return Err("clicking a Git file did not open the diff".into());
+        }
+        let diff = state.git.diff.as_ref().ok_or("Git diff did not load")?;
+        if !diff.text.contains("+two") {
+            return Err(format!("Git diff is missing the change: {:?}", diff.text));
+        }
+    }
+    harness.key(Key::Escape);
+    if harness.app.state().git.diff_visible {
+        return Err("Esc did not close the Git diff".into());
+    }
     Ok(())
 }
 

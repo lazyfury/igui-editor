@@ -3,6 +3,7 @@
 pub mod drop;
 pub mod editor;
 pub mod find_bar;
+pub mod git;
 pub mod handle;
 pub mod menu;
 pub mod modal;

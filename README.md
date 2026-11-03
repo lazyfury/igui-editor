@@ -6,10 +6,11 @@ through `igui_ui` / `igui_render` only.
 
 Tabs · undo/redo · find & replace · syntax highlighting (JSON language packs) ·
 Markdown split preview (tables included) · Quick Open (`⌘P`) · project search +
-replace (`⇧⌘F`) · scroll sync · tab drag/context menu · soft wrap · external-change
-detection · Finder/Dock file opening · Dock Recent · quick file creation · drag &
-drop · settings panel · native file dialogs · recent files · session + window
-restore · autosave & crash recovery · large-file guards.
+replace (`⇧⌘F`) · local Git status/diff · scroll sync · tab drag/context menu ·
+soft wrap · external-change detection · Finder/Dock file opening · Dock Recent ·
+quick file creation · drag & drop · settings panel · native file dialogs ·
+recent files · session + window restore · autosave & crash recovery ·
+large-file guards.
 
 This checkout is **outside** the igui repository: it consumes the engine through
 path dependencies and never modifies it.
@@ -46,6 +47,18 @@ notes. `dist/` is git-ignored.
 `NSSavePanel` sheets, Linux XDG portal, Windows common dialogs). They are
 asynchronous: the sheet attaches to the window, the app keeps rendering, and the
 result is applied on the first frame after it closes.
+
+## Git panel (read-only)
+
+The sidebar has `EXPLORER / GIT` tabs. GIT shows the repository branch,
+ahead/behind, and staged/changes/conflicts sections from `git status
+--porcelain=v2 -z`. Click a file for a read-only unified diff overlay; `Esc` or
+the overlay ✕ closes it. A refresh button and open/save/tab/folder changes update
+the snapshot. Stage/unstage/commit are the next Git slice.
+
+Git is a **built-in plugin** (`services/git.rs`) over a native worker
+(`model/git.rs`), not a JS or dynamic-library extension. See
+[`DESIGN-services.md`](DESIGN-services.md).
 
 ## macOS integration
 
@@ -306,9 +319,9 @@ remembered per document and the last ratio is persisted.
   original name/path and are marked dirty so the first save writes them back.
 - **Window state**: size and position are persisted and restored (skipped while
   maximized/fullscreen).
-- Session format is version 4 (`soft_wrap` added on top of v3's
-  `languages`/`sync_scroll`); v1–v3 files still load (v1 infers the folder from
-  the first tab).
+- Session format is version 5 (`sidebar_tab` added; v4 added `soft_wrap` on top
+  of v3's `languages`/`sync_scroll`); older files still load (v1 infers the
+  folder from the first tab).
 
 ## Theme: "geek", compact, no corners
 
@@ -402,6 +415,7 @@ No OS capture of any kind is used.
 src/
   model/doc.rs        text buffer, caret/selection, movement, delta undo stack
   model/find.rs       plain-text matcher (case / whole-word)
+  model/git.rs        git status/diff worker + porcelain parser
   model/fuzzy.rs      Quick Open ranking
   model/workspace_index.rs  ignored-dir file index (Quick Open)
   model/search.rs     background project search (worker + caps)
@@ -410,13 +424,15 @@ src/
   model/replace.rs    replace-in-files planning/apply (conflict + open skip)
   model/fs_tree.rs    lazy sidebar tree (dirs first, hidden entries skipped)
   model/markdown.rs   Markdown event stream -> flat block model
-  model/session.rs    key=value session file (atomic write, escaping, v4)
+  model/session.rs    key=value session file (atomic write, escaping, v5)
   model/workspace.rs  tabs + file IO (open/save/move/close folder)
   model/wrap.rs       soft-wrap display rows + visual row/column mapping
   dialogs.rs          `Dialogs` trait + scripted test double
   drop.rs             shared file-drop target (winit observer -> update)
   native.rs           Finder/Dock/quit request queue (main-thread)
   macos/              Apple Event open, Dock menu, recent + quit guard
+  services/           native service registry + built-in plugin descriptors
+  ui/git.rs           GIT sidebar tab + read-only diff overlay
   input.rs            keyboard dispatch: modal -> find -> shortcuts -> tree
   state.rs            shared state, actions, hit rects recorded during paint
   theme.rs            geek palette + compact metrics

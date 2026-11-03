@@ -121,25 +121,48 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     // No right border here: the resize handle's single line is the separator.
     kit::fill(env.ctx, rect, p.panel);
 
-    // Header: "EXPLORER" + the root directory, dim.
+    // Header tabs contributed by built-in plugins (Explorer, Git, …).
     let header = Rect::from_min_size(rect.origin, Size::new(rect.width(), HEADER_H));
     let baseline = kit::baseline(measurer, header, m.font_small);
-    kit::text(
-        env.ctx,
-        "EXPLORER",
-        rect.left() + 12.0,
-        baseline,
-        m.font_small,
-        p.faint,
-    );
-    if state.ws.folder_open {
+    state.sidebar.tabs.clear();
+    let mut tab_x = rect.left() + 8.0;
+    let tabs = state.sidebar_tabs().to_vec();
+    for tab in tabs {
+        let width = kit::width(measurer, tab.label, m.font_small) + 16.0;
+        let hit = Rect::from_min_size(
+            Vec2::new(tab_x, header.top()),
+            Size::new(width, header.height()),
+        );
+        let active = state.sidebar_tab == tab.id;
+        if active {
+            kit::hline(
+                env.ctx,
+                hit.left() + 4.0,
+                hit.right() - 4.0,
+                hit.bottom() - 2.0,
+                p.accent,
+            );
+        }
+        kit::text(
+            env.ctx,
+            tab.label,
+            hit.left() + 8.0,
+            baseline,
+            m.font_small,
+            if active { p.text } else { p.faint },
+        );
+        state.sidebar.tabs.push((tab.id, hit));
+        tab_x += width;
+    }
+    if state.sidebar_tab == "explorer" && state.ws.folder_open {
         let root_name = state
             .ws
             .root
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| state.ws.root.display().to_string());
-        let root_name = kit::truncate_left(measurer, &root_name, m.font_small, rect.width() - 96.0);
+        let available = (rect.right() - 10.0 - tab_x).max(0.0);
+        let root_name = kit::truncate_left(measurer, &root_name, m.font_small, available);
         kit::text_right(
             env.ctx,
             measurer,
@@ -157,6 +180,11 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         header.bottom() - 1.0,
         p.border,
     );
+
+    if state.sidebar_tab == "git" {
+        crate::ui::git::paint_sidebar(state, env, rect);
+        return;
+    }
 
     // Empty state: no folder open yet (welcome screen in the editor).
     if !state.ws.folder_open {
@@ -342,6 +370,20 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
 }
 
 fn click(state: &mut AppState, pos: Vec2) {
+    let tab = state
+        .sidebar
+        .tabs
+        .iter()
+        .find(|(_, rect)| rect.contains(pos))
+        .map(|(id, _)| *id);
+    if let Some(id) = tab {
+        state.set_sidebar_tab(id);
+        return;
+    }
+    if state.sidebar_tab == "git" {
+        crate::ui::git::click(state, pos);
+        return;
+    }
     let view = state.sidebar.rect;
     if !view.contains(pos) || pos.y < view.top() + HEADER_H {
         return;

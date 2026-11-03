@@ -118,6 +118,7 @@ impl EditorApp {
             .ws
             .active_doc()
             .and_then(|doc| doc.path().map(Path::to_path_buf));
+        state.request_git_refresh();
         let state = Rc::new(RefCell::new(state));
         let mut tree = SceneTree::new();
         igui_ui::set_text_measurer(
@@ -207,6 +208,7 @@ impl EditorApp {
         }
         self.analysis_behind = self.state.borrow_mut().tick_analysis();
         self.state.borrow_mut().tick_external_changes();
+        self.state.borrow_mut().tick_git();
         self.state.borrow_mut().tick_reliability();
         self.state.borrow_mut().sync_scroll_positions();
         if !self.window_restored {
@@ -254,6 +256,11 @@ impl EditorApp {
 
     pub fn paint(&mut self, ctx: &mut PaintContext) {
         igui_ui::paint(&self.tree, ctx);
+        // Git diff is an app overlay, above the tree but below menus/modals.
+        let measurer = igui_ui::text_measurer(&self.tree);
+        let mut state = self.state.borrow_mut();
+        ui::git::paint_diff(&mut state, measurer.as_ref(), ctx);
+        drop(state);
         // Overlays, in stacking order: menu drop-down, settings, modal.
         let measurer = igui_ui::text_measurer(&self.tree);
         let mut state = self.state.borrow_mut();
@@ -295,6 +302,10 @@ impl EditorApp {
                 }
                 // The bar sits above the drop-down: a press on a bar item
                 // toggles that menu (including closing the open one).
+                if state.git.diff_visible {
+                    ui::git::click_diff(&mut state, *position);
+                    return EventResult::Handled;
+                }
                 if state.settings_open {
                     ui::settings::click(&mut state, *position);
                     return EventResult::Handled;
@@ -431,6 +442,20 @@ impl EditorApp {
                 self.focus_editor();
                 result
             }
+            InputEvent::Wheel {
+                position, delta, ..
+            } => {
+                let mut state = self.state.borrow_mut();
+                if state.git.diff_visible {
+                    let (panel, _) = ui::git::diff_layout(&state);
+                    if panel.contains(*position) {
+                        ui::git::wheel_diff(&mut state, *delta);
+                        return EventResult::Handled;
+                    }
+                }
+                drop(state);
+                igui_ui::route_input(&mut self.tree, event)
+            }
             InputEvent::KeyDown { key } => {
                 let modifiers = igui_ui::modifiers(&self.tree);
                 let mut state = self.state.borrow_mut();
@@ -451,6 +476,10 @@ impl EditorApp {
                     return EventResult::Handled;
                 }
                 if state.search.open && ui::project_search::on_key(&mut state, *key, modifiers) {
+                    return EventResult::Handled;
+                }
+                if state.git.diff_visible && *key == Key::Escape {
+                    state.close_git_diff();
                     return EventResult::Handled;
                 }
                 if state.tab_menu.is_some() && *key == Key::Escape {

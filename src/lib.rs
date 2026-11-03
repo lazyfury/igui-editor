@@ -53,6 +53,7 @@ mod kit;
 mod macos;
 mod model;
 mod native;
+mod services;
 mod state;
 mod ui;
 

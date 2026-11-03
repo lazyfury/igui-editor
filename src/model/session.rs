@@ -49,6 +49,8 @@ pub struct Session {
     pub sync_scroll: bool,
     /// Soft-wrap long editor lines.
     pub soft_wrap: bool,
+    /// Active sidebar tab id (`explorer`, `git`, …).
+    pub sidebar_tab: String,
     /// Last window geometry (logical size + position).
     pub window: Option<WindowGeometry>,
 }
@@ -63,7 +65,7 @@ pub struct WindowGeometry {
 impl Default for Session {
     fn default() -> Self {
         Self {
-            version: 4,
+            version: 5,
             theme: "dark".into(),
             sidebar: true,
             folder: None,
@@ -80,6 +82,7 @@ impl Default for Session {
             languages: Vec::new(),
             sync_scroll: true,
             soft_wrap: false,
+            sidebar_tab: "explorer".into(),
             window: None,
         }
     }
@@ -130,6 +133,7 @@ impl Session {
                 "autosave" => session.autosave = value == "1",
                 "sync_scroll" => session.sync_scroll = value == "1",
                 "soft_wrap" => session.soft_wrap = value == "1",
+                "sidebar_tab" => session.sidebar_tab = value,
                 key if key.starts_with("lang.") => {
                     let rest = &key["lang.".len()..];
                     let Some((index, field)) = rest.split_once('.') else {
@@ -183,7 +187,7 @@ impl Session {
     pub fn render(&self) -> String {
         let mut out = String::new();
         // Always write the current format; parsing older files still works.
-        out.push_str("version=4\n");
+        out.push_str("version=5\n");
         out.push_str(&format!("theme={}\n", self.theme));
         out.push_str(&format!("sidebar={}\n", u8::from(self.sidebar)));
         if let Some(folder) = &self.folder {
@@ -199,6 +203,7 @@ impl Session {
         out.push_str(&format!("autosave={}\n", u8::from(self.autosave)));
         out.push_str(&format!("sync_scroll={}\n", u8::from(self.sync_scroll)));
         out.push_str(&format!("soft_wrap={}\n", u8::from(self.soft_wrap)));
+        out.push_str(&format!("sidebar_tab={}\n", escape(&self.sidebar_tab)));
         for (index, (path, name)) in self.languages.iter().enumerate() {
             out.push_str(&format!(
                 "lang.{index}.path={}\nlang.{index}.name={}\n",
