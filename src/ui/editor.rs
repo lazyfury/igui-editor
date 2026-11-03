@@ -148,7 +148,9 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
             };
             let read_only = doc.is_read_only();
             let handled = match key {
-                Key::Backspace | Key::Delete | Key::Enter | Key::Tab if read_only => false,
+                Key::Backspace | Key::Delete | Key::Enter | Key::Tab | Key::Space if read_only => {
+                    false
+                }
                 Key::Backspace => {
                     doc.backspace();
                     true
@@ -159,6 +161,10 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
                 }
                 Key::Enter => {
                     doc.insert_newline();
+                    true
+                }
+                Key::Space => {
+                    doc.insert_text(" ");
                     true
                 }
                 Key::Tab => {

@@ -265,6 +265,25 @@ fn check(dir: &Path) -> Result<(), String> {
             ));
         }
     }
+    // Space is a named key: the host does not send it as text, so the editor
+    // must insert it itself.
+    if let Some(doc) = harness.app.state_mut().ws.active_doc_mut() {
+        doc.set_caret(0);
+    }
+    harness.key(Key::Space);
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        let doc = state.ws.active_doc().ok_or("no document after space")?;
+        if !doc.text().starts_with(' ') {
+            return Err("Space did not insert a space into the editor".into());
+        }
+    }
+    if let Some(doc) = harness.app.state_mut().ws.active_doc_mut() {
+        doc.undo();
+        doc.set_caret(0);
+    }
+
     // -- double-click selects the word under the pointer, without snapping
     // the selection back to the clicked caret.
     let main_at = draw_position(&frame, "main").ok_or("main token was not painted")?;
