@@ -488,9 +488,9 @@ Not `igui_theme::DefaultTheme`. The app owns its palette and metrics
 - **One monospace grid** — the host seeds `FontServer` with the first installed
   monospace face (SF Mono / Menlo / JetBrains Mono / Fira Code / DejaVu Sans
   Mono); the whole UI uses it.
-- **Compact rhythm** — 26 px menu bar, 22 px rows, 22 px status bar, 8 px
-  scrollbars; the editor defaults to 13 px text / 19 px lines and scales with the
-  font setting (11–18 px).
+- **Compact rhythm** — 13 px UI text / 12 px secondary text, 26 px menu bar,
+  22 px rows, 22 px status bar, 8 px scrollbars; the editor defaults to 13 px
+  text / 19 px lines and scales with the font setting (11–18 px).
 - **Palette** — dark: `#0B0E13` canvas, `#0E1218` panels, `#39E0AE` phosphor
   accent, `#16362F` selection; light: `#F7F9FC` canvas, `#0A8F6F` teal accent.
 - Dark and light are separate hand-tuned palettes, not an inversion; switching
