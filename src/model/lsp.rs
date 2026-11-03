@@ -45,6 +45,15 @@ pub struct Diagnostic {
     pub message: String,
 }
 
+/// One LSP semantic token, in UTF-16 line/column coordinates.
+#[derive(Clone, Debug)]
+pub struct SemanticToken {
+    pub line: usize,
+    pub start: usize,
+    pub end: usize,
+    pub kind: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct HoverUi {
     pub text: String,
@@ -70,12 +79,13 @@ pub struct Location {
     pub character: u32,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum PendingKind {
     Initialize,
     Hover,
     Completion,
     Definition,
+    Semantic(PathBuf),
 }
 
 struct OpenDoc {
@@ -389,6 +399,11 @@ pub struct LspController {
     status: LspStatus,
     open_docs: HashMap<PathBuf, OpenDoc>,
     diagnostics: HashMap<PathBuf, Vec<Diagnostic>>,
+    semantic_legend: Vec<String>,
+    semantic_supported: bool,
+    semantic: HashMap<PathBuf, Vec<SemanticToken>>,
+    semantic_pending: HashSet<PathBuf>,
+    semantic_in_flight: HashSet<PathBuf>,
     pending: HashMap<u64, (PendingKind, Instant)>,
     failed: Option<(PathBuf, Instant)>,
     pub hover: Option<HoverUi>,
@@ -406,6 +421,11 @@ impl Default for LspController {
             status: LspStatus::Off,
             open_docs: HashMap::new(),
             diagnostics: HashMap::new(),
+            semantic_legend: Vec::new(),
+            semantic_supported: false,
+            semantic: HashMap::new(),
+            semantic_pending: HashSet::new(),
+            semantic_in_flight: HashSet::new(),
             pending: HashMap::new(),
             failed: None,
             hover: None,
@@ -503,8 +523,18 @@ impl LspController {
             }
         }
 
-        self.pending
-            .retain(|_, (_, sent)| sent.elapsed() < Duration::from_secs(15));
+        let expired: Vec<u64> = self
+            .pending
+            .iter()
+            .filter(|(_, (_, sent))| sent.elapsed() >= Duration::from_secs(15))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in expired {
+            let kind = self.pending.remove(&id).map(|(kind, _)| kind);
+            if let Some(PendingKind::Semantic(path)) = kind {
+                self.semantic_in_flight.remove(&path);
+            }
+        }
 
         self.poll();
         if self.status == LspStatus::Ready {
@@ -517,6 +547,11 @@ impl LspController {
         self.status = LspStatus::Off;
         self.open_docs.clear();
         self.diagnostics.clear();
+        self.semantic_legend.clear();
+        self.semantic_supported = false;
+        self.semantic.clear();
+        self.semantic_pending.clear();
+        self.semantic_in_flight.clear();
         self.pending.clear();
         self.hover = None;
         self.completion = None;
@@ -540,6 +575,8 @@ impl LspController {
                     self.status = LspStatus::Error(error);
                     self.client = None;
                     self.open_docs.clear();
+                    self.semantic_pending.clear();
+                    self.semantic_in_flight.clear();
                     self.pending.clear();
                     self.changed = true;
                 }
@@ -577,6 +614,9 @@ impl LspController {
                     self.client = None;
                 } else {
                     self.status = LspStatus::Ready;
+                    let (supported, legend) = semantic_capability(result);
+                    self.semantic_supported = supported;
+                    self.semantic_legend = legend;
                     if let Some(client) = self.client.as_ref() {
                         client.notify("initialized", json!({}));
                     }
@@ -596,6 +636,18 @@ impl LspController {
             PendingKind::Definition => {
                 self.location = parse_location(result);
                 self.changed = true;
+            }
+            PendingKind::Semantic(path) => {
+                self.semantic_in_flight.remove(&path);
+                if self.open_docs.contains_key(&path) {
+                    let tokens = parse_semantic_tokens(result, &self.semantic_legend);
+                    if tokens.is_empty() {
+                        self.semantic.remove(&path);
+                    } else {
+                        self.semantic.insert(path, tokens);
+                    }
+                    self.changed = true;
+                }
             }
         }
     }
@@ -684,9 +736,13 @@ impl LspController {
             }
             self.open_docs.remove(&path);
             self.diagnostics.remove(&path);
+            self.semantic.remove(&path);
+            self.semantic_pending.remove(&path);
+            self.semantic_in_flight.remove(&path);
         }
 
         let now = Instant::now();
+        let mut semantic_queue = Vec::new();
         for doc in &ws.tabs {
             let Some(path) = doc.path().map(Path::to_path_buf) else {
                 continue;
@@ -714,13 +770,14 @@ impl LspController {
                         );
                     }
                     self.open_docs.insert(
-                        path,
+                        path.clone(),
                         OpenDoc {
                             version: 1,
                             rev: doc.rev(),
                             changed_at: None,
                         },
                     );
+                    semantic_queue.push(path);
                 }
                 Some(open) => {
                     if open.rev == doc.rev() {
@@ -746,10 +803,15 @@ impl LspController {
                                 }),
                             );
                         }
+                        semantic_queue.push(path.clone());
                     }
                 }
             }
         }
+        for path in semantic_queue {
+            self.semantic_pending.insert(path);
+        }
+        self.flush_semantic_requests();
     }
 
     fn send_position(&mut self, method: &str, kind: PendingKind, doc: &Document) -> bool {
@@ -809,6 +871,66 @@ impl LspController {
         self.completion = None;
         self.cancel_popup_requests();
         self.send_position("textDocument/definition", PendingKind::Definition, doc)
+    }
+
+    fn flush_semantic_requests(&mut self) {
+        if !self.semantic_supported {
+            return;
+        }
+        let paths: Vec<PathBuf> = self
+            .semantic_pending
+            .iter()
+            .filter(|path| !self.semantic_in_flight.contains(*path))
+            .cloned()
+            .collect();
+        for path in paths {
+            self.semantic_pending.remove(&path);
+            let Some(client) = self.client.as_mut() else {
+                return;
+            };
+            let request = client.request(
+                "textDocument/semanticTokens/full",
+                json!({"textDocument": {"uri": path_to_uri(&path)}}),
+            );
+            if let Some(id) = request {
+                self.pending
+                    .insert(id, (PendingKind::Semantic(path.clone()), Instant::now()));
+                self.semantic_in_flight.insert(path);
+            }
+        }
+    }
+
+    pub fn semantic_for(&self, path: &Path) -> &[SemanticToken] {
+        self.semantic.get(path).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    pub fn semantic_color(
+        &self,
+        kind: &str,
+        p: &crate::theme::Palette,
+    ) -> Option<igui_core::Color> {
+        Some(match kind {
+            "namespace" | "module" | "toolModule" => p.syntax.type_name.alpha_mul(0.78),
+            "type" | "class" | "enum" | "interface" | "struct" | "typeParameter"
+            | "builtinType" | "constParameter" | "typeAlias" | "union" => p.syntax.type_name,
+            "parameter" => p.syntax.parameter,
+            "property" | "field" | "enumMember" => p.syntax.property,
+            "variable" | "event" => p.syntax.variable,
+            "function" | "method" => p.syntax.function,
+            "macro" | "builtinAttribute" | "attribute" | "derive" | "deriveHelper"
+            | "macroBang" | "decorator" => p.syntax.macro_,
+            "keyword" | "modifier" | "lifetime" | "selfKeyword" | "selfTypeKeyword" => {
+                p.syntax.keyword
+            }
+            "comment" => p.syntax.comment,
+            "string" | "escapeSequence" | "formatSpecifier" => p.syntax.string,
+            "number" | "boolean" | "character" => p.syntax.number,
+            "operator" => p.syntax.punctuation,
+            "unresolvedReference" => p.error,
+            "angle" | "arithmetic" | "bitwise" | "brace" | "colon" | "comma" | "comparison"
+            | "dot" | "generic" | "logical" | "parenthesis" | "punctuation" => p.syntax.punctuation,
+            _ => return None,
+        })
     }
 
     pub fn take_location(&mut self) -> Option<Location> {
@@ -871,6 +993,60 @@ impl LspController {
     }
 }
 
+fn semantic_capability(result: &Value) -> (bool, Vec<String>) {
+    let provider = &result["capabilities"]["semanticTokensProvider"];
+    let types = provider["legend"]["tokenTypes"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let full = provider
+        .get("full")
+        .is_some_and(|value| !value.is_null() && value.as_bool() != Some(false));
+    (full && !types.is_empty(), types)
+}
+
+fn parse_semantic_tokens(result: &Value, legend: &[String]) -> Vec<SemanticToken> {
+    let Some(data) = result["data"].as_array() else {
+        return Vec::new();
+    };
+    let mut tokens = Vec::new();
+    let mut line = 0usize;
+    let mut start = 0usize;
+    for chunk in data.chunks_exact(5) {
+        let delta_line = chunk[0].as_u64().unwrap_or(0) as usize;
+        let delta_start = chunk[1].as_u64().unwrap_or(0) as usize;
+        let length = chunk[2].as_u64().unwrap_or(0) as usize;
+        let kind_index = chunk[3].as_u64().unwrap_or(0) as usize;
+        if delta_line > 0 {
+            line += delta_line;
+            start = delta_start;
+        } else {
+            start = start.saturating_add(delta_start);
+        }
+        let Some(kind) = legend.get(kind_index) else {
+            continue;
+        };
+        if length > 0 {
+            tokens.push(SemanticToken {
+                line,
+                start,
+                end: start.saturating_add(length),
+                kind: kind.clone(),
+            });
+        }
+        if tokens.len() >= 200_000 {
+            break;
+        }
+    }
+    tokens
+}
+
 fn initialize_params(root: &Path, spec: &LanguageServerSpec) -> Value {
     json!({
         "processId": null,
@@ -898,6 +1074,25 @@ fn initialize_params(root: &Path, spec: &LanguageServerSpec) -> Value {
                     }
                 },
                 "definition": {"dynamicRegistration": false, "linkSupport": false},
+                "semanticTokens": {
+                    "dynamicRegistration": false,
+                    "requests": {"full": true, "range": false},
+                    "tokenTypes": [
+                        "namespace", "type", "class", "enum", "interface", "struct",
+                        "typeParameter", "parameter", "variable", "property",
+                        "enumMember", "event", "function", "method", "macro",
+                        "keyword", "modifier", "comment", "string", "number",
+                        "regexp", "operator", "decorator"
+                    ],
+                    "tokenModifiers": [
+                        "declaration", "definition", "readonly", "static",
+                        "deprecated", "abstract", "async", "modification",
+                        "documentation", "defaultLibrary"
+                    ],
+                    "formats": ["relative"],
+                    "overlappingTokenSupport": false,
+                    "multilineTokenSupport": false
+                },
                 "publishDiagnostics": {"relatedInformation": false}
             }
         },
@@ -1017,6 +1212,25 @@ mod tests {
         assert_eq!(read_message(&mut reader).unwrap(), Some(message));
         let mut empty = Cursor::new(b"X: 1\r\n\r\n".to_vec());
         assert!(read_message(&mut empty).is_err());
+    }
+
+    #[test]
+    fn parses_relative_semantic_tokens() {
+        let (supported, legend) = semantic_capability(&json!({
+            "capabilities": {
+                "semanticTokensProvider": {
+                    "full": true,
+                    "legend": {"tokenTypes": ["variable", "function"]}
+                }
+            }
+        }));
+        assert!(supported);
+        let tokens =
+            parse_semantic_tokens(&json!({"data": [0, 4, 2, 1, 0, 1, 4, 3, 0, 0]}), &legend);
+        assert_eq!(tokens.len(), 2);
+        assert_eq!((tokens[0].line, tokens[0].start, tokens[0].end), (0, 4, 6));
+        assert_eq!(tokens[0].kind, "function");
+        assert_eq!((tokens[1].line, tokens[1].start), (1, 4));
     }
 
     #[test]

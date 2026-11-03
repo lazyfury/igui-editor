@@ -913,6 +913,86 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     }
     env.ctx.restore();
 
+    // LSP semantic tokens are painted over the syntax pass, so variables,
+    // parameters, fields, functions and types get server-aware colors without
+    // losing syntax colors for tokens the server did not classify.
+    if !git_view && state.settings.syntax {
+        let doc = state.ws.active_doc().expect("checked above");
+        let semantic: Vec<crate::model::lsp::SemanticToken> = doc
+            .path()
+            .map(|path| state.lsp.semantic_for(path).to_vec())
+            .unwrap_or_default();
+        if !semantic.is_empty() {
+            env.ctx.save();
+            env.ctx.clip_rect(text_rect);
+            for vis in &vis {
+                let line_text = doc.line(vis.line);
+                let line_start = doc.line_start(vis.line);
+                for token in &semantic {
+                    if token.line != vis.line {
+                        continue;
+                    }
+                    let Some(color) = state.lsp.semantic_color(&token.kind, &p) else {
+                        continue;
+                    };
+                    let start = crate::model::lsp::byte_for_position(
+                        doc,
+                        token.line as u32,
+                        token.start as u32,
+                    )
+                    .saturating_sub(line_start)
+                    .min(line_text.len());
+                    let end = crate::model::lsp::byte_for_position(
+                        doc,
+                        token.line as u32,
+                        token.end as u32,
+                    )
+                    .saturating_sub(line_start)
+                    .min(line_text.len())
+                    .max(start);
+                    let row_start_byte = line_start + vis.start_byte;
+                    let row_end_byte = line_start + vis.end_byte;
+                    let from = (line_start + start).max(row_start_byte);
+                    let to = (line_start + end).min(row_end_byte);
+                    if from >= to {
+                        continue;
+                    }
+                    let start_column = line_text[..from - line_start].chars().count();
+                    let row = if wrap_on {
+                        state
+                            .editor
+                            .wrap
+                            .row_of(vis.line, start_column)
+                            .unwrap_or(vis.row)
+                    } else {
+                        vis.line
+                    };
+                    if vis.row != row {
+                        continue;
+                    }
+                    let row_start_x = if wrap_on {
+                        x_in_line(measurer, line_text, vis.start_byte, font, tab)
+                    } else {
+                        0.0
+                    };
+                    let x =
+                        x_in_line(measurer, line_text, from - line_start, font, tab) - row_start_x;
+                    let y = row_y(vis.row);
+                    let baseline = y + (line_h - font) * 0.5 + ascent;
+                    env.ctx.draw_text_weighted(
+                        &line_text[from - line_start..to - line_start],
+                        Vec2::new(text_rect.left() + pad + x - scroll_x, baseline),
+                        font,
+                        FontWeight::NORMAL,
+                        TextAlign::Left,
+                        color,
+                    );
+                }
+            }
+            env.ctx.restore();
+        }
+    }
+
     // Language-server diagnostics: a thin severity-colored underline on the
     // affected range, plus a gutter marker on the first line.
     {

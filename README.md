@@ -82,6 +82,9 @@ is no server for loose files or non-project buffers.
 - Diagnostics are painted as severity-colored underlines and square gutter
   markers; the footer shows `LSP 1E 2W` (or `LSP ERR` if the server cannot
   start).
+- Semantic tokens refine the syntax pass: variables, parameters, fields,
+  functions/methods, types, macros, keywords and literals get server-aware
+  colors. Tokens the server does not classify keep their syntax color.
 - `F1` shows server hover, `F12` jumps to definition, and `⌘I` (`Ctrl+I` on
   Linux/Windows) opens completion. `Ctrl+Space` also works where the OS does
   not reserve it for input-method switching. Completion uses `↑`/`↓`,

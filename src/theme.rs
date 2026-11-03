@@ -60,8 +60,8 @@ pub struct Palette {
     pub syntax: SyntaxPalette,
 }
 
-/// Colors for syntax tokens. `Plain` is not stored: the renderer uses the
-/// editor's base text color for it.
+/// Colors for syntax tokens plus LSP semantic categories. `Plain` is not
+/// stored: the renderer uses the editor's base text color for it.
 #[derive(Clone, Copy, Debug)]
 pub struct SyntaxPalette {
     pub keyword: Color,
@@ -73,6 +73,10 @@ pub struct SyntaxPalette {
     pub constant: Color,
     pub macro_: Color,
     pub punctuation: Color,
+    /// LSP semantic tokens: local variables, parameters and fields.
+    pub variable: Color,
+    pub parameter: Color,
+    pub property: Color,
 }
 
 impl Palette {
@@ -103,6 +107,9 @@ impl Palette {
                 constant: hex(0xFF9E64),
                 macro_: hex(0x39E0AE),
                 punctuation: hex(0x8494A8),
+                variable: hex(0xB8C7DA),
+                parameter: hex(0xF6C177),
+                property: hex(0x9CDCFE),
             },
         }
     }
@@ -134,6 +141,9 @@ impl Palette {
                 constant: hex(0xC2410C),
                 macro_: hex(0x0A8F6F),
                 punctuation: hex(0x5C6C7E),
+                variable: hex(0x334155),
+                parameter: hex(0xB45309),
+                property: hex(0x0369A1),
             },
         }
     }

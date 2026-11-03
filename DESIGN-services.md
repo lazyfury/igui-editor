@@ -113,7 +113,9 @@ PluginHost
   `client/registerCapability` and progress requests are answered defensively so
   a server cannot stall the UI.
 - **UI state**: diagnostics are keyed by path and painted as underlines + gutter
-  markers; hover and completion are transient overlays. Nothing is persisted.
+  markers; semantic tokens are requested on open/change and painted over the
+  syntax pass with server-aware variable/parameter/field/type colors. Hover and
+  completion are transient overlays. Nothing is persisted.
 - **Rust spec**: command `rust-analyzer`, overridable with
   `IGUI_EDITOR_RUST_ANALYZER` (tests use a scripted server); arguments are
   passed directly, never through a shell.

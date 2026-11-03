@@ -3237,7 +3237,12 @@ while True:
     request_id = message.get("id")
     params = message.get("params", {})
     if method == "initialize":
-        send({"jsonrpc": "2.0", "id": request_id, "result": {"capabilities": {}}})
+        send({"jsonrpc": "2.0", "id": request_id, "result": {"capabilities": {
+            "semanticTokensProvider": {
+                "full": True,
+                "legend": {"tokenTypes": ["variable", "function"], "tokenModifiers": []},
+            },
+        }}})
     elif method == "textDocument/didOpen":
         uri = params["textDocument"]["uri"]
         send({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": {
@@ -3258,6 +3263,11 @@ while True:
             "uri": uri,
             "range": {"start": {"line": 2, "character": 4}, "end": {"line": 2, "character": 9}},
         }]})
+    elif method == "textDocument/semanticTokens/full":
+        send({"jsonrpc": "2.0", "id": request_id, "result": {"data": [
+            0, 3, 4, 1, 0,
+            1, 8, 10, 0, 0,
+        ]}})
 "#,
     )
     .map_err(|error| format!("lsp fixture: {error}"))?;
@@ -3306,9 +3316,20 @@ fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
         if state.lsp.summary(Some(&path)).as_deref() != Some("LSP 1E 0W") {
             return Err("LSP footer summary is wrong".into());
         }
+        if state.lsp.semantic_for(&path).len() != 2 {
+            return Err("LSP semantic tokens were not received".into());
+        }
     }
 
     let frame = harness.frame()?;
+    let semantic_variable = crate::theme::Theme::new(Mode::Dark)
+        .p
+        .syntax
+        .variable
+        .to_rgba8();
+    if !draw_text_has_color(&frame, "diagnostic", semantic_variable) {
+        return Err("LSP semantic variable color was not painted".into());
+    }
     let error = crate::theme::Theme::new(Mode::Dark).p.error.to_rgba8();
     if !frame.commands().iter().any(|command| {
         matches!(
