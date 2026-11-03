@@ -2331,8 +2331,7 @@ fn check(dir: &Path) -> Result<(), String> {
     }
     expect(&texts(&frame), "lib.rs", "sidebar now lists the new root")?;
 
-    // -- File > Close Folder keeps tabs, clears the session folder ---------
-    let tabs_before = harness.app.state().ws.tabs.len();
+    // -- File > Close Folder clears tabs and the session folder ------------
     let file_item = harness
         .app
         .state()
@@ -2357,23 +2356,36 @@ fn check(dir: &Path) -> Result<(), String> {
     };
     harness.click(close_folder_item);
     harness.frame()?;
+    // A dirty tab opens the confirmation; discard for this flow.
+    if harness.app.state().modal.is_some() {
+        harness
+            .app
+            .state_mut()
+            .resolve_modal(crate::state::ModalButton::Discard);
+        harness.frame()?;
+    }
     {
         let state = harness.app.state();
         if state.ws.folder_open || state.ws.folder().is_some() {
             return Err("Close Folder left the workspace folder open".into());
         }
-        if state.ws.tabs.len() != tabs_before {
-            return Err("Close Folder must keep the open tabs".into());
+        if !state.ws.tabs.is_empty() || state.ws.active_doc().is_some() {
+            return Err("Close Folder must clear the open tabs".into());
         }
         if state.session.folder.is_some() {
             return Err("Close Folder did not clear the persisted session folder".into());
+        }
+        if !state.session.tabs.is_empty() {
+            return Err("Close Folder did not clear the persisted tabs".into());
         }
         if Action::CloseFolder.enabled(&state) {
             return Err("Close Folder is still enabled with no folder".into());
         }
     }
-    // Reopen it for the session-restore assertion below.
+    // Reopen it and put a file back for the session-restore assertion below.
     harness.app.state_mut().set_root(dir.join("src"));
+    harness.frame()?;
+    harness.app.state_mut().open_path(canonical_notes.clone());
     harness.frame()?;
     if !harness.app.state().ws.folder_open {
         return Err("reopening the folder after Close Folder failed".into());

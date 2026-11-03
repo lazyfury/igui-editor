@@ -3,7 +3,7 @@
 //! One control paints the whole editing surface and owns the pointer/key/text/
 //! IME callbacks, plus the caret provider the host uses to place the IME
 //! candidate window. Text is drawn line by line with the backend's real
-//! measurer (the host installs a monospace default face), so the caret, the
+//! measurer (the host installs a CJK-capable default face), so the caret, the
 //! selection and the glyphs always agree.
 //!
 //! Layout rules kept simple on purpose:

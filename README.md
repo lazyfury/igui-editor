@@ -447,8 +447,8 @@ clickable.
   `NO FOLDER OPEN` with the same actions plus a drop hint. Opening a file works
   without a folder; Quick Open and project search ask for one first.
 - **Open Folder…** (`⇧⌘O`) or dropping a folder sets the sidebar root and
-  persists it in the session. **File → Close Folder** clears the folder and the
-  persisted root but keeps the open tabs as standalone files. Dropping files
+  persists it in the session. **File → Close Folder** clears the folder, all
+  open tabs and the persisted root (asking first if a tab is dirty). Dropping files
   opens them in tabs; dropping both opens the folder first, then the files.
   While a drag hovers the window, a themed “Drop to open” overlay covers the
   viewport.
@@ -520,9 +520,10 @@ Not `igui_theme::DefaultTheme`. The app owns its palette and metrics
 
 - **No rounded rectangle anywhere** — every surface is a square fill with 1 px
   rules; scrollbar thumbs and carets are straight bars.
-- **One monospace grid** — the host seeds `FontServer` with the first installed
-  monospace face (SF Mono / Menlo / JetBrains Mono / Fira Code / DejaVu Sans
-  Mono); the whole UI uses it.
+- **One text grid** — on macOS the host defaults to **PingFang SC** so Chinese
+  renders with real glyphs instead of the engine's box-shaped symbol fallback.
+  Other hosts prefer a monospace face (JetBrains Mono / Fira Code / DejaVu Sans
+  Mono) and use the font server's per-character fallback.
 - **Compact rhythm** — 14 px UI text / 12 px secondary text, 26 px menu bar,
   22 px rows, 22 px status bar, 8 px scrollbars; the editor defaults to 14 px
   text / 19 px lines and scales with the font setting (11–18 px).
@@ -576,8 +577,8 @@ overflow scrolling, and settings restored from the session.
 M5 checks: a temporary JSON language pack highlights a `.lua` fixture; the
 footer language type (bottom-right) opens a popup above the status bar, and
 lua → rust → Auto changes token colors and the footer label; overrides survive a
-session restore; File → Close Folder keeps the tabs and clears the persisted
-folder; replace-in-files (cancel is a no-op, apply rewrites a non-open file, an
+session restore; File → Close Folder clears the tabs and the persisted folder;
+replace-in-files (cancel is a no-op, apply rewrites a non-open file, an
 open tab is skipped); and scroll sync moves the preview from the editor and the
 editor back from the preview (including the disable toggle).
 
@@ -660,7 +661,7 @@ src/
   ui/modal.rs         close-dirty / close-many / external / replace modals
   ui/status.rs        file / position / facts / messages
   app.rs              shell construction, input routing, igui_app glue
-  host.rs             winit + wgpu plugins, native dialogs, monospace face
+  host.rs             winit + wgpu plugins, native dialogs, CJK-capable face
   selfcheck.rs        --selfcheck
 packaging/
   icon.png            1254×1254 app-icon source

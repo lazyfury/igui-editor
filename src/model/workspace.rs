@@ -75,14 +75,16 @@ impl Workspace {
         self.folder_open.then_some(self.root.as_path())
     }
 
-    /// Closes the sidebar folder but keeps the open tabs (they continue as
-    /// standalone files). Returns whether a folder was open.
+    /// Closes the sidebar folder and its open tabs. Returns whether a folder
+    /// was open; an already-closed workspace is a no-op.
     pub fn close_folder(&mut self) -> bool {
         if !self.folder_open {
             return false;
         }
         self.folder_open = false;
         self.tree = FsTree::empty();
+        self.tabs.clear();
+        self.active = 0;
         true
     }
 
@@ -377,7 +379,7 @@ mod tests {
     }
 
     #[test]
-    fn closing_the_folder_keeps_tabs() {
+    fn closing_the_folder_clears_tabs() {
         let dir = temp_dir("close-folder");
         let path = dir.join("a.txt");
         fs::write(&path, "a").unwrap();
@@ -386,7 +388,8 @@ mod tests {
         assert!(workspace.close_folder());
         assert!(!workspace.folder_open);
         assert!(workspace.folder().is_none());
-        assert_eq!(workspace.tabs.len(), 1);
+        assert!(workspace.tabs.is_empty());
+        assert!(workspace.active_doc().is_none());
         assert!(!workspace.close_folder(), "closing twice is a no-op");
         let _ = fs::remove_dir_all(dir);
     }

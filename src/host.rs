@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use igui_app::{App, AppBuilder, AppConfig, PlatformEvent, PlatformObserver, Plugin};
 use igui_backend_wgpu::FontConfig;
 use igui_core::InputEvent;
+#[cfg(not(target_os = "macos"))]
 use igui_font::FaceRef;
 use igui_winit::{
     ClipboardPlugin, GpuConfig, ImePlugin, KeyboardPlugin, PointerPlugin, SharedWindow,
@@ -19,29 +20,36 @@ use crate::drop::{self, SharedDropTarget};
 use crate::model::session::{self, Session};
 use crate::theme::{Mode, Theme};
 
-/// Candidate monospace faces, first hit wins. The whole UI uses it — the geek
-/// look wants one grid, not a proportional UI font next to a mono editor.
+/// Candidate monospace faces for non-macOS hosts, first hit wins.
+#[cfg(not(target_os = "macos"))]
 const MONO_FACES: &[&str] = &[
-    "/System/Library/Fonts/SFNSMono.ttf",
-    "/System/Library/Fonts/Menlo.ttc",
-    "/Library/Fonts/JetBrainsMono-Regular.ttf",
-    "/Library/Fonts/FiraCode-Regular.ttf",
     "/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-Regular.ttf",
     "/usr/share/fonts/truetype/firacode/FiraCode-Regular.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
 ];
 
-/// Font configuration: the first installed monospace face becomes the default
-/// (fallback discovery still runs for CJK when a character is uncovered).
+/// Font configuration.
+///
+/// macOS uses PingFang SC as the primary face. Seeding SF Mono here is not
+/// enough for Chinese: the engine's first covering fallback on this platform is
+/// a symbol fallback with box glyphs, so CJK needs a real CJK primary family.
+/// Other hosts keep the monospace preference.
 pub fn font_config() -> FontConfig {
     let mut config = FontConfig {
         device_pixel_rasterization: true,
         ..FontConfig::default()
     };
-    for path in MONO_FACES {
-        if std::path::Path::new(path).is_file() {
-            config.default_face = Some(FaceRef::new(*path, 0));
-            break;
+    #[cfg(target_os = "macos")]
+    {
+        config.default_family = Some("PingFang SC".into());
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        for path in MONO_FACES {
+            if std::path::Path::new(path).is_file() {
+                config.default_face = Some(FaceRef::new(*path, 0));
+                break;
+            }
         }
     }
     config
@@ -188,4 +196,18 @@ pub fn build(open: Option<PathBuf>, mode: Option<Mode>) -> App {
 /// Runs the editor until the window closes.
 pub fn run(open: Option<PathBuf>, mode: Option<Mode>) {
     build(open, mode).run();
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_prefers_a_cjk_primary_face() {
+        let config = super::font_config();
+        assert_eq!(config.default_family.as_deref(), Some("PingFang SC"));
+        let server = igui_font::FontServer::load_with(config);
+        let slots = server.shape("中文", 14.0, igui_core::FontWeight::NORMAL);
+        assert_eq!(slots.len(), 2);
+        assert!(slots.iter().all(|slot| slot.advance > 0.0));
+    }
 }

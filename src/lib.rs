@@ -15,7 +15,7 @@
 //! - `state.rs`: shared app state written by callbacks and read by painters.
 //! - `ui/`: one module per shell region and overlay.
 //! - `app.rs`: shell construction, input routing, `igui_app` glue.
-//! - `host.rs`: winit + wgpu plugins, native dialogs, monospace face.
+//! - `host.rs`: winit + wgpu plugins, native dialogs, CJK-capable face.
 //! - `selfcheck.rs`: headless pipeline assertions (`--selfcheck`).
 //!
 //! ```no_run

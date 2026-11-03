@@ -562,6 +562,8 @@ pub enum Modal {
     ExternalChange { tab: usize },
     /// macOS Cmd+Q with dirty tabs: Cancel / Discard & Quit.
     Quit { dirty: usize },
+    /// Close the folder and all its open tabs: Cancel / Discard.
+    CloseFolder { dirty: usize },
     /// Replace every match in the scanned files: Cancel / Replace all.
     ReplaceInFiles { files: usize, occurrences: usize },
 }
@@ -3688,6 +3690,14 @@ impl AppState {
             self.dirty = true;
             return;
         }
+        if let Modal::CloseFolder { .. } = modal {
+            self.modal = None;
+            if button == ModalButton::Discard {
+                self.close_folder_now();
+            }
+            self.dirty = true;
+            return;
+        }
         if let Modal::CloseTabs { keep, from } = modal {
             self.modal = None;
             if button == ModalButton::Discard {
@@ -3847,17 +3857,39 @@ impl AppState {
         }
     }
 
-    /// Closes the sidebar folder, keeping the open tabs as standalone files.
+    /// Closes the folder and all of its tabs. Unsaved tabs are confirmed first.
     pub fn close_folder(&mut self) {
+        if !self.ws.folder_open {
+            self.error("no folder open");
+            return;
+        }
+        let dirty = self.ws.tabs.iter().filter(|doc| doc.is_dirty()).count();
+        if dirty > 0 {
+            self.modal = Some(Modal::CloseFolder { dirty });
+            self.menu_open = None;
+            self.menu_hover = None;
+            self.dirty = true;
+            return;
+        }
+        self.close_folder_now();
+    }
+
+    fn close_folder_now(&mut self) {
+        let ids: Vec<u64> = self.ws.tabs.iter().map(|doc| doc.id()).collect();
         if !self.ws.close_folder() {
             self.error("no folder open");
             return;
+        }
+        for id in ids {
+            self.doc_revs.remove(&id);
+            self.doc_views.remove(&id);
+            self.recovery.remove(id);
+            self.language_by_id.remove(&id);
         }
         self.sidebar.scroll = 0.0;
         self.sidebar.selected = None;
         self.sidebar.actions.clear();
         self.session.folder = None;
-        self.request_git_refresh();
         self.config_dirty = true;
         if self.quick_open.open {
             self.close_quick_open();
@@ -3866,8 +3898,8 @@ impl AppState {
         if self.search.open {
             self.close_project_search();
         }
+        self.after_tabs_changed();
         self.status("folder closed");
-        self.dirty = true;
     }
 
     /// Opens dropped paths: a folder becomes the workspace, files become tabs.
@@ -4402,6 +4434,24 @@ mod tests {
         assert!(state.modal.is_none());
         assert!(state.ws.tabs.is_empty());
         assert!(state.ws.active_doc().is_none());
+    }
+
+    #[test]
+    fn close_folder_clears_clean_tabs_and_confirms_dirty_ones() {
+        let mut state = state();
+        state.ws.active_doc_mut().unwrap().insert_text("dirty");
+        state.close_folder();
+        assert!(matches!(state.modal, Some(Modal::CloseFolder { dirty: 1 })));
+        state.resolve_modal(ModalButton::Cancel);
+        assert_eq!(state.ws.tabs.len(), 1);
+        assert!(state.ws.folder_open);
+
+        state.close_folder();
+        state.resolve_modal(ModalButton::Discard);
+        assert!(!state.ws.folder_open);
+        assert!(state.ws.tabs.is_empty());
+        assert!(state.session.folder.is_none());
+        assert!(state.session.tabs.is_empty());
     }
 
     #[test]

@@ -58,7 +58,7 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    caret math and undo live in `model/doc.rs` (byte offsets, char-aware columns,
    delta undo).
 2. **No `igui_theme` / `igui_components` dependency.** The requested look
-   (compact, square, monospace) is not the component library's default, and its
+   (compact, square, CJK-capable) is not the component library's default, and its
    radius constants are baked into components. The app owns a small palette +
    metric module instead, and paints every surface with `igui_ui` primitives.
 3. **Tabs, gutter, menu and popup stay app-local.** No new component is promoted
@@ -148,8 +148,8 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    `folder_open == false` means no folder (welcome state, empty sidebar, Quick
    Open/project search refuse). Opening a file never implicitly opens a folder;
    a CLI folder, Open Folder or a dropped folder does. **File → Close Folder**
-   clears `folder_open` + the persisted root and keeps the tabs as standalone
-   files. The folder is stored in the session (`folder=`) instead of being
+   clears `folder_open`, all open tabs, and the persisted root; a dirty tab opens
+   a confirmation first. The folder is stored in the session (`folder=`) instead of being
    inferred from tabs; v1 sessions infer it from the first tab for compatibility.
    Closing the last tab returns to the welcome state instead of creating a
    hidden untitled buffer.
@@ -255,14 +255,15 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
 Rules:
 
 - zero corner radius; 1 px rules only; no shadows, no gradients, no blur;
-- one monospace family for the entire UI;
+- one text family for the entire UI; on macOS the default is PingFang SC so
+  Chinese has real glyphs (the engine's symbol fallback otherwise paints boxes);
 - dense rhythm, generous horizontal air inside rows.
 
 Metrics (`theme::Metrics::COMPACT`):
 
 | token | value |
 |---|---|
-| UI font / small / editor | 12 / 11 / 13 px (editor configurable 11–18) |
+| UI font / small / editor | 14 / 12 / 14 px (editor configurable 11–18) |
 | editor line / sidebar row | 19 / 22 px (default font; scales with settings) |
 | menu bar / tab strip / status | 26 / 28 / 22 px |
 | sidebar width | 232 px |
@@ -291,9 +292,9 @@ Palette:
 | syntax comment / macro | `#55637A` / `#39E0AE` | `#93A1B1` / `#0A8F6F` |
 | syntax punctuation | `#8494A8` | `#5C6C7E` |
 
-Monospace face candidates, first installed wins:
-SF Mono, Menlo, JetBrains Mono, Fira Code, DejaVu Sans Mono. CJK falls back via
-the font server's normal per-character discovery.
+macOS uses PingFang SC as the primary text face so Chinese has real glyphs; the
+engine's first symbol fallback is otherwise box-shaped. Non-macOS hosts prefer
+JetBrains Mono, Fira Code or DejaVu Sans Mono and use per-character fallback.
 
 ## Drag handle specification
 
