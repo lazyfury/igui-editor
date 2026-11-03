@@ -84,6 +84,26 @@ Acceptance:
 - [x] Packaged `.app` launches and `--version` / `--help` work; the release
       binary still opens the GUI (startup smoke test).
 
+## Terminal locale fix (reported after packaging)
+
+Root cause: a macOS `.app` launched from Finder has no `LANG`/`LC_*`. The PTY
+child started in the `C` locale, so zsh rendered a Chinese project folder as
+`\M-^V`-style meta escapes inside the prompt. The OSC title strings were still
+consumed by `vt100`, but the prompt text was visibly garbled.
+
+Fix:
+
+- `PtySession::spawn` now calls `ensure_utf8_locale`: it removes an invalid
+  `LC_ALL`, and sets `LC_CTYPE` / `LANG` to `en_US.UTF-8` (macOS) or `C.UTF-8`
+  (elsewhere) only when the effective locale is missing or not UTF-8.
+- Valid user locales (for example `zh_CN.UTF-8`) are preserved.
+- Regression tests cover the locale policy and spawn a shell in a Chinese-named
+  directory, asserting that the parsed grid contains neither `\M-` meta
+  escapes nor OSC title fragments.
+
+Verified with `LANG=C LC_ALL=C LC_CTYPE=C cargo test model::pty` and with a
+rebuilt/shaded `.app` bundle.
+
 ## Next candidates
 
 - Split `selfcheck.rs` by feature; report the failing check by name.

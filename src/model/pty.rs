@@ -6,6 +6,68 @@ use std::sync::mpsc::{self, Receiver};
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 
+/// Whether a locale name selects UTF-8 (`UTF-8`, `utf8`, `zh_CN.UTF-8`, …).
+fn is_utf8_locale(value: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    value.contains("utf-8") || value.contains("utf8")
+}
+
+/// Locale variables that need to be adjusted for the shell child.
+#[derive(Debug, PartialEq, Eq)]
+struct LocaleFix {
+    remove_lc_all: bool,
+    set_lc_ctype: bool,
+    set_lang: bool,
+}
+
+/// macOS GUI apps launched from Finder often inherit no `LANG`/`LC_*` at all.
+/// The child shell then runs in the `C` locale, and zsh prints multibyte
+/// prompt text as `\M-^V`-style meta escapes (a Chinese folder name becomes
+/// visible garbage). Pick a UTF-8 fallback only when the effective locale is
+/// missing or not UTF-8; an already valid locale is left untouched.
+fn locale_fix(lc_all: Option<&str>, lc_ctype: Option<&str>, lang: Option<&str>) -> LocaleFix {
+    let effective = lc_all
+        .filter(|value| !value.is_empty())
+        .or_else(|| lc_ctype.filter(|value| !value.is_empty()))
+        .or_else(|| lang.filter(|value| !value.is_empty()));
+    if effective.is_some_and(is_utf8_locale) {
+        return LocaleFix {
+            remove_lc_all: false,
+            set_lc_ctype: false,
+            set_lang: false,
+        };
+    }
+    LocaleFix {
+        // `LC_ALL=C` would override any UTF-8 category we set below.
+        remove_lc_all: lc_all.is_some_and(|value| !value.is_empty() && !is_utf8_locale(value)),
+        set_lc_ctype: !lc_ctype.is_some_and(is_utf8_locale),
+        set_lang: !lang.is_some_and(is_utf8_locale),
+    }
+}
+
+/// Applies [`locale_fix`] to a shell command.
+fn ensure_utf8_locale(cmd: &mut CommandBuilder) {
+    let fix = locale_fix(
+        std::env::var("LC_ALL").ok().as_deref(),
+        std::env::var("LC_CTYPE").ok().as_deref(),
+        std::env::var("LANG").ok().as_deref(),
+    );
+    let fallback = if cfg!(target_os = "macos") {
+        "en_US.UTF-8"
+    } else {
+        "C.UTF-8"
+    };
+    if fix.remove_lc_all {
+        cmd.env_remove("LC_ALL");
+    }
+    if fix.set_lc_ctype {
+        cmd.env("LC_CTYPE", fallback);
+    }
+    if fix.set_lang {
+        cmd.env("LANG", fallback);
+    }
+}
+
 pub struct PtySession {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
@@ -30,6 +92,7 @@ impl PtySession {
         cmd.cwd(cwd);
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
+        ensure_utf8_locale(&mut cmd);
         let child = pair
             .slave
             .spawn_command(cmd)
@@ -110,6 +173,92 @@ impl Drop for PtySession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn utf8_locales_are_left_alone() {
+        let fix = locale_fix(None, None, Some("zh_CN.UTF-8"));
+        assert_eq!(
+            fix,
+            LocaleFix {
+                remove_lc_all: false,
+                set_lc_ctype: false,
+                set_lang: false,
+            }
+        );
+        let fix = locale_fix(Some("en_US.utf8"), Some("C"), Some("C"));
+        assert!(!fix.remove_lc_all);
+        assert!(!fix.set_lc_ctype);
+        assert!(!fix.set_lang);
+    }
+
+    #[test]
+    fn c_locale_is_replaced_with_a_utf8_category() {
+        let fix = locale_fix(Some("C"), Some("C"), Some("C"));
+        assert_eq!(
+            fix,
+            LocaleFix {
+                remove_lc_all: true,
+                set_lc_ctype: true,
+                set_lang: true,
+            }
+        );
+        // Missing locale (Finder launch) gets the same fallback.
+        let fix = locale_fix(None, None, None);
+        assert!(!fix.remove_lc_all);
+        assert!(fix.set_lc_ctype);
+        assert!(fix.set_lang);
+        // Only a broken category is replaced, not a valid LANG.
+        let fix = locale_fix(None, Some("C"), Some("zh_CN.UTF-8"));
+        assert!(fix.set_lc_ctype);
+        assert!(!fix.set_lang);
+    }
+
+    #[test]
+    fn shell_prompt_in_a_chinese_folder_has_no_meta_escapes() {
+        let dir = std::env::temp_dir().join(format!("igui-editor-中文终端-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut session = PtySession::spawn(&dir, 24, 80).unwrap();
+        let mut parser = vt100::Parser::new(
+            std::num::NonZeroU16::new(24).unwrap(),
+            std::num::NonZeroU16::new(80).unwrap(),
+            4000,
+        );
+        let mut text = String::new();
+        for _ in 0..100 {
+            for chunk in session.try_read() {
+                parser.process(&chunk);
+            }
+            text = screen_text(parser.screen());
+            if text.contains("中文终端") {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(
+            !text.contains("\\M-"),
+            "shell prompt used C-locale meta escapes: {text:?}"
+        );
+        assert!(
+            !text.contains("]0;") && !text.contains("]1;") && !text.contains("]2;"),
+            "an OSC title sequence leaked into the grid: {text:?}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn screen_text(screen: &vt100::Screen) -> String {
+        let (rows, cols) = screen.size();
+        let mut text = String::new();
+        for row in 0..rows.get() {
+            for col in 0..cols.get() {
+                if let Some(cell) = screen.cell(row, col) {
+                    text.push_str(cell.contents());
+                }
+            }
+            text.push('\n');
+        }
+        text
+    }
 
     #[test]
     fn pty_round_trip() {

@@ -253,6 +253,14 @@ Ctrl letters, Alt prefixes, application cursor mode (vim/less) and IME candidate
 placement at the terminal cursor. The terminal requests frames while a PTY is
 alive, so full-screen programs repaint without extra input.
 
+A macOS app launched from Finder inherits no `LANG`/`LC_*`. The PTY child would
+then run in the `C` locale, where zsh prints multibyte prompt text as
+`\M-^V`-style meta escapes (for example a Chinese folder name). The terminal
+spawns the shell with a UTF-8 fallback (`en_US.UTF-8` on macOS, `C.UTF-8`
+elsewhere) when the effective locale is missing or not UTF-8, and removes an
+invalid `LC_ALL` override; a valid user locale is left untouched. This also keeps
+OSC title sequences out of the cell grid.
+
 `src/fonts.rs` is the project's font policy: the editor and terminal pick a
 **fixed-pitch** family at runtime (`Monaco` / `SF Mono` / `Menlo` /
 `JetBrains Mono` / … — each candidate is accepted only if its glyph advances
