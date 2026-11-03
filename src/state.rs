@@ -677,26 +677,13 @@ pub struct ProblemsUi {
     pub scroll_max: f32,
 }
 
-/// Embedded Godot native-symbol documentation overlay.
+/// State for the single synthetic Godot documentation tab.
 #[derive(Clone, Debug, Default)]
 pub struct DocsUi {
-    pub open: bool,
     pub class: String,
     pub symbol: String,
-    pub data: Option<crate::model::lsp::NativeSymbol>,
-    /// Resolved completion documentation when there is no native symbol.
-    pub plain: Option<String>,
-    pub loading: bool,
-    pub error: Option<String>,
-    pub scroll: f32,
-    pub scroll_max: f32,
-    pub rect: Rect,
-    pub body: Rect,
-    pub links: Vec<(crate::model::bbcode::DocLink, Rect)>,
-    /// Previous native targets, most recent last.
-    pub history: Vec<(String, String)>,
-    pub back_hit: Rect,
-    pub close_hit: Rect,
+    /// Byte-range links keyed by document id.
+    pub links: HashMap<u64, Vec<(usize, usize, crate::model::bbcode::DocLink)>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1826,11 +1813,15 @@ impl AppState {
             self.open_lsp_location(location);
         }
         if let Some((class, symbol, data)) = self.lsp.take_native_result() {
-            if self.docs.open && self.docs.class == class && self.docs.symbol == symbol {
-                self.docs.data = Some(data);
-                self.docs.loading = false;
-                self.docs.error = None;
-                self.dirty = true;
+            if self.docs.class == class
+                && self.docs.symbol == symbol
+                && self
+                    .ws
+                    .tabs
+                    .iter()
+                    .any(|doc| doc.view_key() == Some("godot-docs"))
+            {
+                self.show_docs_tab(&data);
             }
         }
         if let Some(target) = self.lsp.take_native_docs_target() {
@@ -2007,57 +1998,80 @@ impl AppState {
         self.lsp.is_native_class(word).then(|| word.to_string())
     }
 
-    /// Opens an embedded Godot native-symbol document for `target`.
+    /// Opens an embedded Godot native-symbol document for `target` in the
+    /// normal editor tab strip.
     pub fn open_native_docs(&mut self, target: &lsp::NativeTarget) {
-        self.open_native_docs_at(target.class.clone(), target.symbol.clone(), true);
+        self.open_native_docs_at(target.class.clone(), target.symbol.clone());
     }
 
-    /// Opens a native document target, optionally pushing the current one on
-    /// the back stack.
-    pub fn open_native_docs_at(&mut self, class: String, symbol: String, push: bool) {
-        if push && self.docs.open && (self.docs.class != class || self.docs.symbol != symbol) {
-            self.docs
-                .history
-                .push((self.docs.class.clone(), self.docs.symbol.clone()));
-        }
-        let cached = self.lsp.native_symbol_cached(&class, &symbol);
-        self.docs.open = true;
+    pub fn open_native_docs_at(&mut self, class: String, symbol: String) {
         self.docs.class = class.clone();
         self.docs.symbol = symbol.clone();
-        self.docs.data = cached;
-        self.docs.plain = None;
-        self.docs.loading = self.docs.data.is_none();
-        self.docs.error = None;
-        self.docs.scroll = 0.0;
-        self.docs.scroll_max = 0.0;
         self.lsp.dismiss_transient();
-        if self.docs.data.is_none() && !self.lsp.request_native_symbol(&class, &symbol) {
-            self.docs.loading = false;
-            self.docs.error = Some(self.lsp_unavailable());
+        if let Some(data) = self.lsp.native_symbol_cached(&class, &symbol) {
+            self.show_docs_tab(&data);
+            return;
+        }
+        self.show_docs_text(
+            format!("GODOT DOCS\n\nLoading documentation for {class}.{symbol}…\n"),
+            format!("{symbol} — Godot Docs"),
+            Vec::new(),
+        );
+        if !self.lsp.request_native_symbol(&class, &symbol) {
+            self.show_docs_text(
+                format!(
+                    "GODOT DOCS\n\nDocumentation unavailable for {class}.{symbol}.\n\n{}",
+                    self.lsp_unavailable()
+                ),
+                format!("{symbol} — Godot Docs"),
+                Vec::new(),
+            );
         }
         self.dirty = true;
     }
 
-    pub fn close_native_docs(&mut self) {
-        if self.docs.open {
-            self.docs.open = false;
-            self.docs.data = None;
-            self.docs.plain = None;
-            self.docs.history.clear();
-            self.docs.links.clear();
-            self.dirty = true;
-        }
+    fn show_docs_tab(&mut self, symbol: &crate::model::lsp::NativeSymbol) {
+        let rendered = crate::model::docs::render(symbol);
+        let name = format!("{} — Godot Docs", symbol.name);
+        self.show_docs_text(rendered.text, name, rendered.links);
     }
 
-    pub fn native_docs_back(&mut self) {
-        if let Some((class, symbol)) = self.docs.history.pop() {
-            self.open_native_docs_at(class, symbol, false);
+    fn show_docs_text(
+        &mut self,
+        text: String,
+        name: String,
+        links: Vec<(usize, usize, crate::model::bbcode::DocLink)>,
+    ) {
+        let index = self.ws.show_docs_view("godot-docs", name, text);
+        self.ws.select(index);
+        if let Some(doc) = self.ws.active_doc() {
+            self.docs.links.insert(doc.id(), links);
         }
+        self.tabs.reveal_active = true;
+        self.focus = Focus::Editor;
+        self.editor.preedit = None;
+        self.editor.drag = Drag::None;
+        self.sync_layout();
+        self.find.dirty = true;
+        self.dirty = true;
+    }
+
+    /// Link under `byte` in the active documentation tab.
+    pub fn docs_link_at(&self, byte: usize) -> Option<crate::model::bbcode::DocLink> {
+        let doc = self.ws.active_doc()?;
+        if !doc.is_docs_view() {
+            return None;
+        }
+        self.docs
+            .links
+            .get(&doc.id())?
+            .iter()
+            .find(|(start, end, _)| *start <= byte && byte < *end)
+            .map(|(_, _, link)| link.clone())
     }
 
     /// Opens the resolved documentation for the selected completion item.
-    /// Native targets go through the native panel; local methods (for example
-    /// `_ready`) use a plain embedded document.
+    /// Native targets go through the docs tab; local methods use a plain tab.
     pub fn open_completion_docs(&mut self) {
         let Some(completion) = self.lsp.completion.as_ref() else {
             return;
@@ -2075,20 +2089,13 @@ impl AppState {
             self.open_native_docs(&target);
             return;
         }
-        if self.docs.open && (self.docs.class != "completion" || self.docs.symbol != label) {
-            self.docs
-                .history
-                .push((self.docs.class.clone(), self.docs.symbol.clone()));
-        }
-        self.docs.open = true;
         self.docs.class = "completion".into();
-        self.docs.symbol = label;
-        self.docs.data = None;
-        self.docs.plain = Some(text);
-        self.docs.loading = false;
-        self.docs.error = None;
-        self.docs.scroll = 0.0;
-        self.docs.scroll_max = 0.0;
+        self.docs.symbol = label.clone();
+        self.show_docs_text(
+            format!("GODOT DOCS\n\n{label}\n\n{text}"),
+            format!("{label} — Godot Docs"),
+            Vec::new(),
+        );
         self.lsp.dismiss_transient();
         self.dirty = true;
     }
@@ -2128,7 +2135,7 @@ impl AppState {
     /// replace the deadline, so this is a debounce rather than a request per
     /// keystroke.
     pub fn schedule_auto_completion(&mut self, text: &str) {
-        if self.focus != Focus::Editor || self.docs.open || self.modal.is_some() {
+        if self.focus != Focus::Editor || self.modal.is_some() {
             return;
         }
         let Some(last) = text.chars().last() else {
@@ -2157,7 +2164,6 @@ impl AppState {
         }
         self.auto_completion_at = None;
         if self.focus != Focus::Editor
-            || self.docs.open
             || self.modal.is_some()
             || self.lsp.completion.is_some()
             || self.lsp.hover.is_some()

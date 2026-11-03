@@ -4053,7 +4053,7 @@ fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
     harness.app.state_mut().lsp.dismiss_transient();
     harness.frame()?;
 
-    // Embedded Godot docs use the nativeSymbol response and BBCode links.
+    // Embedded Godot docs are a normal read-only editor tab.
     {
         let target = crate::model::lsp::NativeTarget {
             class: "Node".into(),
@@ -4064,7 +4064,13 @@ fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
     }
     for _ in 0..100 {
         harness.frame()?;
-        if harness.app.state().docs.data.is_some() {
+        if harness
+            .app
+            .state()
+            .ws
+            .active_doc()
+            .is_some_and(|doc| doc.is_docs_view())
+        {
             break;
         }
         std::thread::sleep(Duration::from_millis(20));
@@ -4072,22 +4078,26 @@ fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
     let frame = harness.frame()?;
     {
         let state = harness.app.state();
-        if state.docs.data.is_none() {
-            return Err("nativeSymbol request did not fill the docs panel".into());
+        let doc = state.ws.active_doc();
+        if !doc.is_some_and(|doc| doc.is_docs_view()) {
+            return Err("nativeSymbol did not open a documentation tab".into());
         }
         if !texts(&frame).iter().any(|text| text == "GODOT DOCS") {
-            return Err("embedded Godot docs overlay was not painted".into());
+            return Err("embedded Godot docs tab was not painted".into());
         }
-        if !state
-            .docs
-            .links
-            .iter()
-            .any(|(link, _)| matches!(link, crate::model::bbcode::DocLink::Native { .. }))
-        {
+        let linked = doc.is_some_and(|doc| {
+            state.docs.links.get(&doc.id()).is_some_and(|links| {
+                links.iter().any(|(_, _, link)| {
+                    matches!(link, crate::model::bbcode::DocLink::Native { .. })
+                })
+            })
+        });
+        if !linked {
             return Err("native docs did not produce clickable BBCode links".into());
         }
     }
-    harness.app.state_mut().close_native_docs();
+    let index = harness.app.state().ws.active;
+    harness.app.state_mut().request_close_tab(index);
     harness.frame()?;
 
     // Definition: F12 returns a location in the same file.

@@ -149,11 +149,12 @@ non-project buffers.
   hover-style documentation preview; `OPEN GODOT DOCS` (or `OPEN DOCS` for
   local methods) opens the embedded documentation panel.
 - When a hover is a Godot native class or member, the card shows **OPEN GODOT
-  DOCS**; clicking it opens an embedded documentation panel backed by Godot's
-  `textDocument/nativeSymbol` response. The panel renders BBCode references as
-  clickable class/member links, supports Back and scrolling. Ctrl/Cmd-clicking
-  any native symbol (class, method, virtual method, global function or property)
-  opens the same panel; the completion preview offers the same docs action. `_ready` and other local completion
+  DOCS**; clicking it opens a **read-only editor tab** backed by Godot's
+  `textDocument/nativeSymbol` response. The tab uses the normal file-tab strip,
+  title, scrolling and close behavior, and renders BBCode references as
+  clickable class/member links. Ctrl/Cmd-clicking any native symbol (class,
+  method, virtual method, global function or property) opens the same tab; the
+  completion preview offers the same docs action. `_ready` and other local completion
   items can open their resolved documentation as a plain embedded document.
 - Moving the mouse over code for about 350 ms opens the same hover card. The
   card stays while the pointer is over it, and gets a short grace period when
@@ -635,6 +636,7 @@ src/
   model/lsp.rs        stdio/TCP JSON-RPC client, diagnostics, hover/completion,
                       native Godot symbols
   model/bbcode.rs     Godot BBCode -> text spans + clickable references
+  model/docs.rs       native symbol -> read-only docs tab text + link ranges
   services/lsp.rs     built-in Rust language-server spec (rust-analyzer)
   services/godot.rs   built-in Godot GDScript language-server spec (TCP)
   model/recovery.rs   crash snapshots (txt + metadata)
@@ -652,7 +654,6 @@ src/
   ui/git.rs           GIT sidebar tab + diff overlay + commit prompt
   ui/lsp.rs           hover card + completion list overlays
   ui/problems.rs      severity-colored PROBLEMS popup and diagnostic hover
-  ui/docs.rs          embedded Godot native-symbol documentation
   ui/outline.rs       right document-symbol outline
   ui/tree_menu.rs     file-tree context menu
   ui/settings.rs      settings + Keymap row

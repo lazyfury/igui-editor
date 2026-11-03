@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::doc::Document;
+use super::doc::{Document, ViewKind};
 use super::fs_tree::FsTree;
 
 /// The open tabs and the directory they live in.
@@ -143,7 +143,29 @@ impl Workspace {
         name: impl Into<String>,
         text: impl Into<String>,
     ) -> usize {
+        self.show_view_kind(ViewKind::Git, key, name, text)
+    }
+
+    /// Shows a synthetic embedded-docs editor tab.
+    pub fn show_docs_view(
+        &mut self,
+        key: impl Into<String>,
+        name: impl Into<String>,
+        text: impl Into<String>,
+    ) -> usize {
+        self.show_view_kind(ViewKind::Docs, key, name, text)
+    }
+
+    fn show_view_kind(
+        &mut self,
+        kind: ViewKind,
+        key: impl Into<String>,
+        name: impl Into<String>,
+        text: impl Into<String>,
+    ) -> usize {
         let key = key.into();
+        let name = name.into();
+        let text = text.into();
         if let Some(index) = self
             .tabs
             .iter()
@@ -151,12 +173,17 @@ impl Workspace {
         {
             if let Some(doc) = self.tabs.get_mut(index) {
                 doc.restore_view(text);
+                doc.set_name(name);
             }
             self.active = index;
             return index;
         }
         let id = self.take_id();
-        self.tabs.push(Document::view(id, name, text, key));
+        let doc = match kind {
+            ViewKind::Git => Document::view(id, name, text, key),
+            ViewKind::Docs => Document::docs_view(id, name, text, key),
+        };
+        self.tabs.push(doc);
         self.active = self.tabs.len() - 1;
         self.active
     }

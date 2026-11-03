@@ -102,6 +102,13 @@ impl UndoStack {
     }
 }
 
+/// Synthetic read-only views shown as normal editor tabs.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ViewKind {
+    Git,
+    Docs,
+}
+
 /// One open file (or an untitled buffer).
 #[derive(Clone, Debug)]
 pub struct Document {
@@ -128,7 +135,7 @@ pub struct Document {
     /// Git diff/commit views are read-only and are never persisted/saved.
     read_only: bool,
     view_key: Option<String>,
-    git_view: bool,
+    view_kind: Option<ViewKind>,
     preview_start: Option<usize>,
 }
 
@@ -151,7 +158,7 @@ impl Document {
             scroll_x: 0.0,
             read_only: false,
             view_key: None,
-            git_view: false,
+            view_kind: None,
             preview_start: None,
         }
     }
@@ -181,7 +188,7 @@ impl Document {
             scroll_x: 0.0,
             read_only: false,
             view_key: None,
-            git_view: false,
+            view_kind: None,
             preview_start: None,
         };
         doc.caret = floor_boundary(&doc.text, caret);
@@ -228,7 +235,7 @@ impl Document {
             scroll_x: 0.0,
             read_only: false,
             view_key: None,
-            git_view: false,
+            view_kind: None,
             preview_start: None,
         };
         doc.rebuild_lines();
@@ -248,7 +255,15 @@ impl Document {
     }
 
     pub fn is_git_view(&self) -> bool {
-        self.git_view
+        self.view_kind == Some(ViewKind::Git)
+    }
+
+    pub fn is_docs_view(&self) -> bool {
+        self.view_kind == Some(ViewKind::Docs)
+    }
+
+    pub fn view_kind(&self) -> Option<ViewKind> {
+        self.view_kind
     }
 
     pub fn preview_start(&self) -> Option<usize> {
@@ -274,9 +289,33 @@ impl Document {
         doc.dirty = false;
         doc.read_only = true;
         doc.view_key = Some(key.into());
-        doc.git_view = true;
+        doc.view_kind = Some(ViewKind::Git);
         doc.rebuild_lines();
         doc
+    }
+
+    /// A synthetic read-only editor tab for embedded Godot documentation.
+    pub fn docs_view(
+        id: u64,
+        name: impl Into<String>,
+        text: impl Into<String>,
+        key: impl Into<String>,
+    ) -> Self {
+        let mut doc = Self::untitled(id, 1);
+        doc.name = name.into();
+        doc.text = normalize(&text.into());
+        doc.caret = 0;
+        doc.anchor = 0;
+        doc.dirty = false;
+        doc.read_only = true;
+        doc.view_key = Some(key.into());
+        doc.view_kind = Some(ViewKind::Docs);
+        doc.rebuild_lines();
+        doc
+    }
+
+    pub fn set_name(&mut self, name: impl Into<String>) {
+        self.name = name.into();
     }
 
     pub fn restore_view(&mut self, text: impl Into<String>) {

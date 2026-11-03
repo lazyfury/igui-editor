@@ -1,6 +1,5 @@
 //! View modules: each one builds one control in the shell.
 
-pub mod docs;
 pub mod drop;
 pub mod editor;
 pub mod find_bar;

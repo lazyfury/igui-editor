@@ -125,13 +125,14 @@ PluginHost
   from the LSP declaration (`<Native> class ...` / `func Class.member`); the
   `gdscript/capabilities` notification supplies native class names for
   Ctrl/Cmd-click documentation. The docs panel requests
-  `textDocument/nativeSymbol`, caches the response, and renders Godot BBCode as
-  clickable class/member references (`model/bbcode.rs`, `ui/docs.rs`).
+  `textDocument/nativeSymbol`, caches the response, and renders it as a normal
+  read-only editor tab (`model/docs.rs` + `Document::ViewKind::Docs`). BBCode
+  links become byte ranges on the tab text; clicking one updates the docs tab.
   Completion activation is debounced (140 ms) and the selected item is resolved
   with `completionItem/resolve` to show a hover-style preview; native previews
-  can enter the same embedded docs, while local methods use a plain resolved
-  document. Ctrl/Cmd-click performs a hover probe for classes, methods, virtual
-  methods, globals and properties before falling back to definition. Completion is prefix-filtered before the UI
+  open the docs tab, while local methods use a plain resolved docs tab.
+  Ctrl/Cmd-click performs a hover probe for classes, methods, virtual methods,
+  globals and properties before falling back to definition. Completion is prefix-filtered before the UI
   cap so global methods such as `print` are not lost in Godot's ~2000-item
   result. Semantic tokens
   are requested on open/change and painted over the syntax pass with

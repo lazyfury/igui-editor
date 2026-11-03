@@ -6,6 +6,7 @@
 pub mod bbcode;
 pub mod brackets;
 pub mod doc;
+pub mod docs;
 pub mod find;
 pub mod fs_tree;
 pub mod fuzzy;
