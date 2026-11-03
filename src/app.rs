@@ -1177,6 +1177,17 @@ fn workspace_for(open: Option<PathBuf>, session: &Session) -> Workspace {
             let _ = workspace.open(path);
         }
     }
+    // `open` leaves the last tab active, so restore the recorded tab explicitly.
+    // Missing paths simply fall back to that last successfully opened tab.
+    if let Some(active) = session.active_tab.as_deref() {
+        if let Some(index) = workspace
+            .tabs
+            .iter()
+            .position(|doc| doc.path() == Some(active))
+        {
+            workspace.select(index);
+        }
+    }
     workspace
 }
 
@@ -1398,5 +1409,38 @@ impl AppLogic for EditorApp {
 
     fn caret(&self) -> Option<Rect> {
         self.caret()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restored_workspace_selects_the_recorded_active_tab() {
+        let dir =
+            std::env::temp_dir().join(format!("igui-editor-active-tab-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths: Vec<PathBuf> = ["a.rs", "b.rs", "c.rs"]
+            .iter()
+            .map(|name| {
+                let path = dir.join(name);
+                std::fs::write(&path, "fn main() {}\n").unwrap();
+                std::fs::canonicalize(&path).unwrap()
+            })
+            .collect();
+        let session = Session {
+            folder: Some(std::fs::canonicalize(&dir).unwrap()),
+            tabs: paths.clone(),
+            active_tab: Some(paths[1].clone()),
+            ..Session::default()
+        };
+        let workspace = workspace_for(None, &session);
+        assert_eq!(
+            workspace.active_doc().and_then(|doc| doc.path()),
+            Some(paths[1].as_path())
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

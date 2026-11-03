@@ -72,9 +72,10 @@ Not exposed: arbitrary git command strings, network/auth UI, libgit2.
 
 - `portable-pty` + `vt100`; native cell-grid renderer, no WebView/JS.
 - Font: the panel names a fixed-pitch family per text draw
-  (`src/fonts.rs`: `SF Mono` / `Menlo` / `JetBrains Mono` / …), probed against
-  the backend measurer and cached in `TerminalState`. The editor keeps the UI
-  family. The engine supports this with `DrawCommand::DrawText::family`,
+  (`src/fonts.rs`: `Monaco` / `SF Mono` / `Menlo` / `JetBrains Mono` / …), probed against
+  the backend measurer and cached in `TerminalState`. The editor uses the same
+  resolved family for narrow runs (cached in `EditorUi`) and the UI family for
+  wide glyphs. The engine supports this with `DrawCommand::DrawText::family`,
   `PaintContext::draw_text_in` and `TextMeasurer::advance_in`.
 - Cells are placed at `col * cell_w`; wide glyphs use the UI family at the same
   em and are centered in their two columns, and the parser screen (not the

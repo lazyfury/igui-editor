@@ -1490,6 +1490,34 @@ fn check(dir: &Path) -> Result<(), String> {
         }
     }
     expect(&texts(&frame), "14 px", "updated font value")?;
+    // Force an editor code face: the headless measurer is approximate and
+    // cannot resolve one on its own. Every narrow editor draw must then name
+    // it, just like the terminal does.
+    {
+        let mut state = harness.app.state_mut();
+        state.editor.font = Some("Menlo".into());
+        state.editor.font_checked = true;
+    }
+    let frame = harness.frame()?;
+    {
+        let state = harness.app.state();
+        let body = state.editor.text_rect;
+        let mut mono = 0;
+        for command in frame.commands() {
+            let DrawCommand::DrawText {
+                family, position, ..
+            } = command
+            else {
+                continue;
+            };
+            if body.contains(*position) && family.as_deref() == Some("Menlo") {
+                mono += 1;
+            }
+        }
+        if mono == 0 {
+            return Err("the editor did not draw its code face".into());
+        }
+    }
     harness.key(Key::ArrowDown); // Tab Width
     harness.key(Key::ArrowRight);
     if harness.app.state().settings.tab_width != 8 {

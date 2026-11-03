@@ -17,8 +17,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use igui_core::{Cursor, EventResult, FontWeight, ImeEvent, Key, NodeId, Rect, Size, Vec2};
-use igui_render::TextAlign;
+use igui_core::{Color, Cursor, EventResult, FontWeight, ImeEvent, Key, NodeId, Rect, Size, Vec2};
+use igui_render::{PaintContext, TextAlign};
 use igui_scene::SceneTree;
 use igui_ui::{Container, PaintEnv, PointerPhase, TextMeasurer};
 
@@ -290,14 +290,55 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
 
 // -- geometry ----------------------------------------------------------------
 
-fn gutter_width(line_count: usize, measurer: &dyn TextMeasurer, font: f32, pad: f32) -> f32 {
+fn gutter_width(
+    line_count: usize,
+    measurer: &dyn TextMeasurer,
+    font: f32,
+    pad: f32,
+    family: Option<&str>,
+) -> f32 {
     let digits = line_count.to_string().len().max(2) as f32;
-    pad * 2.0 + digits * measurer.advance('0', font) + 4.0
+    pad * 2.0 + digits * crate::fonts::advance(measurer, '0', font, family) + 4.0
 }
 
-fn x_in_line(measurer: &dyn TextMeasurer, line: &str, byte: usize, font: f32, tab: usize) -> f32 {
+fn x_in_line(
+    measurer: &dyn TextMeasurer,
+    line: &str,
+    byte: usize,
+    font: f32,
+    tab: usize,
+    family: Option<&str>,
+) -> f32 {
     let prefix = &line[..byte.min(line.len())];
-    wrap::width_of(measurer, prefix, font, tab)
+    wrap::width_of(measurer, prefix, font, tab, family)
+}
+
+/// Draws `text` with fixed-pitch narrow runs and UI-family wide runs.
+///
+/// Wide glyphs are measured and advanced in their own face, so the caret, the
+/// selection and syntax overlaps stay aligned on mixed Chinese/Latin lines.
+fn draw_text_mixed(
+    ctx: &mut PaintContext,
+    measurer: &dyn TextMeasurer,
+    text: &str,
+    pos: Vec2,
+    font: f32,
+    family: Option<&str>,
+    color: Color,
+) {
+    let mut x = pos.x;
+    for (run, run_family) in crate::fonts::family_runs(text, family) {
+        ctx.draw_text_in(
+            run,
+            Vec2::new(x, pos.y),
+            font,
+            FontWeight::NORMAL,
+            TextAlign::Left,
+            run_family,
+            color,
+        );
+        x += measurer.measure_run_weighted_in(run, font, FontWeight::NORMAL, run_family);
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -318,6 +359,8 @@ pub fn byte_at(state: &AppState, pos: Vec2, measurer: &dyn TextMeasurer) -> Opti
 
 fn hit(state: &AppState, pos: Vec2, measurer: &dyn TextMeasurer) -> Option<(usize, usize)> {
     let doc = state.ws.active_doc()?;
+    let family = state.editor.font.clone();
+    let family = family.as_deref();
     let editor = &state.editor;
     let m = state.theme.m;
     let metrics = state.editor_metrics();
@@ -330,15 +373,22 @@ fn hit(state: &AppState, pos: Vec2, measurer: &dyn TextMeasurer) -> Option<(usiz
         let wrap = &state.editor.wrap;
         let row = wrap.row(row)?;
         let line_text = doc.line(row.line);
-        let row_start_x = x_in_line(measurer, line_text, row.start_byte, metrics.font, tab);
+        let row_start_x = x_in_line(
+            measurer,
+            line_text,
+            row.start_byte,
+            metrics.font,
+            tab,
+            family,
+        );
         let x = pos.x - editor.text_rect.left() - m.text_pad - row_start_x;
         let segment = &line_text[row.start_byte..row.end_byte];
-        let column = wrap::column_at_x(measurer, segment, x, metrics.font, tab);
+        let column = wrap::column_at_x(measurer, segment, x, metrics.font, tab, family);
         return Some((row.line, row.start_col + column));
     }
     let line = row.min(doc.line_count().saturating_sub(1));
     let x = pos.x - editor.text_rect.left() - m.text_pad + doc.scroll_x;
-    let column = wrap::column_at_x(measurer, doc.line(line), x, metrics.font, tab);
+    let column = wrap::column_at_x(measurer, doc.line(line), x, metrics.font, tab, family);
     Some((line, column))
 }
 
@@ -455,6 +505,8 @@ fn move_wrapped_vertical(
     let metrics = state.editor_metrics();
     let font = metrics.font;
     let tab = metrics.tab_columns();
+    let family = state.editor.font.clone();
+    let family = family.as_deref();
     let Some(doc) = state.ws.active_doc_mut() else {
         return;
     };
@@ -496,13 +548,20 @@ fn move_wrapped_vertical(
         doc.caret() - doc.line_start(line),
         font,
         tab,
+        family,
     );
     let row_start_x = state.editor.wrap.row(current).map_or(0.0, |row| {
-        x_in_line(measurer, current_text, row.start_byte, font, tab)
+        x_in_line(measurer, current_text, row.start_byte, font, tab, family)
     });
     let target_text = &doc.line(target_row.line)[target_row.start_byte..target_row.end_byte];
-    let column_in_row =
-        wrap::column_at_x(measurer, target_text, current_x - row_start_x, font, tab);
+    let column_in_row = wrap::column_at_x(
+        measurer,
+        target_text,
+        current_x - row_start_x,
+        font,
+        tab,
+        family,
+    );
     doc.click(
         target_row.line,
         target_row.start_col + column_in_row,
@@ -525,6 +584,16 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         return;
     }
 
+    // The editor asks for the same fixed-pitch face as the terminal. Wide
+    // glyphs inside the text are still painted with `UI_FAMILY` (see
+    // `draw_text_mixed`), so this is a per-run choice, not the default face.
+    if !state.editor.font_checked {
+        state.editor.font = crate::fonts::mono_family(measurer, state.editor_metrics().font);
+        state.editor.font_checked = state.editor.font.is_some();
+    }
+    let family = state.editor.font.clone();
+    let family = family.as_deref();
+
     let metrics = state.editor_metrics();
     let line_h = metrics.line_h;
     let font = metrics.font;
@@ -536,7 +605,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         let doc = state.ws.active_doc().expect("checked above");
         (
             if show_gutter {
-                gutter_width(doc.line_count(), measurer, font, m.gutter_pad)
+                gutter_width(doc.line_count(), measurer, font, m.gutter_pad, family)
             } else {
                 0.0
             },
@@ -566,11 +635,11 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         && line_count <= wrap::MAX_WRAP_LINES;
     let wrap_width = (text_rect.width() - pad * 2.0).max(16.0);
     if wrap_enabled {
-        let key = WrapKey::new(doc_id, rev, wrap_width, font, tab);
+        let key = WrapKey::new(doc_id, rev, wrap_width, font, tab, family);
         if state.editor.wrap.key() != Some(key) {
             let layout = {
                 let doc = state.ws.active_doc().expect("checked above");
-                WrapLayout::build(doc, wrap_width, font, tab, measurer)
+                WrapLayout::build(doc, wrap_width, font, tab, family, measurer)
             };
             state.editor.wrap = layout;
         }
@@ -596,7 +665,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     if !wrap_on {
         let doc = state.ws.active_doc().expect("checked above");
         for line in first_row..=last_row {
-            widest = widest.max(wrap::width_of(measurer, doc.line(line), font, tab));
+            widest = widest.max(wrap::width_of(measurer, doc.line(line), font, tab, family));
         }
     }
     let content_w = if wrap_on {
@@ -625,10 +694,18 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             caret - doc.line_start(caret_line),
             font,
             tab,
+            family,
         ) - if wrap_on {
             let row = state.editor.wrap.row(caret_row);
             row.map_or(0.0, |row| {
-                x_in_line(measurer, doc.line(caret_line), row.start_byte, font, tab)
+                x_in_line(
+                    measurer,
+                    doc.line(caret_line),
+                    row.start_byte,
+                    font,
+                    tab,
+                    family,
+                )
             })
         } else {
             0.0
@@ -745,7 +822,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
 
     // Indent guides: one 1 px rule per indentation level of each visible line.
     if state.settings.indent_guides {
-        let space = measurer.advance(' ', font);
+        let space = crate::fonts::advance(measurer, ' ', font, family);
         env.ctx.save();
         env.ctx.clip_rect(text_rect);
         let doc = state.ws.active_doc().expect("checked above");
@@ -797,12 +874,12 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             if from > to || (from == to && !covers_newline) {
                 continue;
             }
-            let row_start_x = x_in_line(measurer, line_text, vis.start_byte, font, tab);
-            let row_end_x = x_in_line(measurer, line_text, vis.end_byte, font, tab);
+            let row_start_x = x_in_line(measurer, line_text, vis.start_byte, font, tab, family);
+            let row_end_x = x_in_line(measurer, line_text, vis.end_byte, font, tab, family);
             let x0 = if sel_start <= row_start_byte {
                 0.0
             } else {
-                x_in_line(measurer, line_text, from - line_start, font, tab) - row_start_x
+                x_in_line(measurer, line_text, from - line_start, font, tab, family) - row_start_x
             };
             let x1 = if sel_end >= row_end_byte {
                 if covers_newline {
@@ -811,7 +888,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                     row_end_x - row_start_x
                 }
             } else {
-                x_in_line(measurer, line_text, to - line_start, font, tab) - row_start_x
+                x_in_line(measurer, line_text, to - line_start, font, tab, family) - row_start_x
             };
             let y = row_y(vis.row);
             env.ctx.fill_rect(
@@ -838,8 +915,8 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             let line_end = doc.line_end(vis.line);
             let row_start_byte = line_start + vis.start_byte;
             let row_end_byte = line_start + vis.end_byte;
-            let row_start_x = x_in_line(measurer, line_text, vis.start_byte, font, tab);
-            let row_end_x = x_in_line(measurer, line_text, vis.end_byte, font, tab);
+            let row_start_x = x_in_line(measurer, line_text, vis.start_byte, font, tab, family);
+            let row_end_x = x_in_line(measurer, line_text, vis.end_byte, font, tab, family);
             let y = row_y(vis.row);
             for (index, &(match_start, match_end)) in matches.iter().enumerate() {
                 if match_start >= row_end_byte || match_end <= row_start_byte {
@@ -850,11 +927,12 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                 if from >= to {
                     continue;
                 }
-                let x0 = x_in_line(measurer, line_text, from - line_start, font, tab) - row_start_x;
+                let x0 = x_in_line(measurer, line_text, from - line_start, font, tab, family)
+                    - row_start_x;
                 let x1 = if match_end >= line_end {
                     row_end_x - row_start_x
                 } else {
-                    x_in_line(measurer, line_text, to - line_start, font, tab) - row_start_x
+                    x_in_line(measurer, line_text, to - line_start, font, tab, family) - row_start_x
                 };
                 let color = if Some(index) == current {
                     p.accent.alpha_mul(0.32)
@@ -876,7 +954,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     // Text rows.
     env.ctx.save();
     env.ctx.clip_rect(text_rect);
-    let ascent = measurer.ascent(font);
+    let ascent = measurer.ascent_in(font, family);
     let (git_view, preview_start) = {
         let doc = state.ws.active_doc().expect("checked above");
         (doc.is_git_view(), doc.preview_start())
@@ -897,7 +975,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         if scratch.is_empty() {
             continue;
         }
-        let row_start_x = x_in_line(measurer, line_text, vis.start_byte, font, tab);
+        let row_start_x = x_in_line(measurer, line_text, vis.start_byte, font, tab, family);
         let y = row_y(vis.row);
         let baseline = y + (line_h - font) * 0.5 + ascent;
         let color = if git_view && preview_start.is_none_or(|start| vis.line < start) {
@@ -905,12 +983,13 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         } else {
             p.text
         };
-        env.ctx.draw_text_weighted(
+        draw_text_mixed(
+            env.ctx,
+            measurer,
             scratch.as_str(),
             Vec2::new(text_rect.left() + pad + row_start_x - scroll_x, baseline),
             font,
-            FontWeight::NORMAL,
-            TextAlign::Left,
+            family,
             color,
         );
     }
@@ -927,7 +1006,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                 continue;
             }
             let line_text = doc.line(vis.line);
-            let row_start_x = x_in_line(measurer, line_text, vis.start_byte, font, tab);
+            let row_start_x = x_in_line(measurer, line_text, vis.start_byte, font, tab, family);
             let y = row_y(vis.row);
             let baseline = y + (line_h - font) * 0.5 + ascent;
             for token in tokens {
@@ -937,14 +1016,15 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                     continue;
                 }
                 let text = &line_text[from..to];
-                let x = x_in_line(measurer, line_text, from, font, tab) - row_start_x;
+                let x = x_in_line(measurer, line_text, from, font, tab, family) - row_start_x;
                 let drawn = wrap::expand_tabs(text, tab);
-                env.ctx.draw_text_weighted(
+                draw_text_mixed(
+                    env.ctx,
+                    measurer,
                     drawn.as_str(),
                     Vec2::new(text_rect.left() + pad + x - scroll_x, baseline),
                     font,
-                    FontWeight::NORMAL,
-                    TextAlign::Left,
+                    family,
                     theme.token_color(token.kind),
                 );
             }
@@ -1010,20 +1090,21 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                         continue;
                     }
                     let row_start_x = if wrap_on {
-                        x_in_line(measurer, line_text, vis.start_byte, font, tab)
+                        x_in_line(measurer, line_text, vis.start_byte, font, tab, family)
                     } else {
                         0.0
                     };
-                    let x =
-                        x_in_line(measurer, line_text, from - line_start, font, tab) - row_start_x;
+                    let x = x_in_line(measurer, line_text, from - line_start, font, tab, family)
+                        - row_start_x;
                     let y = row_y(vis.row);
                     let baseline = y + (line_h - font) * 0.5 + ascent;
-                    env.ctx.draw_text_weighted(
+                    draw_text_mixed(
+                        env.ctx,
+                        measurer,
                         &line_text[from - line_start..to - line_start],
                         Vec2::new(text_rect.left() + pad + x - scroll_x, baseline),
                         font,
-                        FontWeight::NORMAL,
-                        TextAlign::Left,
+                        family,
                         color,
                     );
                 }
@@ -1085,13 +1166,13 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                         continue;
                     }
                     let row_start_x = if wrap_on {
-                        x_in_line(measurer, line_text, vis.start_byte, font, tab)
+                        x_in_line(measurer, line_text, vis.start_byte, font, tab, family)
                     } else {
                         0.0
                     };
                     let end = end.min(vis.end_byte).max(start);
-                    let x0 = x_in_line(measurer, line_text, start, font, tab) - row_start_x;
-                    let x1 = x_in_line(measurer, line_text, end, font, tab) - row_start_x;
+                    let x0 = x_in_line(measurer, line_text, start, font, tab, family) - row_start_x;
+                    let x1 = x_in_line(measurer, line_text, end, font, tab, family) - row_start_x;
                     env.ctx.fill_rect(
                         Rect::from_min_size(
                             Vec2::new(text_rect.left() + pad + x0 - scroll_x, y + line_h - 2.0),
@@ -1116,7 +1197,14 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             .unwrap_or(if wrap_on { caret_row } else { line });
         let row_start_x = if wrap_on {
             state.editor.wrap.row(row).map_or(0.0, |row| {
-                x_in_line(measurer, doc.line(row.line), row.start_byte, font, tab)
+                x_in_line(
+                    measurer,
+                    doc.line(row.line),
+                    row.start_byte,
+                    font,
+                    tab,
+                    family,
+                )
             })
         } else {
             0.0
@@ -1127,23 +1215,27 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             caret - doc.line_start(line),
             font,
             tab,
+            family,
         ) - row_start_x;
         let y = row_y(row);
         let baseline = y + (line_h - font) * 0.5 + ascent;
         env.ctx.save();
         env.ctx.clip_rect(text_rect);
-        env.ctx.draw_text_weighted(
+        draw_text_mixed(
+            env.ctx,
+            measurer,
             text.as_str(),
             Vec2::new(text_rect.left() + pad + x - scroll_x, baseline),
             font,
-            FontWeight::NORMAL,
-            TextAlign::Left,
+            family,
             p.accent,
         );
+        let preedit_w =
+            crate::fonts::measure_run_weighted(measurer, &text, font, FontWeight::NORMAL, family);
         env.ctx.fill_rect(
             Rect::from_min_size(
                 Vec2::new(text_rect.left() + pad + x - scroll_x, baseline + 2.0),
-                Size::new(kit::width(measurer, &text, font).max(4.0), 1.5),
+                Size::new(preedit_w.max(4.0), 1.5),
             ),
             p.accent,
         );
@@ -1165,7 +1257,14 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         };
         let row_start_x = if wrap_on {
             state.editor.wrap.row(row).map_or(0.0, |row| {
-                x_in_line(measurer, doc.line(row.line), row.start_byte, font, tab)
+                x_in_line(
+                    measurer,
+                    doc.line(row.line),
+                    row.start_byte,
+                    font,
+                    tab,
+                    family,
+                )
             })
         } else {
             0.0
@@ -1176,6 +1275,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             caret - doc.line_start(line),
             font,
             tab,
+            family,
         ) - row_start_x;
         let y = row_y(row);
         let focused = state.focus == Focus::Editor;
@@ -1213,15 +1313,22 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             }
             let row_start_x = if wrap_on {
                 state.editor.wrap.row(row).map_or(0.0, |row| {
-                    x_in_line(measurer, doc.line(row.line), row.start_byte, font, tab)
+                    x_in_line(
+                        measurer,
+                        doc.line(row.line),
+                        row.start_byte,
+                        font,
+                        tab,
+                        family,
+                    )
                 })
             } else {
                 0.0
             };
             let offset = byte - doc.line_start(line);
-            let x = x_in_line(measurer, doc.line(line), offset, font, tab) - row_start_x;
+            let x = x_in_line(measurer, doc.line(line), offset, font, tab, family) - row_start_x;
             let ch = text[byte..].chars().next().unwrap_or(' ');
-            let width = measurer.advance(ch, font).max(2.0);
+            let width = crate::fonts::advance(measurer, ch, font, family).max(2.0);
             let y = row_y(row);
             env.ctx.fill_rect(
                 Rect::from_min_size(
@@ -1245,13 +1352,15 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             let y = row_y(vis.row);
             let baseline = y + (line_h - number_font) * 0.5 + ascent;
             let label = (vis.line + 1).to_string();
-            kit::text_right(
-                env.ctx,
-                measurer,
+            let label_w =
+                measurer.measure_run_weighted_in(&label, number_font, FontWeight::NORMAL, family);
+            env.ctx.draw_text_in(
                 &label,
-                right,
-                baseline,
+                Vec2::new(right - label_w, baseline),
                 number_font,
+                FontWeight::NORMAL,
+                TextAlign::Left,
+                family,
                 if vis.line == caret_line {
                     p.accent
                 } else {

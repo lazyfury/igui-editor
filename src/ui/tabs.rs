@@ -233,6 +233,7 @@ fn click(state: &mut AppState, pos: Vec2) {
                 state.focus = crate::state::Focus::Editor;
                 state.find.dirty = true;
                 state.sync_layout();
+                state.sync_session_tabs();
                 state.dirty = true;
             }
             state.tab_drag = Some(crate::state::TabDrag {

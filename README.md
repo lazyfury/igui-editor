@@ -210,11 +210,13 @@ The right sidebar shows LSP document symbols (`textDocument/documentSymbol`) for
 the active document. Rust files inside a Cargo project get functions, methods,
 structs/enums, fields, variables and nested items from `rust-analyzer`; GDScript
 files get functions, classes, signals, constants and variables from Godot's
-server. The list updates after edits. Clicking a row moves the caret to the
-symbol and reveals it in the editor. The left edge is a shared drag handle: drag it to resize
-(160–420 px), double-click resets to 224 px. The panel is persisted in the
-session and can be hidden from View → Outline or `⌘⌥O`. Symbols are transient
-LSP state, not saved to disk.
+server. The list updates after edits. Rows use the Explorer's tree rhythm
+(22 px rows, 13 px labels, shared marker/hover/selection painting), and the
+nearest preceding symbol to the caret is highlighted. Clicking a row moves the
+caret to the symbol and reveals it in the editor. The left edge is a shared drag
+handle: drag it to resize (160–420 px), double-click resets to 224 px. The panel
+is persisted in the session and can be hidden from View → Outline or `⌘⌥O`.
+Symbols are transient LSP state, not saved to disk.
 
 ## Terminal (`⌃\``, View → Terminal)
 
@@ -226,23 +228,26 @@ Ctrl letters, Alt prefixes, application cursor mode (vim/less) and IME candidate
 placement at the terminal cursor. The terminal requests frames while a PTY is
 alive, so full-screen programs repaint without extra input.
 
-`src/fonts.rs` is the project's font policy: the UI/editor keeps the UI family
-(PingFang SC on macOS, the system default elsewhere) while the terminal picks a
-**fixed-pitch** family at runtime (`SF Mono` / `Menlo` / `JetBrains Mono` /
-… — each candidate is accepted only if its glyph advances agree). Every cell is
+`src/fonts.rs` is the project's font policy: the editor and terminal pick a
+**fixed-pitch** family at runtime (`Monaco` / `SF Mono` / `Menlo` /
+`JetBrains Mono` / … — each candidate is accepted only if its glyph advances
+agree, and the first hit wins), while chrome and overlays keep the UI family
+(PingFang SC on macOS, the system default elsewhere). Code text draws narrow runs
+in the fixed-pitch face and wide (CJK) glyphs in the UI family at the **same
+em**; the editor measures each run with its own family so the caret, selection
+and syntax overlays stay aligned. Every terminal cell is
 painted on `body.left + col * cell_w`; narrow cells use the fixed-pitch family
-and wide (CJK) glyphs use the UI family at the **same em**, centered in their
-two columns, so `ls -l` columns, colored prompt blocks and the caret stay
-aligned without mixing regional fallback faces. This relies on the engine's
+and wide (CJK) glyphs use the UI family centered in their two columns, so
+`ls -l` columns, colored prompt blocks and the caret stay aligned without mixing
+regional fallback faces. This relies on the engine's
 per-draw font family (`DrawCommand::DrawText::family`,
-`PaintContext::draw_text_in`, `TextMeasurer::advance_in`): the terminal is the
-part of the UI that names a family, everything else uses `None`. The grid size
+`PaintContext::draw_text_in`, `TextMeasurer::advance_in`). The terminal grid size
 is always reconciled against the parser's screen, so closing and reopening the
 panel re-sizes the PTY instead of drawing a stale 80×24 screen. `Ctrl+\`` closes it
 and kills the child. Focus is visible through the caret: the active editor caret is accent and
 2 px, the inactive caret dims, and the terminal header text/cursor accent only
 while it owns keyboard focus. Editor and terminal tops have no accent rule.
-Open state and height persist in the session (v9); the shell process and screen
+Open state and height persist in the session (v10); the shell process and screen
 contents do not. Multiple sessions are a follow-up.
 
 ## macOS integration
@@ -537,10 +542,11 @@ remembered per document and the last ratio is persisted.
   original name/path and are marked dirty so the first save writes them back.
 - **Window state**: size and position are persisted and restored (skipped while
   maximized/fullscreen).
-- Session format is version 9 (`outline_width`; v8 added `outline`, v7 added
-  `keymap`, v6 added `terminal_open`, `terminal_height`; v5 added
-  `sidebar_tab`, v4 `soft_wrap`); older files still load (v1 infers the folder
-  from the first tab).
+- Session format is version 10 (`active` restores the current tab; v9 added
+  `outline_width`, v8 `outline`, v7 `keymap`, v6 `terminal_open`,
+  `terminal_height`, v5 `sidebar_tab`, v4 `soft_wrap`); older files still load
+  (v1 infers the folder from the first tab, and sessions without `active` fall
+  back to the last opened tab).
 
 ## Theme: "geek", compact, no corners
 
@@ -549,10 +555,12 @@ Not `igui_theme::DefaultTheme`. The app owns its palette and metrics
 
 - **No rounded rectangle anywhere** — every surface is a square fill with 1 px
   rules; scrollbar thumbs and carets are straight bars.
-- **One text grid** — on macOS the host defaults to **PingFang SC** so Chinese
-  renders with real glyphs instead of the engine's box-shaped symbol fallback.
-  Other hosts prefer a monospace face (JetBrains Mono / Fira Code / DejaVu Sans
-  Mono) and use the font server's per-character fallback.
+- **Monospace code, CJK-safe chrome** — the editor and terminal draw narrow
+  runs in the first installed fixed-pitch face (`Monaco` on macOS), while
+  chrome/overlays and wide CJK runs use the UI family: **PingFang SC** on macOS
+  so Chinese renders with real glyphs instead of the engine's box-shaped symbol
+  fallback, the system default elsewhere. Other hosts prefer JetBrains Mono /
+  Fira Code / DejaVu Sans Mono.
 - **Compact rhythm** — 13 px UI text / 10 px secondary text, 26 px menu bar,
   22 px rows, 22 px status bar, 8 px scrollbars; the editor defaults to 14 px
   text and scales with the font setting (11–18 px).
@@ -599,8 +607,8 @@ file**, then asserts:
 9. a sidebar click opens a file **and returns keyboard focus**; drag selection
    and wheel scrolling work,
 10. `⇧⌘L` repaints with the light palette, `⇧⌘O` retargets the sidebar root,
-    and a fresh app restores the theme, the open tab, the recent list and every
-    editor setting from the session file.
+    and a fresh app restores the theme, the open tabs and current tab, the
+    recent list and every editor setting from the session file.
 
 M3 checks: syntax token colors (keyword/function/string/comment), incremental
 re-highlight after an edit, indent guides on/off, caret bracket matching, the
@@ -663,7 +671,7 @@ src/
   model/replace.rs    replace-in-files planning/apply (conflict + open skip)
   model/fs_tree.rs    lazy sidebar tree (dirs first, hidden entries skipped)
   model/markdown.rs   Markdown event stream -> flat block model
-  model/session.rs    key=value session file (atomic write, escaping, v5)
+  model/session.rs    key=value session file (atomic write, escaping, v10)
   model/workspace.rs  tabs + file IO (open/save/move/close folder)
   model/wrap.rs       soft-wrap display rows + visual row/column mapping
   dialogs.rs          `Dialogs` trait + scripted test double
@@ -676,6 +684,7 @@ src/
   ui/problems.rs      severity-colored PROBLEMS popup and diagnostic hover
   ui/docs_view.rs     dedicated read-only docs tab view (wrap + link hit-test)
   ui/outline.rs       right document-symbol outline
+  ui/tree.rs          shared Explorer/outline tree row renderer
   ui/tree_menu.rs     file-tree context menu
   ui/settings.rs      settings + Keymap row
   ui/terminal.rs      vt100 cell renderer + terminal key encoding

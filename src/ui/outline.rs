@@ -17,8 +17,6 @@ pub const DEFAULT_WIDTH: f32 = 224.0;
 pub const MIN_WIDTH: f32 = 160.0;
 pub const MAX_WIDTH: f32 = 420.0;
 pub const HEADER_H: f32 = 28.0;
-const ROW_H: f32 = 20.0;
-const PAD: f32 = 10.0;
 
 pub fn clamp_width(width: f32) -> f32 {
     width.round().clamp(MIN_WIDTH, MAX_WIDTH)
@@ -146,7 +144,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     kit::text(
         env.ctx,
         "OUTLINE",
-        rect.left() + PAD,
+        rect.left() + crate::ui::tree::PAD,
         header.bottom() - 9.0,
         m.font_small,
         p.dim,
@@ -167,7 +165,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             env.ctx,
             env.measurer,
             &count.to_string(),
-            rect.right() - PAD,
+            rect.right() - crate::ui::tree::PAD,
             header.bottom() - 9.0,
             m.font_small,
             p.faint,
@@ -178,7 +176,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         Vec2::new(rect.left(), header.bottom()),
         Size::new(rect.width(), (rect.height() - HEADER_H).max(0.0)),
     );
-    let content_h = count as f32 * ROW_H;
+    let content_h = count as f32 * m.row_h;
     state.outline.scroll_max = (content_h - list.height()).max(0.0);
     crate::ui::scroll::clamp(&mut state.outline.scroll, state.outline.scroll_max);
     state.outline.rows.clear();
@@ -193,68 +191,91 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         kit::text(
             env.ctx,
             text,
-            rect.left() + PAD,
-            list.top() + 22.0,
-            m.font_small,
+            rect.left() + crate::ui::tree::PAD,
+            list.top() + 24.0,
+            m.font_ui,
             p.faint,
         );
         if let crate::model::lsp::LspStatus::Error(error) = state.lsp.status() {
             let error = kit::truncate(
                 env.measurer,
                 error,
-                m.font_small,
-                (rect.width() - PAD * 2.0).max(20.0),
+                m.font_ui,
+                (rect.width() - crate::ui::tree::PAD * 2.0).max(20.0),
             );
             kit::text(
                 env.ctx,
                 &error,
-                rect.left() + PAD,
-                list.top() + 42.0,
-                m.font_small,
+                rect.left() + crate::ui::tree::PAD,
+                list.top() + 46.0,
+                m.font_ui,
                 p.error,
             );
         }
         return;
     }
 
-    let first = (state.outline.scroll / ROW_H).floor().max(0.0) as usize;
-    let visible = (list.height() / ROW_H).ceil().max(1.0) as usize + 1;
+    let row_h = m.row_h;
+    // Match the Explorer's selected row to the symbol the caret is inside
+    // (the nearest preceding document symbol).
+    let caret_line = state
+        .ws
+        .active_doc()
+        .map(|doc| doc.line_col().0)
+        .unwrap_or(0);
+    let current = symbols
+        .iter()
+        .rposition(|symbol| symbol.line as usize <= caret_line);
+    let first = (state.outline.scroll / row_h).floor().max(0.0) as usize;
+    let visible = (list.height() / row_h).ceil().max(1.0) as usize + 1;
     env.ctx.save();
     env.ctx.clip_rect(list);
     for (index, symbol) in symbols.iter().enumerate().skip(first).take(visible) {
-        let y = list.top() + index as f32 * ROW_H - state.outline.scroll;
-        let row = Rect::from_min_size(Vec2::new(list.left(), y), Size::new(list.width(), ROW_H));
+        let y = list.top() + index as f32 * row_h - state.outline.scroll;
+        let row = Rect::from_min_size(Vec2::new(list.left(), y), Size::new(list.width(), row_h));
         state.outline.rows.push((index, row));
-        if state.outline.hover == Some(index) {
-            kit::fill(env.ctx, row, p.hover);
-        }
-        let color = symbol_color(symbol.kind, &p);
-        let indent = PAD + symbol.depth as f32 * 11.0;
-        kit::text(
+        let selected = current == Some(index);
+        let hovered = state.outline.hover == Some(index);
+        let color = if selected || hovered { p.text } else { p.dim };
+        crate::ui::tree::paint_row(
             env.ctx,
-            symbol_glyph(symbol.kind),
-            list.left() + indent,
-            kit::baseline(env.measurer, row, m.font_small),
-            m.font_small,
-            color,
-        );
-        let name_x = list.left() + indent + 16.0;
-        let width = (row.right() - 8.0 - name_x).max(20.0);
-        let name = kit::truncate(env.measurer, &symbol.name, m.font_small, width);
-        kit::text(
-            env.ctx,
-            &name,
-            name_x,
-            kit::baseline(env.measurer, row, m.font_small),
-            m.font_small,
-            if state.outline.hover == Some(index) {
-                p.text
-            } else {
-                p.dim
+            env.measurer,
+            row,
+            &m,
+            &p,
+            &crate::ui::tree::Row {
+                depth: symbol.depth,
+                marker: crate::ui::tree::Marker::Glyph {
+                    text: symbol_glyph(symbol.kind),
+                    color: symbol_color(symbol.kind, &p),
+                },
+                label: &symbol.name,
+                color,
+                selected,
+                hovered,
+                trailing: None,
             },
         );
     }
     env.ctx.restore();
+
+    // Match the Explorer's slim scrollbar so both trees read the same.
+    if state.outline.scroll_max > 0.0 {
+        let track = Rect::from_min_size(
+            Vec2::new(rect.right() - 4.0, list.top()),
+            Size::new(3.0, list.height()),
+        );
+        let thumb_h = (list.height() * list.height() / content_h)
+            .min(list.height())
+            .max(1.0);
+        let thumb_y = track.top()
+            + (state.outline.scroll / state.outline.scroll_max) * (track.height() - thumb_h);
+        kit::fill(
+            env.ctx,
+            Rect::from_min_size(Vec2::new(track.left(), thumb_y), Size::new(3.0, thumb_h)),
+            p.faint,
+        );
+    }
 }
 
 fn symbol_glyph(kind: u32) -> &'static str {

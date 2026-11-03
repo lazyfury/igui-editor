@@ -299,76 +299,30 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             .as_deref()
             .is_some_and(|path| path == row.path);
         let hovered = state.sidebar.hover == Some(index);
-        if selected {
-            kit::fill(env.ctx, row_rect, p.active);
-            kit::vline(env.ctx, row_rect.left(), y, y + row_h, p.accent);
-        } else if hovered {
-            kit::fill(env.ctx, row_rect, p.hover);
-        }
-
-        let indent = row_rect.left() + 10.0 + row.depth as f32 * 12.0;
-        if row.is_dir {
-            // Chevron: two 1.5 px lines, square and font-independent.
-            let cx = indent + 3.0;
-            let cy = row_rect.center().y;
-            let color = if selected { p.text } else { p.dim };
-            if row.expanded {
-                env.ctx.draw_line(
-                    Vec2::new(cx - 3.5, cy - 1.5),
-                    Vec2::new(cx, cy + 2.0),
-                    1.5,
-                    color,
-                );
-                env.ctx.draw_line(
-                    Vec2::new(cx, cy + 2.0),
-                    Vec2::new(cx + 3.5, cy - 1.5),
-                    1.5,
-                    color,
-                );
-            } else {
-                env.ctx.draw_line(
-                    Vec2::new(cx - 1.5, cy - 3.5),
-                    Vec2::new(cx + 2.0, cy),
-                    1.5,
-                    color,
-                );
-                env.ctx.draw_line(
-                    Vec2::new(cx + 2.0, cy),
-                    Vec2::new(cx - 1.5, cy + 3.5),
-                    1.5,
-                    color,
-                );
+        let marker = if row.is_dir {
+            crate::ui::tree::Marker::Chevron {
+                expanded: row.expanded,
             }
         } else {
-            // A 3x3 dot marks files; the dot turns accent for the active tab.
             let active = state
                 .ws
                 .active_doc()
                 .and_then(|doc| doc.path())
                 .is_some_and(|path| path == row.path);
-            let color = if active { p.accent } else { p.faint };
-            env.ctx.fill_rect(
-                Rect::from_min_size(
-                    Vec2::new(indent + 1.0, row_rect.center().y - 1.5),
-                    Size::new(3.0, 3.0),
-                ),
-                color,
-            );
-        }
-
-        let name_x = indent + 12.0;
+            crate::ui::tree::Marker::Dot {
+                color: if active { p.accent } else { p.faint },
+            }
+        };
         let git = if row.is_dir {
             None
         } else {
             state.git_entry_for(&row.path)
         };
-        let name = kit::truncate(
-            measurer,
-            &row.name,
-            m.font_ui,
-            row_rect.right() - name_x - if git.is_some() { 24.0 } else { 8.0 },
-        );
-        let baseline = kit::baseline(measurer, row_rect, m.font_ui);
+        let code = git.map(|entry| entry.kind.code().to_string());
+        let trailing = code
+            .as_deref()
+            .zip(git)
+            .map(|(text, entry)| (text, git_color(entry, &theme)));
         let color: Color = if selected {
             p.text
         } else if row.is_dir {
@@ -378,18 +332,22 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         } else {
             p.text
         };
-        kit::text(env.ctx, &name, name_x, baseline, m.font_ui, color);
-        if let Some(entry) = git {
-            kit::text_right(
-                env.ctx,
-                measurer,
-                &entry.kind.code().to_string(),
-                row_rect.right() - 8.0,
-                baseline,
-                m.font_small,
-                git_color(entry, &theme),
-            );
-        }
+        crate::ui::tree::paint_row(
+            env.ctx,
+            measurer,
+            row_rect,
+            &m,
+            &p,
+            &crate::ui::tree::Row {
+                depth: row.depth,
+                marker,
+                label: &row.name,
+                color,
+                selected,
+                hovered,
+                trailing,
+            },
+        );
     }
     env.ctx.restore();
 

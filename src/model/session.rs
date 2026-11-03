@@ -20,8 +20,8 @@ const MAX_RECENT: usize = 8;
 /// Persisted application state. Missing/corrupt files fall back to defaults.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Session {
-    /// Format version (currently `9`); unknown keys are ignored so older/newer
-    /// files keep loading.
+    /// Format version (currently `10`); unknown keys are ignored so
+    /// older/newer files keep loading.
     pub version: u32,
     /// `"dark"` or `"light"`.
     pub theme: String,
@@ -33,6 +33,11 @@ pub struct Session {
     pub folder: Option<PathBuf>,
     pub recent: Vec<PathBuf>,
     pub tabs: Vec<PathBuf>,
+    /// Path of the tab that was active when the session was saved.
+    ///
+    /// Stored as a path, not an index, so a missing file in `tabs` cannot shift
+    /// the restored selection onto the wrong tab.
+    pub active_tab: Option<PathBuf>,
     /// Editor font size.
     pub font: f32,
     /// Tab width in spaces.
@@ -72,7 +77,7 @@ pub struct WindowGeometry {
 impl Default for Session {
     fn default() -> Self {
         Self {
-            version: 9,
+            version: 10,
             theme: "dark".into(),
             sidebar: true,
             outline: true,
@@ -80,6 +85,7 @@ impl Default for Session {
             folder: None,
             recent: Vec::new(),
             tabs: Vec::new(),
+            active_tab: None,
             font: 13.0,
             tab: 4,
             line_numbers: true,
@@ -137,6 +143,7 @@ impl Session {
                     session.outline_width = value.parse().unwrap_or(session.outline_width)
                 }
                 "folder" => session.folder = Some(PathBuf::from(value)),
+                "active" => session.active_tab = Some(PathBuf::from(value)),
                 "font" => session.font = value.parse().unwrap_or(session.font),
                 "tab" => session.tab = value.parse().unwrap_or(session.tab),
                 "gutter" | "line_numbers" => session.line_numbers = value == "1",
@@ -208,13 +215,16 @@ impl Session {
     pub fn render(&self) -> String {
         let mut out = String::new();
         // Always write the current format; parsing older files still works.
-        out.push_str("version=9\n");
+        out.push_str("version=10\n");
         out.push_str(&format!("theme={}\n", self.theme));
         out.push_str(&format!("sidebar={}\n", u8::from(self.sidebar)));
         out.push_str(&format!("outline={}\n", u8::from(self.outline)));
         out.push_str(&format!("outline_width={}\n", self.outline_width));
         if let Some(folder) = &self.folder {
             out.push_str(&format!("folder={}\n", escape(&folder.to_string_lossy())));
+        }
+        if let Some(active) = &self.active_tab {
+            out.push_str(&format!("active={}\n", escape(&active.to_string_lossy())));
         }
         out.push_str(&format!("font={}\n", self.font));
         out.push_str(&format!("tab={}\n", self.tab));
@@ -275,8 +285,23 @@ impl Session {
     }
 
     /// Replaces the restored-tab list.
+    ///
+    /// Clears `active_tab` if it is no longer among the saved tabs.
     pub fn set_tabs(&mut self, tabs: Vec<PathBuf>) {
         self.tabs = tabs.into_iter().take(MAX_RECENT).collect();
+        if self
+            .active_tab
+            .as_ref()
+            .is_some_and(|active| !self.tabs.contains(active))
+        {
+            self.active_tab = None;
+        }
+    }
+
+    /// Records the active tab by path (or clears it for an untitled/synthetic
+    /// view).
+    pub fn set_active_tab(&mut self, active: Option<PathBuf>) {
+        self.active_tab = active.filter(|path| self.tabs.contains(path));
     }
 
     /// `dark`/`light` as the app's mode flag.
@@ -361,6 +386,7 @@ mod tests {
             folder: Some(PathBuf::from("/tmp/project")),
             recent: vec![PathBuf::from("/tmp/a=b.rs"), PathBuf::from("/tmp/c d.md")],
             tabs: vec![PathBuf::from("/tmp/a=b.rs")],
+            active_tab: Some(PathBuf::from("/tmp/a=b.rs")),
             font: 15.0,
             tab: 2,
             line_numbers: false,
@@ -409,6 +435,32 @@ mod tests {
         session.save(&path).unwrap();
         let loaded = Session::load(&path);
         assert_eq!(loaded.recent, vec![weird]);
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn active_tab_is_cleared_when_it_leaves_the_saved_tabs() {
+        let mut session = Session {
+            tabs: vec![PathBuf::from("/tmp/a.rs"), PathBuf::from("/tmp/b.rs")],
+            active_tab: Some(PathBuf::from("/tmp/b.rs")),
+            ..Session::default()
+        };
+        session.set_tabs(vec![PathBuf::from("/tmp/a.rs")]);
+        assert_eq!(session.active_tab, None);
+        session.set_tabs(vec![PathBuf::from("/tmp/a.rs"), PathBuf::from("/tmp/b.rs")]);
+        session.set_active_tab(Some(PathBuf::from("/tmp/b.rs")));
+        assert_eq!(session.active_tab, Some(PathBuf::from("/tmp/b.rs")));
+    }
+
+    #[test]
+    fn old_sessions_without_an_active_tab_load_with_none() {
+        let path = temp_path("no-active");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "version=9\ntheme=light\ntabs.0=/tmp/a.rs\n").unwrap();
+        let session = Session::load(&path);
+        assert_eq!(session.theme, "light");
+        assert_eq!(session.tabs, vec![PathBuf::from("/tmp/a.rs")]);
+        assert_eq!(session.active_tab, None);
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 

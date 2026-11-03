@@ -255,9 +255,11 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
 Rules:
 
 - zero corner radius; 1 px rules only; no shadows, no gradients, no blur;
-- one text family for the entire UI; on macOS the default is PingFang SC so
-  Chinese has real glyphs (the engine's symbol fallback otherwise paints boxes);
-  sizes are em pixels (`FontConfig::em_size`, CSS/VS Code semantics), so the
+- one UI text family for chrome and wide CJK runs; on macOS the default is
+  PingFang SC so Chinese has real glyphs (the engine's symbol fallback otherwise
+  paints boxes), while the editor and terminal draw narrow runs in a resolved
+  fixed-pitch face (Monaco first);
+- sizes are em pixels (`FontConfig::em_size`, CSS/VS Code semantics), so the
   editor, chrome and terminal share one scale;
 - dense rhythm, generous horizontal air inside rows.
 
@@ -294,9 +296,11 @@ Palette:
 | syntax comment / macro | `#55637A` / `#39E0AE` | `#93A1B1` / `#0A8F6F` |
 | syntax punctuation | `#8494A8` | `#5C6C7E` |
 
-macOS uses PingFang SC as the primary text face so Chinese has real glyphs; the
-engine's first symbol fallback is otherwise box-shaped. Non-macOS hosts prefer
-JetBrains Mono, Fira Code or DejaVu Sans Mono and use per-character fallback.
+macOS uses PingFang SC as the UI/chrome primary text face so Chinese has real
+glyphs; the engine's first symbol fallback is otherwise box-shaped. The editor
+and terminal draw narrow runs in a resolved fixed-pitch face (Monaco first) and
+wide CJK runs in that UI face, so code stays column-aligned without changing
+Chinese glyphs.
 
 ## Drag handle specification
 

@@ -638,6 +638,11 @@ pub struct EditorUi {
     pub wrap: crate::model::wrap::WrapLayout,
     /// Horizontal scroll saved when wrap turned on, restored when it turns off.
     pub wrap_scroll_x: f32,
+    /// Fixed-pitch family resolved for code text (`None` before the probe or
+    /// when no fixed-pitch face is installed).
+    pub font: Option<String>,
+    /// Whether [`EditorUi::font`] has been probed (needs the backend measurer).
+    pub font_checked: bool,
 }
 
 /// Sidebar geometry captured by the last paint.
@@ -3740,7 +3745,16 @@ impl AppState {
             .iter()
             .filter_map(|doc| doc.path().map(Path::to_path_buf))
             .collect();
+        let active = self
+            .ws
+            .active_doc()
+            .and_then(|doc| doc.path().map(Path::to_path_buf));
         self.session.set_tabs(tabs);
+        // A synthetic Git/docs view has no path: keep the last real file tab
+        // as the restored selection instead of clearing it.
+        if active.is_some() {
+            self.session.set_active_tab(active);
+        }
         self.config_dirty = true;
     }
 

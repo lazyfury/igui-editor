@@ -51,10 +51,11 @@ fn paint_hover(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut Pain
             .or_else(|| trimmed.strip_prefix("## "))
             .or_else(|| trimmed.strip_prefix("### "))
             .unwrap_or(trimmed);
+        let cleaned = clean_inline(cleaned);
         if cleaned.is_empty() {
             lines.push(String::new());
         } else {
-            wrap_line(cleaned, max_width - 20.0, measurer, font, &mut lines);
+            wrap_line(&cleaned, max_width - 20.0, measurer, font, &mut lines);
         }
     }
     let has_docs = hover.native.is_some();
@@ -260,10 +261,11 @@ fn paint_completion_preview(
             .or_else(|| trimmed.strip_prefix("## "))
             .or_else(|| trimmed.strip_prefix("### "))
             .unwrap_or(trimmed);
+        let cleaned = clean_inline(cleaned);
         if cleaned.is_empty() {
             lines.push(String::new());
         } else {
-            wrap_line(cleaned, width - 20.0, measurer, font, &mut lines);
+            wrap_line(&cleaned, width - 20.0, measurer, font, &mut lines);
         }
     }
     if lines.len() > 9 {
@@ -327,6 +329,52 @@ fn paint_completion_preview(
     }
 }
 
+/// Strips the inline Markdown that a hover/completion card does not render.
+///
+/// Godot formats a declaration as
+/// `Defined in [res://子目录/脚本.gd](file:///...percent-encoded...)`.
+/// Painting that raw would show the brackets and a long `%E4...` URL instead of
+/// the path, so links collapse to their label (which is the readable `res://`
+/// path) and inline code/emphasis lose their markers.
+fn clean_inline(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut index = 0;
+    while index < line.len() {
+        let rest = &line[index..];
+        if rest.starts_with('[') {
+            if let Some(label_end) = rest.find("](") {
+                let after_label = label_end + 2;
+                if let Some(target_end) = rest[after_label..].find(')') {
+                    let label = &rest[1..label_end];
+                    let target = &rest[after_label..after_label + target_end];
+                    let shown = if label.is_empty() { target } else { label };
+                    out.push_str(&clean_inline(shown));
+                    index += after_label + target_end + 1;
+                    continue;
+                }
+            }
+        }
+        if let Some(after) = rest.strip_prefix("**") {
+            if let Some(end) = after.find("**") {
+                out.push_str(&clean_inline(&after[..end]));
+                index += 2 + end + 2;
+                continue;
+            }
+        }
+        if let Some(after) = rest.strip_prefix('`') {
+            if let Some(end) = after.find('`') {
+                out.push_str(&after[..end]);
+                index += 1 + end + 1;
+                continue;
+            }
+        }
+        let ch = rest.chars().next().expect("index < line.len()");
+        out.push(ch);
+        index += ch.len_utf8();
+    }
+    out
+}
+
 fn wrap_line(
     line: &str,
     max_width: f32,
@@ -360,5 +408,33 @@ fn wrap_line(
     }
     if !current.is_empty() {
         out.push(current.trim_end().to_string());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn markdown_links_show_the_readable_label_not_the_encoded_url() {
+        assert_eq!(
+            clean_inline(
+                "Defined in [res://子目录/脚本.gd](file:///private/tmp/%E4%B8%AD%E6%96%87/%E8%84%9A%E6%9C%AC.gd)"
+            ),
+            "Defined in res://子目录/脚本.gd"
+        );
+    }
+
+    #[test]
+    fn inline_code_and_bold_markers_are_removed() {
+        assert_eq!(clean_inline("`func` **Node** name"), "func Node name");
+    }
+
+    #[test]
+    fn plain_text_and_chinese_are_untouched() {
+        assert_eq!(
+            clean_inline("中文路径 res://脚本.gd"),
+            "中文路径 res://脚本.gd"
+        );
     }
 }

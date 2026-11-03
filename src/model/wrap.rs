@@ -5,9 +5,13 @@
 //! tab width changes and is deliberately capped: soft wrap is a comfort feature,
 //! not a large-file renderer.
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
 use igui_ui::TextMeasurer;
 
 use super::doc::Document;
+use crate::fonts;
 
 /// Soft wrap is disabled above these limits (status bar explains the fallback).
 pub const MAX_WRAP_LINES: usize = 20_000;
@@ -20,16 +24,28 @@ pub struct WrapKey {
     width: u32,
     font: u32,
     tab: u8,
+    /// Hash of the fixed-pitch family (the UI family is implied for wide runs).
+    family: u64,
 }
 
 impl WrapKey {
-    pub fn new(doc: u64, rev: u64, width: f32, font: f32, tab: usize) -> Self {
+    pub fn new(
+        doc: u64,
+        rev: u64,
+        width: f32,
+        font: f32,
+        tab: usize,
+        family: Option<&str>,
+    ) -> Self {
+        let mut hasher = DefaultHasher::new();
+        family.hash(&mut hasher);
         Self {
             doc,
             rev,
             width: width.round().to_bits(),
             font: font.round().to_bits(),
             tab: tab.min(u8::MAX as usize) as u8,
+            family: hasher.finish(),
         }
     }
 }
@@ -115,6 +131,7 @@ impl WrapLayout {
         width: f32,
         font: f32,
         tab: usize,
+        family: Option<&str>,
         measurer: &dyn TextMeasurer,
     ) -> Self {
         let width = width.max(16.0);
@@ -130,9 +147,9 @@ impl WrapLayout {
             let mut used = 0.0_f32;
             for ch in text.chars() {
                 let advance = if ch == '\t' {
-                    measurer.advance(' ', font) * tab as f32
+                    fonts::advance(measurer, ' ', font, family) * tab as f32
                 } else {
-                    measurer.advance(ch, font)
+                    fonts::advance(measurer, ch, font, family)
                 };
                 if col > start_col && used + advance > width {
                     rows.push(Row {
@@ -162,7 +179,7 @@ impl WrapLayout {
             line_rows.push((start_index, rows.len()));
         }
         Self {
-            key: Some(WrapKey::new(doc.id(), doc.rev(), width, font, tab)),
+            key: Some(WrapKey::new(doc.id(), doc.rev(), width, font, tab, family)),
             rows,
             line_rows,
         }
@@ -184,9 +201,21 @@ pub fn expand_tabs(line: &str, tab: usize) -> String {
     out
 }
 
-pub fn width_of(measurer: &dyn TextMeasurer, text: &str, font: f32, tab: usize) -> f32 {
+pub fn width_of(
+    measurer: &dyn TextMeasurer,
+    text: &str,
+    font: f32,
+    tab: usize,
+    family: Option<&str>,
+) -> f32 {
     let display = expand_tabs(text, tab);
-    measurer.measure_run_weighted(&display, font, igui_core::FontWeight::NORMAL)
+    fonts::measure_run_weighted(
+        measurer,
+        &display,
+        font,
+        igui_core::FontWeight::NORMAL,
+        family,
+    )
 }
 
 /// Character column whose boundary is closest to `x` within `text`.
@@ -196,6 +225,7 @@ pub fn column_at_x(
     x: f32,
     font: f32,
     tab: usize,
+    family: Option<&str>,
 ) -> usize {
     if x <= 0.0 {
         return 0;
@@ -204,9 +234,9 @@ pub fn column_at_x(
     let mut column = 0;
     for ch in text.chars() {
         let advance = if ch == '\t' {
-            measurer.advance(' ', font) * tab as f32
+            fonts::advance(measurer, ' ', font, family) * tab as f32
         } else {
-            measurer.advance(ch, font)
+            fonts::advance(measurer, ch, font, family)
         };
         if x < used + advance * 0.5 {
             return column;
@@ -243,7 +273,7 @@ mod tests {
     fn long_lines_split_into_rows_with_line_mapping() {
         let doc = doc(&format!("{}\nshort\n", "abcdefghij".repeat(10)));
         let measurer = igui_ui::ApproxTextMeasurer;
-        let wrap = WrapLayout::build(&doc, 80.0, 13.0, 4, &measurer);
+        let wrap = WrapLayout::build(&doc, 80.0, 13.0, 4, None, &measurer);
         assert!(wrap.len() > doc.line_count());
         assert_eq!(wrap.line_of_row(0), Some(0));
         assert!(wrap.line_rows(0).len() > 1);

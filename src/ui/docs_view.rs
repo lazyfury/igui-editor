@@ -88,9 +88,9 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         ),
     );
     state.docs_view.body = body;
-    let key = WrapKey::new(doc.id(), doc.rev(), body.width(), font, tab);
+    let key = WrapKey::new(doc.id(), doc.rev(), body.width(), font, tab, None);
     if state.docs_view.wrap.key() != Some(key) {
-        state.docs_view.wrap = WrapLayout::build(doc, body.width(), font, tab, measurer);
+        state.docs_view.wrap = WrapLayout::build(doc, body.width(), font, tab, None, measurer);
     }
     let content_h = state.docs_view.wrap.len() as f32 * line_h;
     state.docs_view.scroll_max = (content_h - body.height()).max(0.0);
@@ -198,6 +198,7 @@ fn link_at(
         x,
         metrics.font,
         metrics.tab_columns(),
+        None,
     );
     let byte = doc.byte_at(row.line, row.start_col + column);
     state.docs_link_at(byte)
