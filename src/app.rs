@@ -289,6 +289,7 @@ impl EditorApp {
         ui::new_file::paint(&mut state, measurer.as_ref(), ctx);
         ui::project_search::paint(&mut state, measurer.as_ref(), ctx);
         ui::lsp::paint(&mut state, measurer.as_ref(), ctx);
+        ui::problems::paint(&mut state, measurer.as_ref(), ctx);
         ui::drop::paint(&state, measurer.as_ref(), ctx);
         ui::modal::paint(&mut state, measurer.as_ref(), ctx);
         ui::recovery::paint(&state, measurer.as_ref(), ctx);
@@ -319,10 +320,18 @@ impl EditorApp {
                     }
                     return EventResult::Handled;
                 }
+                if state.problems.open {
+                    match ui::problems::click(&mut state, *position) {
+                        ui::problems::Click::Jump(_) => return EventResult::Handled,
+                        ui::problems::Click::Consumed => return EventResult::Handled,
+                        ui::problems::Click::Outside => {}
+                    }
+                }
                 let definition_click = state.focus == Focus::Editor
                     && (igui_ui::modifiers(&self.tree).ctrl || igui_ui::modifiers(&self.tree).meta)
                     && state.editor.text_rect.contains(*position);
-                if state.lsp.hover.is_some() || state.lsp.completion.is_some() {
+                let lsp_chip = state.lsp_hit.contains(*position);
+                if !lsp_chip && (state.lsp.hover.is_some() || state.lsp.completion.is_some()) {
                     state.lsp.dismiss_transient();
                     state.dirty = true;
                     if !definition_click {
@@ -392,6 +401,14 @@ impl EditorApp {
                             return EventResult::Handled;
                         }
                     }
+                }
+                // Footer LSP chip: open the diagnostic message list.
+                if state.lsp_hit.contains(*position) {
+                    ui::problems::toggle(&mut state);
+                    state.menu_open = None;
+                    state.menu_hover = None;
+                    state.dirty = true;
+                    return EventResult::Handled;
                 }
                 // Footer language selector (bottom-right): a click toggles the
                 // language popup, which opens above the status bar.
@@ -489,6 +506,8 @@ impl EditorApp {
                 let sidebar = ui::sidebar::hover_at(&state, *position);
                 let language =
                     state.ws.active_doc().is_some() && state.language_hit.contains(*position);
+                let problems = ui::problems::hover_at(&state, *position);
+                let lsp_hover = state.lsp_hit.contains(*position);
                 let git_hover = ui::git::hover_rect(&state, *position);
                 if state.git.hover != git_hover {
                     state.git.hover = git_hover;
@@ -517,12 +536,16 @@ impl EditorApp {
                     || state.tabs.hover != tabs
                     || state.sidebar.hover != sidebar
                     || state.language_hover != language
+                    || state.lsp_hover != lsp_hover
+                    || state.problems.hover != problems
                 {
                     state.menubar_hover = menubar;
                     state.menu_hover = menu_hover;
                     state.tabs.hover = tabs;
                     state.sidebar.hover = sidebar;
                     state.language_hover = language;
+                    state.lsp_hover = lsp_hover;
+                    state.problems.hover = problems;
                     state.dirty = true;
                 }
                 if tab_menu_changed || tree_menu_changed {
@@ -567,6 +590,10 @@ impl EditorApp {
                 position, delta, ..
             } => {
                 let mut state = self.state.borrow_mut();
+                if state.problems.open && state.problems.rect.contains(*position) {
+                    ui::problems::wheel(&mut state, delta.y);
+                    return EventResult::Handled;
+                }
                 if state.git.detail_visible {
                     let (panel, _) = ui::git::detail_layout(&state);
                     if panel.contains(*position) {
@@ -604,6 +631,10 @@ impl EditorApp {
                     return EventResult::Handled;
                 }
                 if state.search.open && ui::project_search::on_key(&mut state, *key, modifiers) {
+                    return EventResult::Handled;
+                }
+                if state.problems.open && *key == Key::Escape {
+                    ui::problems::close(&mut state);
                     return EventResult::Handled;
                 }
                 if state.lsp_completion_key(*key) {

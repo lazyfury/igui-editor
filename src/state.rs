@@ -663,6 +663,18 @@ pub struct OutlineUi {
     pub rows: Vec<(usize, Rect)>,
 }
 
+/// LSP problems popup, anchored above the status bar.
+#[derive(Clone, Debug, Default)]
+pub struct ProblemsUi {
+    pub open: bool,
+    pub hover: Option<usize>,
+    pub rect: Rect,
+    /// Visible diagnostic index and its hit rectangle, recorded during paint.
+    pub hits: Vec<(usize, Rect)>,
+    pub scroll: f32,
+    pub scroll_max: f32,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum GitMode {
     Changes,
@@ -1021,6 +1033,7 @@ pub struct AppState {
     pub viewport: ViewportSize,
     pub sidebar: SidebarUi,
     pub outline: OutlineUi,
+    pub problems: ProblemsUi,
     pub outline_node: Option<NodeId>,
     pub outline_drag: Option<(f32, f32)>,
     pub hover_target: Option<HoverTarget>,
@@ -1088,6 +1101,9 @@ pub struct AppState {
     /// Status-bar language selector hit rect (footer, bottom right).
     pub language_hit: Rect,
     pub language_hover: bool,
+    /// Status-bar LSP summary chip; clicking it opens the problems popup.
+    pub lsp_hit: Rect,
+    pub lsp_hover: bool,
     /// Set when a settings change needs the sidebar's flex basis updated.
     pub pending_sidebar_sync: bool,
     /// A file drag is hovering the window (paints the drop overlay).
@@ -1158,6 +1174,7 @@ impl AppState {
             viewport: ViewportSize::default(),
             sidebar: SidebarUi::default(),
             outline: OutlineUi::default(),
+            problems: ProblemsUi::default(),
             outline_node: None,
             outline_drag: None,
             hover_target: None,
@@ -1227,6 +1244,8 @@ impl AppState {
             sidebar_drag: None,
             language_hit: Rect::ZERO,
             language_hover: false,
+            lsp_hit: Rect::ZERO,
+            lsp_hover: false,
             pending_sidebar_sync: false,
             drop_hover: false,
             quick_open: QuickOpenState::default(),
@@ -1815,12 +1834,35 @@ impl AppState {
             .is_none_or(|target| target.doc != doc || target.byte != byte);
         if changed {
             self.hover_leave_at = None;
+            let diagnostic = self
+                .ws
+                .active_doc()
+                .filter(|active| active.id() == doc)
+                .and_then(|active| self.lsp.diagnostic_at(active, byte));
+            let has_diagnostic = diagnostic.is_some();
+            if let Some(diagnostic) = diagnostic {
+                let label = match diagnostic.severity {
+                    1 => "ERROR",
+                    2 => "WARNING",
+                    3 => "INFO",
+                    _ => "HINT",
+                };
+                self.lsp.hover = Some(lsp::HoverUi {
+                    text: format!(
+                        "{label}  {}:{}\n{}",
+                        diagnostic.start_line + 1,
+                        diagnostic.start_char + 1,
+                        diagnostic.message
+                    ),
+                });
+                self.lsp.hover_anchor = Some(anchor);
+            }
             self.hover_target = Some(HoverTarget {
                 doc,
                 byte,
                 anchor,
                 since: Instant::now(),
-                requested: false,
+                requested: has_diagnostic,
             });
             self.dirty = true;
         }

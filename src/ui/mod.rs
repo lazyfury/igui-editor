@@ -11,6 +11,7 @@ pub mod modal;
 pub mod new_file;
 pub mod outline;
 pub mod preview;
+pub mod problems;
 pub mod project_search;
 pub mod quick_open;
 pub mod recovery;

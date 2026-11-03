@@ -117,11 +117,15 @@ PluginHost
 - **Server requests**: `workspace/configuration`, `workspace/workspaceFolders`,
   `client/registerCapability` and progress requests are answered defensively so
   a server cannot stall the UI.
-- **UI state**: diagnostics are keyed by path and painted as underlines + gutter
-  markers; semantic tokens are requested on open/change and painted over the
-  syntax pass with server-aware variable/parameter/field/type colors. Document
-  symbols feed the right outline panel. Hover and completion are transient
-  overlays. Nothing is persisted.
+- **UI state**: diagnostics are keyed by path and painted as underlines + a
+  gutter severity rail. The footer LSP chip is severity-colored and opens a
+  compact PROBLEMS popup (message, line:column, click to jump). Hovering a
+  diagnostic shows its message immediately; normal code falls back to the
+  server hover. Semantic tokens
+  are requested on open/change and painted over the syntax pass with
+  server-aware variable/parameter/field/type colors. Document symbols feed the
+  right outline panel. Hover and completion are transient overlays. Nothing is
+  persisted.
 - **Rust spec**: command `rust-analyzer`, overridable with
   `IGUI_EDITOR_RUST_ANALYZER`; stdio transport; arguments are passed directly,
   never through a shell.

@@ -1223,6 +1223,36 @@ impl LspController {
         severity_color(severity, p)
     }
 
+    /// Highest-priority diagnostic severity for a path (1 = error).
+    pub fn worst_severity(&self, path: &Path) -> Option<u32> {
+        self.diagnostics_for(path)
+            .iter()
+            .map(|diagnostic| diagnostic.severity)
+            .min()
+    }
+
+    /// Diagnostic whose range covers `byte`, if any. Used for hover cards.
+    pub fn diagnostic_at(&self, doc: &Document, byte: usize) -> Option<Diagnostic> {
+        let path = doc.path()?;
+        self.diagnostics_for(path)
+            .iter()
+            .find(|diagnostic| {
+                let start = byte_for_position(
+                    doc,
+                    diagnostic.start_line as u32,
+                    diagnostic.start_char as u32,
+                );
+                let end =
+                    byte_for_position(doc, diagnostic.end_line as u32, diagnostic.end_char as u32);
+                if start == end {
+                    byte >= start && byte <= end
+                } else {
+                    byte >= start && byte < end
+                }
+            })
+            .cloned()
+    }
+
     /// Footer summary for the active document. `None` hides the fact entirely.
     pub fn summary(&self, path: Option<&Path>) -> Option<String> {
         let path = path?;

@@ -125,9 +125,13 @@ bridge. Two built-in servers are registered:
 Install the servers separately; there is no server for loose files or
 non-project buffers.
 
-- Diagnostics are painted as severity-colored underlines and square gutter
-  markers; the footer shows `LSP 1E 2W` (or `LSP ERR` if the server cannot
-  start).
+- Diagnostics are painted as severity-colored underlines and a full-height
+  gutter severity rail. The footer chip is colored by the worst severity and
+  shows `LSP 1E 2W` (or `LSP ERR` if the server cannot start). Click the chip
+  to open **PROBLEMS**: every diagnostic with `E`/`W`, line:column and the full
+  message; click a row to jump, `Esc` or an outside click closes it. Hovering
+  an underlined diagnostic shows its message immediately; moving onto normal
+  code resumes the normal LSP hover card.
 - Semantic tokens refine the syntax pass: variables, parameters, fields,
   functions/methods, types, macros, keywords and literals get server-aware
   colors. Tokens the server does not classify keep their syntax color.
@@ -631,6 +635,7 @@ src/
   services/           native service registry + built-in plugin descriptors
   ui/git.rs           GIT sidebar tab + diff overlay + commit prompt
   ui/lsp.rs           hover card + completion list overlays
+  ui/problems.rs      severity-colored PROBLEMS popup and diagnostic hover
   ui/outline.rs       right document-symbol outline
   ui/tree_menu.rs     file-tree context menu
   ui/settings.rs      settings + Keymap row

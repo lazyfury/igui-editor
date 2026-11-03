@@ -1095,7 +1095,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                     env.ctx.fill_rect(
                         Rect::from_min_size(
                             Vec2::new(text_rect.left() + pad + x0 - scroll_x, y + line_h - 2.0),
-                            Size::new((x1 - x0).max(3.0), 1.5),
+                            Size::new((x1 - x0).max(3.0), 2.0),
                         ),
                         state.lsp.diagnostic_color(diagnostic.severity, &p),
                     );
@@ -1271,10 +1271,12 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                         .map(|diagnostic| diagnostic.severity)
                 });
             if let Some(severity) = severity {
+                // A full-height severity rail is easier to spot than the old
+                // four-pixel dot when the editor is dense.
                 env.ctx.fill_rect(
                     Rect::from_min_size(
-                        Vec2::new(gutter_rect.left() + 3.0, y + line_h * 0.5 - 2.0),
-                        Size::new(4.0, 4.0),
+                        Vec2::new(gutter_rect.left() + 1.0, y + 2.0),
+                        Size::new(3.0, (line_h - 4.0).max(3.0)),
                     ),
                     state.lsp.diagnostic_color(severity, &p),
                 );

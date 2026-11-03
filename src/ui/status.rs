@@ -29,6 +29,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     let measurer = env.measurer;
     kit::fill(env.ctx, rect, p.panel);
     kit::hline(env.ctx, rect.left(), rect.right(), rect.top(), p.border);
+    state.lsp_hit = Rect::ZERO;
 
     let baseline = kit::baseline(measurer, rect, m.font_small);
 
@@ -172,16 +173,44 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     if wrap_effective {
         facts.push("WRAP");
     }
+    let lsp_severity = state
+        .ws
+        .active_doc()
+        .and_then(|doc| doc.path())
+        .and_then(|path| state.lsp.worst_severity(path));
+    let lsp_error = matches!(state.lsp.status(), crate::model::lsp::LspStatus::Error(_));
     for fact in facts {
         let width = kit::width(measurer, fact, m.font_small);
-        kit::text(
-            env.ctx,
-            fact,
-            right - width,
-            baseline,
-            m.font_small,
-            p.faint,
-        );
+        let is_lsp = lsp.as_deref() == Some(fact);
+        let color = if is_lsp {
+            if lsp_error {
+                p.error
+            } else {
+                match lsp_severity {
+                    Some(1) => p.error,
+                    Some(2) => p.syntax.number,
+                    Some(3) => p.syntax.type_name,
+                    Some(_) => p.faint,
+                    None => p.faint,
+                }
+            }
+        } else {
+            p.faint
+        };
+        if is_lsp {
+            let hit = Rect::from_min_size(
+                Vec2::new(right - width - 4.0, rect.top()),
+                Size::new(width + 8.0, rect.height()),
+            );
+            state.lsp_hit = hit;
+            if state.lsp_hover {
+                kit::fill(env.ctx, hit, p.hover);
+            }
+            if state.problems.open {
+                kit::hline(env.ctx, hit.left(), hit.right(), hit.bottom() - 2.0, color);
+            }
+        }
+        kit::text(env.ctx, fact, right - width, baseline, m.font_small, color);
         right -= width + 16.0;
     }
     if let Some(doc) = state.ws.active_doc() {

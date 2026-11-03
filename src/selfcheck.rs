@@ -3585,6 +3585,10 @@ while True:
                 "range": {"start": {"line": 1, "character": 8}, "end": {"line": 1, "character": 18}},
                 "severity": 1,
                 "message": "fake diagnostic",
+            }, {
+                "range": {"start": {"line": 2, "character": 4}, "end": {"line": 2, "character": 10}},
+                "severity": 2,
+                "message": "fake warning",
             }],
         }})
     elif method == "textDocument/hover":
@@ -3653,14 +3657,17 @@ fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
     {
         let state = harness.app.state();
         let diagnostics = state.lsp.diagnostics_for(&path);
-        if diagnostics.len() != 1 || diagnostics[0].message != "fake diagnostic" {
+        if diagnostics.len() != 2
+            || diagnostics[0].message != "fake diagnostic"
+            || diagnostics[1].message != "fake warning"
+        {
             return Err(format!(
                 "LSP diagnostics missing: {:?} status {:?}",
                 diagnostics.len(),
                 state.lsp.status()
             ));
         }
-        if state.lsp.summary(Some(&path)).as_deref() != Some("LSP 1E 0W") {
+        if state.lsp.summary(Some(&path)).as_deref() != Some("LSP 1E 1W") {
             return Err("LSP footer summary is wrong".into());
         }
         if state.lsp.semantic_for(&path).len() != 2 {
@@ -3689,6 +3696,46 @@ fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
         )
     }) {
         return Err("LSP diagnostic underline was not painted".into());
+    }
+
+    // The footer chip opens a message list; a warning is a separate row.
+    let lsp_hit = harness.app.state().lsp_hit;
+    if lsp_hit == Rect::ZERO {
+        return Err("LSP footer chip has no hit target".into());
+    }
+    harness.click(lsp_hit.center());
+    let frame = harness.frame()?;
+    let text = texts(&frame);
+    if !text.iter().any(|text| text == "PROBLEMS")
+        || !text.iter().any(|text| text == "fake diagnostic")
+        || !text.iter().any(|text| text == "fake warning")
+    {
+        return Err("LSP problems panel did not paint the diagnostics".into());
+    }
+    let row = harness
+        .app
+        .state()
+        .problems
+        .hits
+        .first()
+        .map(|(_, row)| row.center())
+        .ok_or("LSP problems panel has no row hit target")?;
+    harness.click(row);
+    harness.frame()?;
+    if harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .is_none_or(|doc| doc.line_col().0 != 1)
+    {
+        return Err("clicking a diagnostic did not jump to its line".into());
+    }
+    if harness.app.state().problems.open {
+        return Err("LSP problems panel did not close after a jump".into());
+    }
+    if let Some(doc) = harness.app.state_mut().ws.active_doc_mut() {
+        doc.set_caret(0);
     }
 
     let frame = harness.frame()?;
@@ -3724,18 +3771,33 @@ fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
         return Err("dragging the outline handle did not widen the panel".into());
     }
 
-    // Mouse hover with a short dwell shows the same card; Ctrl+click on the
-    // text asks the server for a definition.
+    // Hovering an underlined diagnostic shows its message immediately; a
+    // normal identifier still gets the delayed server hover card.
     let frame = harness.frame()?;
-    let hover_pos = draw_position(&frame, "diagnostic")
+    let diagnostic_pos = draw_position(&frame, "diagnostic")
         .map(|pos| Vec2::new(pos.x + 2.0, pos.y - 4.0))
         .ok_or("diagnostic text was not painted for hover")?;
+    harness.event(InputEvent::PointerMove {
+        position: diagnostic_pos,
+    });
+    let frame = harness.frame()?;
+    if !texts(&frame).iter().any(|text| text == "fake diagnostic") {
+        return Err("diagnostic hover did not paint the error message".into());
+    }
+
+    let frame = harness.frame()?;
+    let hover_pos = draw_position(&frame, "main")
+        .map(|pos| Vec2::new(pos.x + 2.0, pos.y - 4.0))
+        .ok_or("hover fixture text was not painted")?;
     harness.event(InputEvent::PointerMove {
         position: hover_pos,
     });
     for _ in 0..100 {
         harness.frame()?;
-        if harness.app.state().lsp.hover.is_some() {
+        if texts(&harness.frame()?)
+            .iter()
+            .any(|text| text == "lsp hover card")
+        {
             break;
         }
         std::thread::sleep(Duration::from_millis(20));
