@@ -230,9 +230,11 @@ alive, so full-screen programs repaint without extra input.
 (PingFang SC on macOS, the system default elsewhere) while the terminal picks a
 **fixed-pitch** family at runtime (`SF Mono` / `Menlo` / `JetBrains Mono` /
 … — each candidate is accepted only if its glyph advances agree). Every cell is
-painted on `body.left + col * cell_w`, and wide (CJK) glyphs own two columns, so
-`ls -l` columns, colored prompt blocks and the caret stay aligned. This relies
-on the engine's per-draw font family (`DrawCommand::DrawText::family`,
+painted on `body.left + col * cell_w`; narrow cells use the fixed-pitch family
+and wide (CJK) glyphs use the UI family at the **same em**, centered in their
+two columns, so `ls -l` columns, colored prompt blocks and the caret stay
+aligned without mixing regional fallback faces. This relies on the engine's
+per-draw font family (`DrawCommand::DrawText::family`,
 `PaintContext::draw_text_in`, `TextMeasurer::advance_in`): the terminal is the
 part of the UI that names a family, everything else uses `None`. The grid size
 is always reconciled against the parser's screen, so closing and reopening the
@@ -551,9 +553,14 @@ Not `igui_theme::DefaultTheme`. The app owns its palette and metrics
   renders with real glyphs instead of the engine's box-shaped symbol fallback.
   Other hosts prefer a monospace face (JetBrains Mono / Fira Code / DejaVu Sans
   Mono) and use the font server's per-character fallback.
-- **Compact rhythm** — 14 px UI text / 12 px secondary text, 26 px menu bar,
+- **Compact rhythm** — 13 px UI text / 10 px secondary text, 26 px menu bar,
   22 px rows, 22 px status bar, 8 px scrollbars; the editor defaults to 14 px
-  text / 19 px lines and scales with the font setting (11–18 px).
+  text and scales with the font setting (11–18 px).
+- **Sizes are em pixels** — `FontConfig::em_size` makes every family treat the
+  requested size as its em (CSS semantics), so `14` is a 14 px em for PingFang,
+  Menlo and the terminal's mono face alike. That matches VS Code's
+  `"editor.fontSize": 14`; without the flag ab_glyph measured ascent+descent and
+  the same number produced a 10 px em on PingFang and a 12 px em on Menlo.
 - **Palette** — dark: `#0B0E13` canvas, `#0E1218` panels, `#39E0AE` phosphor
   accent, `#16362F` selection; light: `#F7F9FC` canvas, `#0A8F6F` teal accent.
 - Dark and light are separate hand-tuned palettes, not an inversion; switching

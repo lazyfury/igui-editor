@@ -31,6 +31,12 @@ use crate::theme::{Mode, Theme};
 pub fn font_config() -> FontConfig {
     let mut config = FontConfig {
         device_pixel_rasterization: true,
+        // Draw sizes are em/CSS pixels: `14` is a 14 px em for every family,
+        // so the editor matches VS Code's `fontSize: 14` and the terminal's
+        // mono face has the same em as the editor. Without this, ab_glyph
+        // treats the size as ascent+descent and PingFang at 14 renders a 10 px
+        // em while Menlo renders a 12 px em.
+        em_size: true,
         ..FontConfig::default()
     };
     #[cfg(target_os = "macos")]
@@ -198,10 +204,13 @@ mod tests {
     #[test]
     fn macos_prefers_a_cjk_primary_face() {
         let config = super::font_config();
+        assert!(config.em_size, "the app draws in em pixels");
         assert_eq!(config.default_family.as_deref(), Some("PingFang SC"));
         let server = igui_font::FontServer::load_with(config);
         let slots = server.shape("中文", 14.0, igui_core::FontWeight::NORMAL);
         assert_eq!(slots.len(), 2);
         assert!(slots.iter().all(|slot| slot.advance > 0.0));
+        // `14` is a 14 px em, so a full-width glyph advances one em.
+        assert!((slots[0].advance - 14.0).abs() < 0.2);
     }
 }

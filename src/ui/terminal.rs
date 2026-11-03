@@ -141,30 +141,14 @@ fn cell_width(measurer: &dyn TextMeasurer, font: f32, family: Option<&str>) -> f
         .max(1.0)
 }
 
-/// Draw size for a wide (two-column) cell.
+/// Left offset that centers a wide glyph in its two-column cell.
 ///
-/// The terminal's primary face is fixed-pitch, but CJK/emoji glyphs come from a
-/// fallback face whose `font_size` maps to a different em. Drawing them at the
-/// Latin size makes their advance narrower than the two cells they own, which
-/// leaves a gap after every wide glyph (the prompt read like `新 建 游 戏`).
-/// Scaling the draw size makes the advance exactly `2 * cell_w`: the glyph
-/// fills its cells, columns stay aligned, and nothing is stretched (uniform
-/// scale).
-fn wide_glyph_size(
-    measurer: &dyn TextMeasurer,
-    text: &str,
-    font: f32,
-    family: Option<&str>,
-    cell_w: f32,
-) -> f32 {
-    if text.is_empty() {
-        return font;
-    }
-    let advance = measurer.measure_run_in(text, font, family);
-    if advance <= 0.01 {
-        return font;
-    }
-    (font * (cell_w * 2.0) / advance).clamp(font * 0.5, font * 3.0)
+/// A wide glyph is drawn at the same em as everything else (font sizes must
+/// stay comparable), but its advance is narrower than two fixed-pitch columns,
+/// so the leftover space is split evenly instead of piling up on the right.
+/// The result stays inside the cell.
+fn wide_glyph_offset(advance: f32, width: f32) -> f32 {
+    ((width - advance) * 0.5).max(0.0)
 }
 
 /// Rect of cell `(row, col)` in `body`. `wide` cells span two columns.
@@ -298,20 +282,21 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                 // family: the fixed-pitch terminal face has no CJK coverage,
                 // and the generic first-covering fallback is often a
                 // Korean/Japanese face with the wrong regional glyph shapes.
-                // Scaled to two columns so it fills its cells.
-                let (draw_family, draw_font) = if cell.is_wide() {
+                // Same em as the Latin cells; centered in the two columns.
+                let (draw_family, draw_x) = if cell.is_wide() {
                     let wide_family = None;
+                    let advance = env.measurer.measure_run_in(text, font, wide_family);
                     (
                         wide_family,
-                        wide_glyph_size(env.measurer, text, font, wide_family, cell_w),
+                        rect.left() + wide_glyph_offset(advance, rect.width()),
                     )
                 } else {
-                    (family, font)
+                    (family, rect.left())
                 };
                 env.ctx.draw_text_in(
                     text,
-                    Vec2::new(rect.left(), y + line_h - 4.0),
-                    draw_font,
+                    Vec2::new(draw_x, y + line_h - 4.0),
+                    font,
                     igui_core::FontWeight::NORMAL,
                     igui_render::TextAlign::Left,
                     draw_family,
@@ -441,35 +426,11 @@ mod tests {
     }
 
     #[test]
-    fn wide_glyphs_are_scaled_to_fill_two_columns() {
-        // 12px advance in a 7.5px column: the wide glyph must grow so its
-        // advance becomes 15px (two columns), not stay 12px with a 3px gap.
-        struct Wide;
-        impl TextMeasurer for Wide {
-            fn advance(&self, _ch: char, font_size: f32) -> f32 {
-                font_size * 0.6
-            }
-            fn line_height(&self, font_size: f32) -> f32 {
-                font_size * 1.4
-            }
-            fn measure_run_in(&self, text: &str, font_size: f32, _family: Option<&str>) -> f32 {
-                // 12px at font_size 14, linear in font_size.
-                font_size
-                    * if text.chars().count() == 1 {
-                        0.857
-                    } else {
-                        0.6
-                    }
-            }
-        }
-        let size = wide_glyph_size(&Wide, "中", 14.0, Some("Menlo"), 7.5);
-        let advance = Wide.measure_run_in("中", size, Some("Menlo"));
-        assert!(
-            (advance - 15.0).abs() < 0.01,
-            "advance={advance} size={size}"
-        );
-        // Degenerate advances keep the Latin size instead of dividing by ~0.
-        assert_eq!(wide_glyph_size(&Wide, "", 14.0, None, 7.5), 14.0);
+    fn wide_glyphs_are_centered_in_two_columns() {
+        assert!((wide_glyph_offset(14.0, 16.86) - 1.43).abs() < 1e-4);
+        // A glyph wider than its cell (emoji fallback) stays at the left edge
+        // instead of moving outside the cell.
+        assert_eq!(wide_glyph_offset(20.0, 16.86), 0.0);
     }
 
     #[test]

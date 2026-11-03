@@ -176,9 +176,12 @@ pub struct Metrics {
 }
 
 impl Metrics {
+    /// Sizes are **em pixels** (see `host::font_config`), so these match CSS
+    /// sizes: `13` for chrome, `10` for secondary text. (They used to be
+    /// 18/14 while ab_glyph measured ascent+descent, i.e. 13/10 em.)
     pub const COMPACT: Self = Self {
-        font_ui: 18.0,
-        font_small: 14.0,
+        font_ui: 13.0,
+        font_small: 10.0,
         font_editor: 14.0,
         line_h: 19.0,
         row_h: 22.0,

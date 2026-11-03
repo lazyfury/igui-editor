@@ -76,8 +76,9 @@ Not exposed: arbitrary git command strings, network/auth UI, libgit2.
   the backend measurer and cached in `TerminalState`. The editor keeps the UI
   family. The engine supports this with `DrawCommand::DrawText::family`,
   `PaintContext::draw_text_in` and `TextMeasurer::advance_in`.
-- Cells are placed at `col * cell_w`; wide glyphs span two columns, and the
-  parser screen (not the cached grid) decides when to resize the parser/PTY.
+- Cells are placed at `col * cell_w`; wide glyphs use the UI family at the same
+  em and are centered in their two columns, and the parser screen (not the
+  cached grid) decides when to resize the parser/PTY.
 - One PTY worker per session; reader thread + writer; resize updates PTY and
   parser; drop kills the child. The first UI has one session and a draggable
   panel whose open/height state persists; multiple sessions are next.

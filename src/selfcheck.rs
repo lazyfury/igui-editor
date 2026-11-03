@@ -3317,25 +3317,28 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
                 continue;
             }
             cells += 1;
+            // Narrow cells start exactly on a column. Wide cells are centered
+            // inside their two columns, so their origin sits at most half a
+            // column past the grid line.
             let columns = (position.x - body.left()) / cell_w;
-            if (columns - columns.round()).abs() > 0.01 {
+            let on_grid = (columns - columns.round()).abs() <= 0.5;
+            if !on_grid {
                 return Err(format!(
-                    "terminal text is off the cell grid: x={} cell_w={cell_w} left={}",
+                    "terminal text is outside its cell: x={} cell_w={cell_w} left={}",
                     position.x,
                     body.left()
                 ));
             }
             // Narrow cells use the resolved fixed-pitch family; wide cells
-            // name the UI family (`None`) so CJK comes from the right script,
-            // and are scaled so their advance fills two columns. Without a
-            // resolved fixed-pitch family (headless measurer) every cell is
-            // `None`, so only the family check is meaningful here.
+            // name the UI family (`None`) so CJK comes from the right script.
+            // Without a resolved fixed-pitch family (headless measurer) every
+            // cell is `None`, so only the family check is meaningful here.
             if let Some(mono) = state.terminal.font.as_deref() {
                 if family.is_none() {
                     wide += 1;
-                    if *font_size <= terminal_font + 0.1 {
+                    if (*font_size - terminal_font).abs() > 0.01 {
                         return Err(format!(
-                            "wide terminal glyph {text:?} was not scaled to two columns: {font_size} (base {terminal_font})"
+                            "wide terminal glyph {text:?} changed size: {font_size} (base {terminal_font})"
                         ));
                     }
                 } else if family.as_deref() != Some(mono) {
@@ -3385,12 +3388,12 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
             cells += 1;
             match family.as_deref() {
                 Some("Menlo") => mono += 1,
-                // Wide cells deliberately use the UI family (`None`) and are
-                // scaled up so their advance fills two columns.
+                // Wide cells deliberately use the UI family (`None`) at the
+                // same size as the Latin cells.
                 None => {
-                    if *font_size <= terminal_font + 0.1 {
+                    if (*font_size - terminal_font).abs() > 0.01 {
                         return Err(format!(
-                            "wide terminal glyph {text:?} was not scaled: {font_size} (base {terminal_font})"
+                            "wide terminal glyph {text:?} changed size: {font_size} (base {terminal_font})"
                         ));
                     }
                     wide += 1;

@@ -257,13 +257,15 @@ Rules:
 - zero corner radius; 1 px rules only; no shadows, no gradients, no blur;
 - one text family for the entire UI; on macOS the default is PingFang SC so
   Chinese has real glyphs (the engine's symbol fallback otherwise paints boxes);
+  sizes are em pixels (`FontConfig::em_size`, CSS/VS Code semantics), so the
+  editor, chrome and terminal share one scale;
 - dense rhythm, generous horizontal air inside rows.
 
 Metrics (`theme::Metrics::COMPACT`):
 
 | token | value |
 |---|---|
-| UI font / small / editor | 14 / 12 / 14 px (editor configurable 11–18) |
+| UI font / small / editor | 13 / 10 / 14 px em (editor configurable 11–18) |
 | editor line / sidebar row | 19 / 22 px (default font; scales with settings) |
 | menu bar / tab strip / status | 26 / 28 / 22 px |
 | sidebar width | 232 px |
