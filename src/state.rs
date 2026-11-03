@@ -677,6 +677,26 @@ pub struct ProblemsUi {
     pub scroll_max: f32,
 }
 
+/// Embedded Godot native-symbol documentation overlay.
+#[derive(Clone, Debug, Default)]
+pub struct DocsUi {
+    pub open: bool,
+    pub class: String,
+    pub symbol: String,
+    pub data: Option<crate::model::lsp::NativeSymbol>,
+    pub loading: bool,
+    pub error: Option<String>,
+    pub scroll: f32,
+    pub scroll_max: f32,
+    pub rect: Rect,
+    pub body: Rect,
+    pub links: Vec<(crate::model::bbcode::DocLink, Rect)>,
+    /// Previous native targets, most recent last.
+    pub history: Vec<(String, String)>,
+    pub back_hit: Rect,
+    pub close_hit: Rect,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum GitMode {
     Changes,
@@ -1036,6 +1056,7 @@ pub struct AppState {
     pub sidebar: SidebarUi,
     pub outline: OutlineUi,
     pub problems: ProblemsUi,
+    pub docs: DocsUi,
     pub outline_node: Option<NodeId>,
     pub outline_drag: Option<(f32, f32)>,
     pub hover_target: Option<HoverTarget>,
@@ -1177,6 +1198,7 @@ impl AppState {
             sidebar: SidebarUi::default(),
             outline: OutlineUi::default(),
             problems: ProblemsUi::default(),
+            docs: DocsUi::default(),
             outline_node: None,
             outline_drag: None,
             hover_target: None,
@@ -1798,6 +1820,14 @@ impl AppState {
         if let Some(location) = self.lsp.take_location() {
             self.open_lsp_location(location);
         }
+        if let Some((class, symbol, data)) = self.lsp.take_native_result() {
+            if self.docs.open && self.docs.class == class && self.docs.symbol == symbol {
+                self.docs.data = Some(data);
+                self.docs.loading = false;
+                self.docs.error = None;
+                self.dirty = true;
+            }
+        }
     }
 
     fn open_lsp_location(&mut self, location: lsp::Location) {
@@ -1969,22 +1999,67 @@ impl AppState {
         self.lsp.is_native_class(word).then(|| word.to_string())
     }
 
-    /// Opens the official Godot class/member reference for `target`.
+    /// Opens an embedded Godot native-symbol document for `target`.
     pub fn open_native_docs(&mut self, target: &lsp::NativeTarget) {
-        let url = target.docs_url();
+        self.open_native_docs_at(target.class.clone(), target.symbol.clone(), true);
+    }
+
+    /// Opens a native document target, optionally pushing the current one on
+    /// the back stack.
+    pub fn open_native_docs_at(&mut self, class: String, symbol: String, push: bool) {
+        if push && self.docs.open && (self.docs.class != class || self.docs.symbol != symbol) {
+            self.docs
+                .history
+                .push((self.docs.class.clone(), self.docs.symbol.clone()));
+        }
+        let cached = self.lsp.native_symbol_cached(&class, &symbol);
+        self.docs.open = true;
+        self.docs.class = class.clone();
+        self.docs.symbol = symbol.clone();
+        self.docs.data = cached;
+        self.docs.loading = self.docs.data.is_none();
+        self.docs.error = None;
+        self.docs.scroll = 0.0;
+        self.docs.scroll_max = 0.0;
+        self.lsp.dismiss_transient();
+        if self.docs.data.is_none() && !self.lsp.request_native_symbol(&class, &symbol) {
+            self.docs.loading = false;
+            self.docs.error = Some(self.lsp_unavailable());
+        }
+        self.dirty = true;
+    }
+
+    pub fn close_native_docs(&mut self) {
+        if self.docs.open {
+            self.docs.open = false;
+            self.docs.data = None;
+            self.docs.history.clear();
+            self.docs.links.clear();
+            self.dirty = true;
+        }
+    }
+
+    pub fn native_docs_back(&mut self) {
+        if let Some((class, symbol)) = self.docs.history.pop() {
+            self.open_native_docs_at(class, symbol, false);
+        }
+    }
+
+    /// Opens a URL from a BBCode `[url]` span in the platform browser.
+    pub fn open_external_url(&mut self, url: &str) {
         let result = {
             #[cfg(target_os = "macos")]
             {
-                std::process::Command::new("open").arg(&url).spawn()
+                std::process::Command::new("open").arg(url).spawn()
             }
             #[cfg(target_os = "linux")]
             {
-                std::process::Command::new("xdg-open").arg(&url).spawn()
+                std::process::Command::new("xdg-open").arg(url).spawn()
             }
             #[cfg(target_os = "windows")]
             {
                 std::process::Command::new("cmd")
-                    .args(["/C", "start", "", &url])
+                    .args(["/C", "start", "", url])
                     .spawn()
             }
             #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
@@ -1996,8 +2071,8 @@ impl AppState {
             }
         };
         match result {
-            Ok(_) => self.status(format!("opened Godot docs for {}", target.symbol)),
-            Err(error) => self.error(format!("could not open Godot docs: {error}")),
+            Ok(_) => self.status("opened documentation link"),
+            Err(error) => self.error(format!("could not open URL: {error}")),
         }
     }
 

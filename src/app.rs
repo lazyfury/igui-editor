@@ -290,6 +290,7 @@ impl EditorApp {
         ui::project_search::paint(&mut state, measurer.as_ref(), ctx);
         ui::lsp::paint(&mut state, measurer.as_ref(), ctx);
         ui::problems::paint(&mut state, measurer.as_ref(), ctx);
+        ui::docs::paint(&mut state, measurer.as_ref(), ctx);
         ui::drop::paint(&state, measurer.as_ref(), ctx);
         ui::modal::paint(&mut state, measurer.as_ref(), ctx);
         ui::recovery::paint(&state, measurer.as_ref(), ctx);
@@ -319,6 +320,13 @@ impl EditorApp {
                         }
                     }
                     return EventResult::Handled;
+                }
+                if state.docs.open {
+                    return if ui::docs::click(&mut state, *position) {
+                        EventResult::Handled
+                    } else {
+                        EventResult::Ignored
+                    };
                 }
                 if state.problems.open {
                     match ui::problems::click(&mut state, *position) {
@@ -611,6 +619,10 @@ impl EditorApp {
                 position, delta, ..
             } => {
                 let mut state = self.state.borrow_mut();
+                if state.docs.open && state.docs.rect.contains(*position) {
+                    ui::docs::wheel(&mut state, delta.y);
+                    return EventResult::Handled;
+                }
                 if state.problems.open && state.problems.rect.contains(*position) {
                     ui::problems::wheel(&mut state, delta.y);
                     return EventResult::Handled;
@@ -652,6 +664,10 @@ impl EditorApp {
                     return EventResult::Handled;
                 }
                 if state.search.open && ui::project_search::on_key(&mut state, *key, modifiers) {
+                    return EventResult::Handled;
+                }
+                if state.docs.open && *key == Key::Escape {
+                    state.close_native_docs();
                     return EventResult::Handled;
                 }
                 if state.problems.open && *key == Key::Escape {

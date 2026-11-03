@@ -112,6 +112,17 @@ impl NativeTarget {
     }
 }
 
+/// A Godot native class/member returned by `textDocument/nativeSymbol`.
+#[derive(Clone, Debug, Default)]
+pub struct NativeSymbol {
+    pub name: String,
+    pub native_class: String,
+    pub detail: String,
+    pub documentation: String,
+    pub kind: u32,
+    pub children: Vec<NativeSymbol>,
+}
+
 #[derive(Clone, Debug)]
 pub struct HoverUi {
     pub text: String,
@@ -146,6 +157,7 @@ enum PendingKind {
     Hover,
     Completion,
     Definition,
+    NativeSymbol { class: String, symbol: String },
     Semantic(PathBuf),
     Symbols(PathBuf),
 }
@@ -609,6 +621,8 @@ pub struct LspController {
     pub completion: Option<CompletionUi>,
     completion_prefix: String,
     native_classes: HashSet<String>,
+    native_symbols: HashMap<(String, String), NativeSymbol>,
+    native_result: Option<(String, String, NativeSymbol)>,
     location: Option<Location>,
     changed: bool,
 }
@@ -639,6 +653,8 @@ impl Default for LspController {
             completion: None,
             completion_prefix: String::new(),
             native_classes: HashSet::new(),
+            native_symbols: HashMap::new(),
+            native_result: None,
             location: None,
             changed: false,
         }
@@ -777,6 +793,8 @@ impl LspController {
         self.completion = None;
         self.completion_prefix.clear();
         self.native_classes.clear();
+        self.native_symbols.clear();
+        self.native_result = None;
         self.location = None;
     }
 
@@ -861,6 +879,14 @@ impl LspController {
             }
             PendingKind::Definition => {
                 self.location = parse_location(result);
+                self.changed = true;
+            }
+            PendingKind::NativeSymbol { class, symbol } => {
+                if let Some(parsed) = parse_native_symbol(result) {
+                    self.native_symbols
+                        .insert((class.clone(), symbol.clone()), parsed.clone());
+                    self.native_result = Some((class, symbol, parsed));
+                }
                 self.changed = true;
             }
             PendingKind::Semantic(path) => {
@@ -1285,6 +1311,53 @@ impl LspController {
         self.native_classes.contains(name)
     }
 
+    /// A cached native class/member document, if already fetched.
+    pub fn native_symbol_cached(&self, class: &str, symbol: &str) -> Option<NativeSymbol> {
+        self.native_symbols
+            .get(&(class.to_string(), symbol.to_string()))
+            .cloned()
+    }
+
+    /// Fetches a native class/member document through Godot's custom
+    /// `textDocument/nativeSymbol` request.
+    pub fn request_native_symbol(&mut self, class: &str, symbol: &str) -> bool {
+        if self
+            .native_symbols
+            .contains_key(&(class.to_string(), symbol.to_string()))
+        {
+            return true;
+        }
+        if self.status != LspStatus::Ready {
+            return false;
+        }
+        let Some(client) = self.client.as_mut() else {
+            return false;
+        };
+        let id = client.request(
+            "textDocument/nativeSymbol",
+            json!({"native_class": class, "symbol_name": symbol}),
+        );
+        if let Some(id) = id {
+            self.pending.insert(
+                id,
+                (
+                    PendingKind::NativeSymbol {
+                        class: class.to_string(),
+                        symbol: symbol.to_string(),
+                    },
+                    Instant::now(),
+                ),
+            );
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn take_native_result(&mut self) -> Option<(String, String, NativeSymbol)> {
+        self.native_result.take()
+    }
+
     fn cache_native_classes(&mut self, params: &Value) {
         let Some(items) = params.get("native_classes").and_then(Value::as_array) else {
             return;
@@ -1359,6 +1432,44 @@ impl LspController {
         let warnings = diagnostics.iter().filter(|d| d.severity == 2).count();
         Some(format!("LSP {errors}E {warnings}W"))
     }
+}
+
+fn parse_native_symbol(result: &Value) -> Option<NativeSymbol> {
+    fn parse(item: &Value, depth: usize) -> Option<NativeSymbol> {
+        if depth > 8 || item.is_null() {
+            return None;
+        }
+        let name = item.get("name").and_then(Value::as_str)?.to_string();
+        let mut children = Vec::new();
+        if let Some(items) = item.get("children").and_then(Value::as_array) {
+            for child in items.iter().take(2_000) {
+                if let Some(child) = parse(child, depth + 1) {
+                    children.push(child);
+                }
+            }
+        }
+        Some(NativeSymbol {
+            name,
+            native_class: item
+                .get("native_class")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            detail: item
+                .get("detail")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            documentation: item
+                .get("documentation")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            kind: item.get("kind").and_then(Value::as_u64).unwrap_or(0) as u32,
+            children,
+        })
+    }
+    parse(result, 0)
 }
 
 fn parse_document_symbols(result: &Value) -> Vec<OutlineSymbol> {
@@ -1795,6 +1906,29 @@ mod tests {
             Some("print")
         );
         assert!(items.iter().all(|item| item.insert.starts_with("pri")));
+    }
+
+    #[test]
+    fn parses_native_symbols_and_children() {
+        let symbol = parse_native_symbol(&json!({
+            "name": "Node",
+            "native_class": "Node",
+            "detail": "class Node extends Object",
+            "documentation": "Use [method _ready].",
+            "kind": 5,
+            "children": [{
+                "name": "_ready",
+                "native_class": "Node",
+                "detail": "func Node._ready() -> void",
+                "documentation": "Ready.",
+                "kind": 6
+            }]
+        }))
+        .unwrap();
+        assert_eq!(symbol.name, "Node");
+        assert_eq!(symbol.children.len(), 1);
+        assert_eq!(symbol.children[0].name, "_ready");
+        assert_eq!(symbol.children[0].kind, 6);
     }
 
     #[test]

@@ -145,8 +145,10 @@ non-project buffers.
   identifier prefix before the UI cap, so Godot global methods such as `print`
   are found even though the server returns thousands of candidates.
 - When a hover is a Godot native class or member, the card shows **OPEN GODOT
-  DOCS**; clicking it opens the official class/member reference. Ctrl/Cmd-click
-  a native class name also opens its reference.
+  DOCS**; clicking it opens an embedded documentation panel backed by Godot's
+  `textDocument/nativeSymbol` response. The panel renders BBCode references as
+  clickable class/member links, supports Back and scrolling, and Ctrl/Cmd-click
+  a native class name opens the same panel.
 - Moving the mouse over code for about 350 ms opens the same hover card. The
   card stays while the pointer is over it, and gets a short grace period when
   the pointer leaves the editor.
@@ -624,7 +626,9 @@ src/
   keymap.rs           chord parser, profiles, user override resolver
   vim.rs              Normal/Insert/Visual key handling (Vim profile)
   syntax/pack.rs      declarative JSON language packs
-  model/lsp.rs        stdio/TCP JSON-RPC client, diagnostics, hover/completion
+  model/lsp.rs        stdio/TCP JSON-RPC client, diagnostics, hover/completion,
+                      native Godot symbols
+  model/bbcode.rs     Godot BBCode -> text spans + clickable references
   services/lsp.rs     built-in Rust language-server spec (rust-analyzer)
   services/godot.rs   built-in Godot GDScript language-server spec (TCP)
   model/recovery.rs   crash snapshots (txt + metadata)
@@ -642,6 +646,7 @@ src/
   ui/git.rs           GIT sidebar tab + diff overlay + commit prompt
   ui/lsp.rs           hover card + completion list overlays
   ui/problems.rs      severity-colored PROBLEMS popup and diagnostic hover
+  ui/docs.rs          embedded Godot native-symbol documentation
   ui/outline.rs       right document-symbol outline
   ui/tree_menu.rs     file-tree context menu
   ui/settings.rs      settings + Keymap row

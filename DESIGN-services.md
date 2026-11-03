@@ -124,7 +124,9 @@ PluginHost
   server hover. Godot native hovers expose an **OPEN GODOT DOCS** action built
   from the LSP declaration (`<Native> class ...` / `func Class.member`); the
   `gdscript/capabilities` notification supplies native class names for
-  Ctrl/Cmd-click documentation. Completion is prefix-filtered before the UI
+  Ctrl/Cmd-click documentation. The docs panel requests
+  `textDocument/nativeSymbol`, caches the response, and renders Godot BBCode as
+  clickable class/member references (`model/bbcode.rs`, `ui/docs.rs`). Completion is prefix-filtered before the UI
   cap so global methods such as `print` are not lost in Godot's ~2000-item
   result. Semantic tokens
   are requested on open/change and painted over the syntax pass with

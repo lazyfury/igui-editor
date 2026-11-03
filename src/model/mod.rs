@@ -3,6 +3,7 @@
 //! Everything here is unit-tested with `cargo test`; the UI layer is a view
 //! over it.
 
+pub mod bbcode;
 pub mod brackets;
 pub mod doc;
 pub mod find;

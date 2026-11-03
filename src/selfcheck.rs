@@ -3610,6 +3610,18 @@ while True:
         items += [{"label": "filler_%d" % i, "insertText": "filler_%d" % i} for i in range(300)]
         items += [{"label": "print(…)", "insertText": "print", "detail": "fake global"}]
         send({"jsonrpc": "2.0", "id": request_id, "result": {"items": items}})
+    elif method == "textDocument/nativeSymbol":
+        send({"jsonrpc": "2.0", "id": request_id, "result": {
+            "name": "Node", "native_class": "Node",
+            "detail": "class Node extends Object",
+            "documentation": "Use [method _ready] and [member Node.name].",
+            "kind": 5,
+            "children": [{
+                "name": "_ready", "native_class": "Node",
+                "detail": "func Node._ready() -> void",
+                "documentation": "Ready.", "kind": 6,
+            }],
+        }})
     elif method == "textDocument/definition":
         uri = params["textDocument"]["uri"]
         send({"jsonrpc": "2.0", "id": request_id, "result": [{
@@ -3971,6 +3983,43 @@ fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
         return Err("native hover did not paint the docs action".into());
     }
     harness.app.state_mut().lsp.dismiss_transient();
+
+    // Embedded Godot docs use the nativeSymbol response and BBCode links.
+    {
+        let target = crate::model::lsp::NativeTarget {
+            class: "Node".into(),
+            symbol: "Node".into(),
+            kind: crate::model::lsp::NativeDocKind::Class,
+        };
+        harness.app.state_mut().open_native_docs(&target);
+    }
+    for _ in 0..100 {
+        harness.frame()?;
+        if harness.app.state().docs.data.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let frame = harness.frame()?;
+    {
+        let state = harness.app.state();
+        if state.docs.data.is_none() {
+            return Err("nativeSymbol request did not fill the docs panel".into());
+        }
+        if !texts(&frame).iter().any(|text| text == "GODOT DOCS") {
+            return Err("embedded Godot docs overlay was not painted".into());
+        }
+        if !state
+            .docs
+            .links
+            .iter()
+            .any(|(link, _)| matches!(link, crate::model::bbcode::DocLink::Native { .. }))
+        {
+            return Err("native docs did not produce clickable BBCode links".into());
+        }
+    }
+    harness.app.state_mut().close_native_docs();
+    harness.frame()?;
 
     // Definition: F12 returns a location in the same file.
     harness.key(Key::F12);
