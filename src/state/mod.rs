@@ -295,7 +295,9 @@ impl Action {
             Action::ClearRecent => !state.session.recent.is_empty(),
             Action::NextTab | Action::PreviousTab => state.ws.tabs.len() > 1,
             Action::SelectTab(slot) => {
-                !state.ws.tabs.is_empty() && (*slot >= 9 || *slot <= state.ws.tabs.len())
+                *slot >= 1
+                    && !state.ws.tabs.is_empty()
+                    && (*slot >= 9 || *slot <= state.ws.tabs.len())
             }
         }
     }
@@ -1377,6 +1379,8 @@ mod tests {
         assert_eq!(state.ws.active, 2, "previous wraps");
         state.run(Action::SelectTab(8));
         assert_eq!(state.ws.active, 2, "out-of-range slots are no-ops");
+        state.run(Action::SelectTab(0));
+        assert_eq!(state.ws.active, 2, "slot 0 is ignored, not an underflow");
     }
 
     #[test]

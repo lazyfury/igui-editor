@@ -243,8 +243,14 @@ impl AppState {
             Action::SelectTab(slot) => {
                 let len = self.ws.tabs.len();
                 if len > 0 {
-                    let index = if slot >= 9 { len - 1 } else { slot - 1 };
-                    self.activate_tab(index);
+                    let index = if slot >= 9 {
+                        Some(len - 1)
+                    } else {
+                        slot.checked_sub(1)
+                    };
+                    if let Some(index) = index {
+                        self.activate_tab(index);
+                    }
                 }
             }
         }
