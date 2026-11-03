@@ -26,6 +26,35 @@ pub fn render(symbol: &NativeSymbol) -> RenderedDocs {
     };
     rendered.text.push_str("GODOT DOCS\n");
     rendered.text.push_str("==========\n\n");
+    if !symbol.native_class.is_empty() {
+        rendered.text.push_str("Class: ");
+        let start = rendered.text.len();
+        rendered.text.push_str(&symbol.native_class);
+        rendered.links.push((
+            start,
+            rendered.text.len(),
+            DocLink::Native {
+                class: symbol.native_class.clone(),
+                symbol: symbol.native_class.clone(),
+            },
+        ));
+        rendered.text.push('\n');
+        if symbol.name != symbol.native_class {
+            rendered.text.push_str("Member: ");
+            let start = rendered.text.len();
+            rendered.text.push_str(&symbol.name);
+            rendered.links.push((
+                start,
+                rendered.text.len(),
+                DocLink::Native {
+                    class: symbol.native_class.clone(),
+                    symbol: symbol.name.clone(),
+                },
+            ));
+            rendered.text.push('\n');
+        }
+        rendered.text.push('\n');
+    }
     rendered.text.push_str(&title);
     rendered.text.push_str("\n\n");
     let spans = bbcode::parse(&symbol.documentation, &symbol.native_class);
@@ -123,6 +152,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn member_docs_link_back_to_their_native_class() {
+        let symbol = NativeSymbol {
+            name: "print".into(),
+            native_class: "@GlobalScope".into(),
+            detail: "func @GlobalScope.print(...) -> void".into(),
+            documentation: String::new(),
+            kind: 6,
+            children: Vec::new(),
+        };
+        let rendered = render(&symbol);
+        assert!(rendered.text.contains("Class: @GlobalScope"));
+        assert!(rendered.links.iter().any(|(_, _, link)| {
+            matches!(link, DocLink::Native { class, symbol }
+                if class == "@GlobalScope" && symbol == "@GlobalScope")
+        }));
+    }
+
+    #[test]
     fn renders_text_and_link_ranges() {
         let symbol = NativeSymbol {
             name: "Node".into(),
@@ -143,7 +190,9 @@ mod tests {
         assert!(rendered.text.contains("GODOT DOCS"));
         assert!(rendered.text.contains("class Node extends Object"));
         assert!(rendered.text.contains("METHODS (1)"));
-        assert_eq!(rendered.links.len(), 3);
+        assert!(rendered.links.iter().any(|(_, _, link)| {
+            matches!(link, DocLink::Native { class, symbol } if class == "Node" && symbol == "Node")
+        }));
         for (start, end, _) in &rendered.links {
             assert!(*start < *end && *end <= rendered.text.len());
         }

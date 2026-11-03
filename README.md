@@ -152,9 +152,10 @@ non-project buffers.
   DOCS**; clicking it opens a **read-only editor tab** backed by Godot's
   `textDocument/nativeSymbol` response. The tab uses the normal file-tab strip,
   title, scrolling and close behavior, and renders BBCode references as
-  clickable class/member links. Ctrl/Cmd-clicking any native symbol (class,
-  method, virtual method, global function or property) opens the same tab; the
-  completion preview offers the same docs action. `_ready` and other local completion
+  clickable class/member links. Member pages include a `Class: @GlobalScope`
+  style breadcrumb linking back to the owning class. Ctrl/Cmd-clicking any
+  native symbol (class, method, virtual method, global function or property)
+  opens the same tab; the completion preview offers the same docs action. `_ready` and other local completion
   items can open their resolved documentation as a plain embedded document.
 - Moving the mouse over code for about 350 ms opens the same hover card. The
   card stays while the pointer is over it, and gets a short grace period when
