@@ -105,9 +105,11 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             p.border,
         );
 
+        // Generous hit target: the painted glyph stays small, but the whole
+        // right edge of the tab (24 × tab height) is clickable.
         let close = Rect::from_min_size(
-            Vec2::new(tab.right() - 22.0, tab.center().y - 7.0),
-            Size::new(14.0, 14.0),
+            Vec2::new(tab.right() - 26.0, tab.top()),
+            Size::new(24.0, tab.height()),
         );
         let name_reserved = close.left() - tab.left() - 14.0;
         let name = state.ws.tabs[index].name().to_string();
@@ -187,7 +189,8 @@ fn click(state: &mut AppState, pos: Vec2) {
     let hits = state.tabs.hits.clone();
     for (index, tab, close) in hits {
         if tab.contains(pos) {
-            if close.contains(pos) {
+            let closable = index == state.ws.active || state.tabs.hover == Some(index);
+            if close.contains(pos) && closable {
                 state.request_close_tab(index);
             } else if state.ws.active != index {
                 state.ws.select(index);

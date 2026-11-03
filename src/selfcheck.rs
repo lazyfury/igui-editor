@@ -215,6 +215,51 @@ fn check(dir: &Path) -> Result<(), String> {
         if !state.title.contains("main.rs") {
             return Err(format!("window title missing the file: {}", state.title));
         }
+        let (_, _, close) = state
+            .tabs
+            .hits
+            .first()
+            .ok_or("the active tab has no hit rect")?;
+        if close.width() < 24.0 || close.height() < 24.0 {
+            return Err(format!(
+                "tab close target too small: {}×{}",
+                close.width(),
+                close.height()
+            ));
+        }
+    }
+    // The close target reaches the tab's top edge, not just the painted glyph.
+    let tabs_before = harness.app.state().ws.tabs.len();
+    harness.shortcut(
+        Key::Character('n'),
+        Modifiers {
+            meta: true,
+            ..Modifiers::NONE
+        },
+    );
+    harness.frame()?;
+    if harness.app.state().ws.tabs.len() != tabs_before + 1 {
+        return Err("⌘N did not add a tab".into());
+    }
+    {
+        let state = harness.app.state();
+        let active = state.ws.active;
+        let (_, tab, close) = state
+            .tabs
+            .hits
+            .iter()
+            .find(|(index, _, _)| *index == active)
+            .ok_or("the new tab has no hit rect")?;
+        let edge = Vec2::new(close.left() + 2.0, tab.top() + 2.0);
+        if !close.contains(edge) {
+            return Err("the close target does not start at the tab's top edge".into());
+        }
+        drop(state);
+        harness.click(edge);
+    }
+    harness.frame()?;
+    if harness.app.state().ws.tabs.len() != tabs_before {
+        return Err("clicking the tab's top-right corner did not close it".into());
     }
 
     // -- typing, save, undo/redo ----------------------------------------
@@ -347,6 +392,20 @@ fn check(dir: &Path) -> Result<(), String> {
         if !state.find.open || state.focus != Focus::Find {
             return Err("⌘F did not open the find bar with the query focused".into());
         }
+    }
+    // The host also emits committed text for ⌘F ("f") before the modifiers are
+    // released; that must not land in the freshly focused query field.
+    harness.event(InputEvent::ModifiersChanged(Modifiers {
+        meta: true,
+        ..Modifiers::NONE
+    }));
+    harness.type_text("f");
+    harness.event(InputEvent::ModifiersChanged(Modifiers::NONE));
+    if !harness.app.state().find.query.text().is_empty() {
+        return Err(format!(
+            "⌘F leaked the accelerator key into the query: {:?}",
+            harness.app.state().find.query.text()
+        ));
     }
     harness.type_text("typed");
     let frame = harness.frame()?;

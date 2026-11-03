@@ -391,6 +391,14 @@ impl EditorApp {
                 igui_ui::route_input(&mut self.tree, event)
             }
             InputEvent::TextInput { text } => {
+                // The host emits `TextInput` for character keys even while Cmd/Ctrl
+                // is held (e.g. ⌘F also arrives as text "f"). Accelerator keys are
+                // commands, never text. Ctrl+Alt is AltGr on Windows, so that stays
+                // text.
+                let modifiers = igui_ui::modifiers(&self.tree);
+                if modifiers.meta || (modifiers.ctrl && !modifiers.alt) {
+                    return EventResult::Handled;
+                }
                 let mut state = self.state.borrow_mut();
                 if state.settings_open || state.recovery_prompt.is_some() {
                     return EventResult::Handled;
