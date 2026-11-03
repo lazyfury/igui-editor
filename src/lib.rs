@@ -47,6 +47,7 @@ pub mod theme;
 pub mod drop;
 pub mod fonts;
 pub mod host;
+#[cfg(feature = "selfcheck")]
 pub mod selfcheck;
 
 mod app;

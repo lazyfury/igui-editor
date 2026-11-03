@@ -7,6 +7,10 @@ packaging/package-macos.sh
 open dist/igui-editor.app
 ```
 
+The script builds with `--no-default-features`: the headless self-check,
+recording backend and profiler are development-only and are not linked into the
+shipped bundle. Release uses fat LTO, `panic = "abort"` and stripped symbols.
+
 Outputs:
 
 - `dist/igui-editor.app` — ad-hoc signed app bundle (run locally);

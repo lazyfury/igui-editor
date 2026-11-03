@@ -11,11 +11,14 @@
 //! [`ScriptedDialogs`], whose answers are queued in advance, so a test never
 //! opens an OS window.
 
+#[cfg(any(test, feature = "selfcheck"))]
 use std::cell::RefCell;
+#[cfg(any(test, feature = "selfcheck"))]
 use std::collections::VecDeque;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+#[cfg(any(test, feature = "selfcheck"))]
 use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 
@@ -41,6 +44,7 @@ pub trait Dialogs {
 }
 
 /// Which dialog a scripted call consumed.
+#[cfg(any(test, feature = "selfcheck"))]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Call {
     OpenFile,
@@ -48,6 +52,7 @@ pub enum Call {
     SaveFile,
 }
 
+#[cfg(any(test, feature = "selfcheck"))]
 #[derive(Default)]
 struct ScriptedState {
     results: VecDeque<Option<PathBuf>>,
@@ -58,11 +63,13 @@ struct ScriptedState {
 ///
 /// Cloneable and shared, so the test keeps a handle to push answers and inspect
 /// the calls while `EditorApp` owns the `dyn Dialogs` box.
+#[cfg(any(test, feature = "selfcheck"))]
 #[derive(Clone, Default)]
 pub struct ScriptedDialogs {
     state: Rc<RefCell<ScriptedState>>,
 }
 
+#[cfg(any(test, feature = "selfcheck"))]
 impl ScriptedDialogs {
     pub fn new(results: Vec<Option<PathBuf>>) -> Self {
         let dialogs = Self::default();
@@ -88,6 +95,7 @@ impl ScriptedDialogs {
     }
 }
 
+#[cfg(any(test, feature = "selfcheck"))]
 impl Dialogs for ScriptedDialogs {
     fn open_file(&mut self, _start: Option<&Path>) -> DialogFuture {
         self.next(Call::OpenFile)

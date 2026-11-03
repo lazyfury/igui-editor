@@ -30,7 +30,8 @@ for tool in cargo sips iconutil plutil codesign; do
 done
 
 echo "==> release build ($VERSION)"
-cargo build --release --locked
+# Shipped bundles do not link the headless self-check recorder/profiler.
+cargo build --release --locked --no-default-features
 
 echo "==> icon"
 "$ROOT/packaging/build-icon.sh" "$ROOT/packaging/icon.png" "$ICON"

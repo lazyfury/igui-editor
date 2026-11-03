@@ -15,6 +15,17 @@ path = "src/lib.rs"
 name = "igui-editor"
 path = "src/main.rs"
 
+[features]
+# The headless self-check is a development/verification seam. Release bundles
+# are built with `--no-default-features` so the recorder, profiler and headless
+# host are not linked into the shipped binary.
+default = ["selfcheck"]
+selfcheck = [
+    "dep:igui_backend_recording",
+    "dep:igui_headless",
+    "dep:igui_profile",
+]
+
 [dependencies]
 # The UI is built on the workspace's backend-neutral layers (path deps: this
 # app lives outside the igui checkout and never modifies it).
@@ -33,9 +44,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 winit = "0.30"
 # Headless pipeline: `--selfcheck` records the DrawList and asserts on it.
-igui_headless = { path = "../igui/crates/app/igui_headless" }
-igui_backend_recording = { path = "../igui/crates/platform/recording/igui_backend_recording" }
-igui_profile = { path = "../igui/crates/debug/igui_profile" }
+igui_headless = { path = "../igui/crates/app/igui_headless", optional = true }
+igui_backend_recording = { path = "../igui/crates/platform/recording/igui_backend_recording", optional = true }
+igui_profile = { path = "../igui/crates/debug/igui_profile", optional = true }
 portable-pty = "0.9"
 vt100 = "0.18"
 # Native file dialogs (M2). `rfd` keeps its platform backend behind cfg:
@@ -70,3 +81,34 @@ rfd = { version = "0.15", default-features = false }
 # Independent app: not a member of the igui workspace, so the engine's gate
 # stays untouched. It only consumes the crates above through path deps.
 [workspace]
+
+# Release: one codegen unit + fat LTO for runtime, stripped symbols and abort
+# panics for a smaller bundle. The headless self-check is not part of the
+# shipped bundle (see the `selfcheck` feature).
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
+# Keep the app's hot paths at `opt-level = 3`; size-optimize dependency code
+# (wgpu, winit, parser crates) where steady-state throughput matters less.
+[profile.release.package."*"]
+opt-level = "s"
+[profile.release.package.igui_app]
+opt-level = 3
+[profile.release.package.igui_backend_wgpu]
+opt-level = 3
+[profile.release.package.igui_core]
+opt-level = 3
+[profile.release.package.igui_font]
+opt-level = 3
+[profile.release.package.igui_render]
+opt-level = 3
+[profile.release.package.igui_scene]
+opt-level = 3
+[profile.release.package.igui_ui]
+opt-level = 3
+[profile.release.package.igui_winit]
+opt-level = 3

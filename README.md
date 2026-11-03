@@ -57,7 +57,9 @@ cargo run --release -- /path/to/godot_project # open a Godot project folder
 A self-check runs the same UI headlessly (no screenshots required):
 
 ```bash
-cargo run --release -- --selfcheck
+cargo run -- --selfcheck
+# Release binaries omit the recorder by default; opt in when needed:
+cargo run --release --features selfcheck -- --selfcheck
 ```
 
 ## Package the macOS app
@@ -73,6 +75,29 @@ ad-hoc signs it, and writes a versioned `.zip` next to it. See
 [`packaging/README.md`](packaging/README.md) for icon-only
 regeneration, bundle IDs, version/build overrides, and Developer ID/notarization
 notes. `dist/` is git-ignored.
+
+## Performance & bundle size
+
+Release builds are tuned for both runtime and distribution:
+
+- `lto = "fat"`, one codegen unit, `panic = "abort"`, symbols stripped;
+- the app and `igui_*` crates stay at `opt-level = 3`; third-party dependencies
+  (wgpu/winit/parser crates) use `opt-level = "s"`;
+- `packaging/package-macos.sh` builds with `--no-default-features`, so the
+  headless recorder, profiler and `igui_headless` are not linked into the app.
+
+Measured on macOS arm64 for 0.1.0:
+
+| Artifact | Before | After |
+|---|---|---|
+| `target/release/igui-editor` | 9.1 MB | **4.0 MB** |
+| `dist/igui-editor.app` | 10 MB | **5.0 MB** |
+| `dist/*.zip` | 4.1 MB | **2.9 MB** |
+
+Quick Open also builds its workspace-relative and lowercase path tables once
+when the index is created. Typing no longer rebuilds 20k `PathBuf`/`String`
+values per keystroke; the 20k-file benchmark is ~1.4× faster and allocates only
+the capped result paths.
 
 `⌘O` / `⇧⌘O` / `⇧⌘S` use the **native** file dialogs (macOS `NSOpenPanel` /
 `NSSavePanel` sheets, Linux XDG portal, Windows common dialogs). They are
@@ -589,6 +614,7 @@ Not `igui_theme::DefaultTheme`. The app owns its palette and metrics
 
 ```bash
 scripts/check.sh                            # fmt + clippy + tests + self-check
+scripts/check.sh --release                  # also builds the shipped binary
 ```
 
 Or individually:
@@ -596,6 +622,7 @@ Or individually:
 ```bash
 cargo test                                  # model: caret, undo, find, markdown, session, FS tree
 cargo run -- --selfcheck                    # headless DrawList assertions
+cargo run --release --features selfcheck -- --selfcheck  # same, optimized
 ```
 
 `--selfcheck` drives the real app (update -> layout -> paint -> record) into

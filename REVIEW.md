@@ -63,6 +63,27 @@ Scope is deliberately small and independently verifiable.
 - [ ] Manual visual pass on a macOS window (menu hint spacing, arrow highlight)
       before release; not available in the headless test environment.
 
+## Improvement cycle 2: performance & bundle
+
+Findings and fixes:
+
+| Priority | Finding | Fix |
+|---|---|---|
+| P1 | Release used the default profile: no LTO, symbols retained, and the headless recorder/profiler were linked into every shipped binary. | Fat LTO, one codegen unit, `panic = "abort"`, stripped symbols; `selfcheck` became a feature and packaging builds `--no-default-features`. |
+| P1 | Quick Open rebuilt workspace-relative and lowercase path strings for every file on every keystroke (20k files → ~60k allocations per keypress). | `FileIndex` caches `displays` and `lower`; query scores borrowed data and clones only the capped results. |
+| P2 | Dependency code was optimized for speed even where bundle size dominates. | `opt-level = "s"` for third-party packages; app and `igui_*` stay at `opt-level = 3`. |
+
+Acceptance:
+
+- [x] `scripts/check.sh` passes (fmt, clippy, 175 tests, selfcheck).
+- [x] `cargo build --release --no-default-features` is warning-free.
+- [x] `target/release/igui-editor`: 9.1 MB → 4.0 MB; `.app` 10 MB → 5.0 MB;
+      `.zip` 4.1 MB → 2.9 MB.
+- [x] Quick Open 20k-file query benchmark: ~1.4× faster, no per-file path
+      clones while scoring.
+- [x] Packaged `.app` launches and `--version` / `--help` work; the release
+      binary still opens the GUI (startup smoke test).
+
 ## Next candidates
 
 - Split `selfcheck.rs` by feature; report the failing check by name.

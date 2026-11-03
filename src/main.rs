@@ -14,8 +14,10 @@
 
 use std::path::PathBuf;
 
+use igui_editor::host;
+#[cfg(feature = "selfcheck")]
+use igui_editor::selfcheck;
 use igui_editor::theme::Mode;
-use igui_editor::{host, selfcheck};
 
 const HELP: &str = "\
 igui-editor — a compact text/Markdown editor built on igui
@@ -51,11 +53,21 @@ fn main() {
             "--light" => mode = Some(Mode::Light),
             "--dark" => mode = Some(Mode::Dark),
             "--selfcheck" => {
-                if let Err(message) = selfcheck::run() {
-                    eprintln!("selfcheck failed: {message}");
-                    std::process::exit(1);
+                #[cfg(feature = "selfcheck")]
+                {
+                    if let Err(message) = selfcheck::run() {
+                        eprintln!("selfcheck failed: {message}");
+                        std::process::exit(1);
+                    }
+                    return;
                 }
-                return;
+                #[cfg(not(feature = "selfcheck"))]
+                {
+                    eprintln!(
+                        "--selfcheck is not available in this build (enable the `selfcheck` feature)"
+                    );
+                    std::process::exit(2);
+                }
             }
             "-h" | "--help" => {
                 print!("{HELP}");
