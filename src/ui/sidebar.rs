@@ -13,6 +13,7 @@ use igui_ui::{Container, PaintEnv, PointerPhase};
 
 use crate::kit::{self, RectExt};
 use crate::state::AppState;
+use crate::theme::Theme;
 
 pub const HEADER_H: f32 = 28.0;
 
@@ -114,6 +115,25 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
     });
     kit::set_cursor(tree, id, Cursor::Default);
     id
+}
+
+fn git_color(entry: &crate::model::git::GitEntry, theme: &Theme) -> Color {
+    if entry.conflict {
+        return theme.p.error;
+    }
+    let color = match entry.kind {
+        crate::model::git::GitKind::Added => theme.p.syntax.function,
+        crate::model::git::GitKind::Deleted => theme.p.error,
+        crate::model::git::GitKind::Renamed => theme.p.syntax.keyword,
+        crate::model::git::GitKind::Untracked => theme.p.accent,
+        crate::model::git::GitKind::Conflicted => theme.p.error,
+        crate::model::git::GitKind::Modified => theme.p.syntax.number,
+    };
+    if entry.staged {
+        color
+    } else {
+        color.alpha_mul(0.82)
+    }
 }
 
 fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
@@ -353,6 +373,8 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             p.text
         } else if row.is_dir {
             p.dim
+        } else if let Some(entry) = git {
+            git_color(entry, &theme)
         } else {
             p.text
         };
@@ -365,13 +387,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                 row_rect.right() - 8.0,
                 baseline,
                 m.font_small,
-                if entry.conflict {
-                    p.error
-                } else if entry.staged {
-                    p.accent
-                } else {
-                    p.dim
-                },
+                git_color(entry, &theme),
             );
         }
     }

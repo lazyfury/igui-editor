@@ -50,8 +50,9 @@ result is applied on the first frame after it closes.
 
 ## Git panel
 
-The file tree marks modified/untracked files with their Git status letter, and
-the status bar shows `GIT <branch> ↑ahead ↓behind`. The sidebar has
+The file tree marks modified/untracked files with a colored Git status letter
+(modified orange, added green, deleted/conflict red, renamed purple, untracked
+teal), and the status bar shows `GIT <branch> ↑ahead ↓behind`. The sidebar has
 `EXPLORER / GIT` tabs. GIT shows the repository branch,
 ahead/behind, and staged/changes/conflicts sections from `git status
 --porcelain=v2 -z`. Click a file for a read-only unified diff overlay; `Esc` or
