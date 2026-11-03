@@ -3334,14 +3334,19 @@ fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
         return Err("LSP hover overlay was not painted".into());
     }
 
-    // Completion: Ctrl+Space, navigate, insert.
-    harness.shortcut(
-        Key::Space,
+    // Completion: platform accelerator, navigate, insert.
+    let completion_modifier = if cfg!(target_os = "macos") {
+        Modifiers {
+            meta: true,
+            ..Modifiers::NONE
+        }
+    } else {
         Modifiers {
             ctrl: true,
             ..Modifiers::NONE
-        },
-    );
+        }
+    };
+    harness.shortcut(Key::Character('i'), completion_modifier);
     for _ in 0..100 {
         harness.frame()?;
         if harness.app.state().lsp.completion.is_some() {

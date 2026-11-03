@@ -90,6 +90,7 @@ pub fn shortcut(state: &mut AppState, key: Key, modifiers: Modifiers) -> Option<
                 }
                 return Some(EventResult::Handled);
             }
+            'i' => Action::LspCompletion,
             'b' => Action::ToggleSidebar,
             'l' => Action::ToggleTheme,
             'm' => Action::SetView(state.view_of_active().next()),

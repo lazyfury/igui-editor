@@ -82,9 +82,10 @@ is no server for loose files or non-project buffers.
 - Diagnostics are painted as severity-colored underlines and square gutter
   markers; the footer shows `LSP 1E 2W` (or `LSP ERR` if the server cannot
   start).
-- `F1` shows server hover, `F12` jumps to definition, and `Ctrl+Space` opens
-  completion. Completion uses `↑`/`↓`, `Enter`/`Tab` and `Esc`; the same
-  commands are in **Edit**.
+- `F1` shows server hover, `F12` jumps to definition, and `⌘I` (`Ctrl+I` on
+  Linux/Windows) opens completion. `Ctrl+Space` also works where the OS does
+  not reserve it for input-method switching. Completion uses `↑`/`↓`,
+  `Enter`/`Tab` and `Esc`; the same commands are in **Edit**.
 - Buffers are synchronized full-text (debounced after edits); positions use
   LSP UTF-16 columns. Diagnostics/hover/completion are transient UI state and
   are not persisted.
@@ -155,7 +156,7 @@ contents do not. Multiple sessions are a follow-up.
 | `⌘P` | Quick Open (fuzzy file picker) |
 | `⇧⌘F` | search in folder |
 | `F1` / `F12` | LSP hover / go to definition |
-| `Ctrl+Space` | LSP completion |
+| `⌘I` / `Ctrl+I` | LSP completion (also `Ctrl+Space` when available) |
 | `⌘,` | settings panel |
 | `⌘F` / `⌥⌘F` | find / jump to the replace field |
 | `⌘G` / `⇧⌘G` | next / previous match |
@@ -465,7 +466,7 @@ on the existing winit delegate.
 
 LSP checks: a scripted stdio language server is launched through the real
 client; diagnostics appear under the changed line and in the footer, `F1` paints
-a hover card, `Ctrl+Space` opens a completion list and inserts the selected
+a hover card, `⌘I`/`Ctrl+I` opens a completion list and inserts the selected
 item, and `F12` jumps to the returned definition.
 
 M6 checks: tab drag-reorder and the right-click Close menu, soft-wrap layout

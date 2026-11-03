@@ -271,8 +271,8 @@ impl Action {
             },
             Action::LspHover => "F1",
             Action::LspCompletion => match ACCEL {
-                "⌘" => "⌃Space",
-                _ => "Ctrl+Space",
+                "⌘" => "⌘I",
+                _ => "Ctrl+I",
             },
             Action::LspDefinition => "F12",
             Action::ToggleTerminal => match ACCEL {
