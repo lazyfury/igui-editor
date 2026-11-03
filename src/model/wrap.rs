@@ -1,0 +1,257 @@
+//! Soft-wrap layout: display rows for logical document lines.
+//!
+//! The document stays line/column based; this module only maps a logical line
+//! to one or more visual rows. It is rebuilt when the document, width, font or
+//! tab width changes and is deliberately capped: soft wrap is a comfort feature,
+//! not a large-file renderer.
+
+use igui_ui::TextMeasurer;
+
+use super::doc::Document;
+
+/// Soft wrap is disabled above these limits (status bar explains the fallback).
+pub const MAX_WRAP_LINES: usize = 20_000;
+pub const MAX_WRAP_BYTES: usize = 2 * 1024 * 1024;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct WrapKey {
+    doc: u64,
+    rev: u64,
+    width: u32,
+    font: u32,
+    tab: u8,
+}
+
+impl WrapKey {
+    pub fn new(doc: u64, rev: u64, width: f32, font: f32, tab: usize) -> Self {
+        Self {
+            doc,
+            rev,
+            width: width.round().to_bits(),
+            font: font.round().to_bits(),
+            tab: tab.min(u8::MAX as usize) as u8,
+        }
+    }
+}
+
+/// One visual row: a character span inside a logical line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Row {
+    pub line: usize,
+    pub start_col: usize,
+    pub end_col: usize,
+    pub start_byte: usize,
+    pub end_byte: usize,
+    /// True for the first visual row of its logical line.
+    pub first: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct WrapLayout {
+    key: Option<WrapKey>,
+    rows: Vec<Row>,
+    /// `(first row, one-past-last row)` per logical line.
+    line_rows: Vec<(usize, usize)>,
+}
+
+impl WrapLayout {
+    pub fn key(&self) -> Option<WrapKey> {
+        self.key
+    }
+
+    pub fn matches(&self, doc: u64, rev: u64) -> bool {
+        self.key.is_some_and(|key| key.doc == doc && key.rev == rev)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    pub fn rows(&self) -> &[Row] {
+        &self.rows
+    }
+
+    pub fn row(&self, index: usize) -> Option<&Row> {
+        self.rows.get(index)
+    }
+
+    pub fn line_rows(&self, line: usize) -> &[Row] {
+        let Some(&(start, end)) = self.line_rows.get(line) else {
+            return &[];
+        };
+        &self.rows[start..end]
+    }
+
+    /// Visual row containing `(line, column)`; boundary columns stay on the
+    /// earlier row so a caret at the wrap edge is drawn at the right edge.
+    pub fn row_of(&self, line: usize, column: usize) -> Option<usize> {
+        let (start, end) = *self.line_rows.get(line)?;
+        let rows = &self.rows[start..end];
+        for (offset, row) in rows.iter().enumerate() {
+            if column <= row.end_col {
+                return Some(start + offset);
+            }
+        }
+        end.checked_sub(1)
+    }
+
+    pub fn line_of_row(&self, row: usize) -> Option<usize> {
+        self.rows.get(row).map(|row| row.line)
+    }
+
+    /// First visual row of `line` (clamped to the document).
+    pub fn first_row_of_line(&self, line: usize) -> usize {
+        self.line_rows
+            .get(line.min(self.line_rows.len().saturating_sub(1)))
+            .map_or(0, |(start, _)| *start)
+    }
+
+    pub fn build(
+        doc: &Document,
+        width: f32,
+        font: f32,
+        tab: usize,
+        measurer: &dyn TextMeasurer,
+    ) -> Self {
+        let width = width.max(16.0);
+        let mut rows = Vec::new();
+        let mut line_rows = Vec::with_capacity(doc.line_count());
+        for line in 0..doc.line_count() {
+            let text = doc.line(line);
+            let start_index = rows.len();
+            let mut start_col = 0;
+            let mut start_byte = 0;
+            let mut col = 0;
+            let mut byte = 0;
+            let mut used = 0.0_f32;
+            for ch in text.chars() {
+                let advance = if ch == '\t' {
+                    measurer.advance(' ', font) * tab as f32
+                } else {
+                    measurer.advance(ch, font)
+                };
+                if col > start_col && used + advance > width {
+                    rows.push(Row {
+                        line,
+                        start_col,
+                        end_col: col,
+                        start_byte,
+                        end_byte: byte,
+                        first: start_col == 0,
+                    });
+                    start_col = col;
+                    start_byte = byte;
+                    used = 0.0;
+                }
+                used += advance;
+                col += 1;
+                byte += ch.len_utf8();
+            }
+            rows.push(Row {
+                line,
+                start_col,
+                end_col: col,
+                start_byte,
+                end_byte: byte,
+                first: start_col == 0,
+            });
+            line_rows.push((start_index, rows.len()));
+        }
+        Self {
+            key: Some(WrapKey::new(doc.id(), doc.rev(), width, font, tab)),
+            rows,
+            line_rows,
+        }
+    }
+}
+
+pub fn expand_tabs(line: &str, tab: usize) -> String {
+    if !line.contains('\t') {
+        return line.to_string();
+    }
+    let mut out = String::with_capacity(line.len() + tab * 2);
+    for ch in line.chars() {
+        if ch == '\t' {
+            out.extend(std::iter::repeat_n(' ', tab));
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+pub fn width_of(measurer: &dyn TextMeasurer, text: &str, font: f32, tab: usize) -> f32 {
+    let display = expand_tabs(text, tab);
+    measurer.measure_run_weighted(&display, font, igui_core::FontWeight::NORMAL)
+}
+
+/// Character column whose boundary is closest to `x` within `text`.
+pub fn column_at_x(
+    measurer: &dyn TextMeasurer,
+    text: &str,
+    x: f32,
+    font: f32,
+    tab: usize,
+) -> usize {
+    if x <= 0.0 {
+        return 0;
+    }
+    let mut used = 0.0;
+    let mut column = 0;
+    for ch in text.chars() {
+        let advance = if ch == '\t' {
+            measurer.advance(' ', font) * tab as f32
+        } else {
+            measurer.advance(ch, font)
+        };
+        if x < used + advance * 0.5 {
+            return column;
+        }
+        used += advance;
+        column += 1;
+    }
+    column
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::PathBuf;
+
+    use super::*;
+
+    fn doc(text: &str) -> Document {
+        let dir: PathBuf = std::env::temp_dir().join(format!(
+            "igui-editor-wrap-{}-{}",
+            std::process::id(),
+            text.len()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a.txt");
+        fs::write(&path, text).unwrap();
+        let doc = Document::open(1, &path).unwrap();
+        let _ = fs::remove_dir_all(dir);
+        doc
+    }
+
+    #[test]
+    fn long_lines_split_into_rows_with_line_mapping() {
+        let doc = doc(&format!("{}\nshort\n", "abcdefghij".repeat(10)));
+        let measurer = igui_ui::ApproxTextMeasurer;
+        let wrap = WrapLayout::build(&doc, 80.0, 13.0, 4, &measurer);
+        assert!(wrap.len() > doc.line_count());
+        assert_eq!(wrap.line_of_row(0), Some(0));
+        assert!(wrap.line_rows(0).len() > 1);
+        assert_eq!(wrap.line_rows(1).len(), 1);
+        assert_eq!(wrap.first_row_of_line(1), wrap.line_rows(0).len());
+        // Column at the end of the first row stays on that row.
+        let first = wrap.rows()[0];
+        assert_eq!(wrap.row_of(0, first.end_col), Some(0));
+        assert_eq!(wrap.row_of(0, first.end_col + 1), Some(1));
+    }
+}

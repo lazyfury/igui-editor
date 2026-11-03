@@ -41,6 +41,8 @@ pub struct EditorApp {
     window_restored: bool,
     /// The dialog currently open (native sheet / portal / scripted).
     pending: Option<PendingDialog>,
+    /// Drop the committed text that follows the Alt+Z soft-wrap shortcut.
+    suppress_text: bool,
 }
 
 /// A dialog that has been started but not answered yet. The future is polled
@@ -132,6 +134,7 @@ impl EditorApp {
             dialogs,
             window: None,
             pending: None,
+            suppress_text: false,
             analysis_behind: false,
             drop: None,
             window_restored: false,
@@ -194,6 +197,7 @@ impl EditorApp {
             self.state.borrow_mut().pending_sidebar_sync = false;
         }
         self.analysis_behind = self.state.borrow_mut().tick_analysis();
+        self.state.borrow_mut().tick_external_changes();
         self.state.borrow_mut().tick_reliability();
         self.state.borrow_mut().sync_scroll_positions();
         if !self.window_restored {
@@ -245,6 +249,7 @@ impl EditorApp {
         let measurer = igui_ui::text_measurer(&self.tree);
         let mut state = self.state.borrow_mut();
         ui::menu::paint_popup(&mut state, measurer.as_ref(), ctx);
+        ui::tab_menu::paint(&mut state, measurer.as_ref(), ctx);
         ui::settings::paint(&mut state, measurer.as_ref(), ctx);
         ui::quick_open::paint(&mut state, measurer.as_ref(), ctx);
         ui::project_search::paint(&mut state, measurer.as_ref(), ctx);
@@ -292,6 +297,21 @@ impl EditorApp {
                     ui::project_search::click(&mut state, *position);
                     return EventResult::Handled;
                 }
+                if state.tab_menu.is_some() {
+                    match ui::tab_menu::click(&mut state, *position) {
+                        ui::tab_menu::Click::Outside => {
+                            state.tab_menu = None;
+                            state.dirty = true;
+                        }
+                        ui::tab_menu::Click::Consumed => return EventResult::Handled,
+                        ui::tab_menu::Click::Run(action) => {
+                            let tab = state.tab_menu.as_ref().map_or(0, |menu| menu.tab);
+                            state.tab_menu = None;
+                            state.run_tab_menu(action, tab);
+                            return EventResult::Handled;
+                        }
+                    }
+                }
                 // Footer language selector (bottom-right): a click toggles the
                 // language popup, which opens above the status bar.
                 if state.ws.active_doc().is_some() && state.language_hit.contains(*position) {
@@ -328,6 +348,28 @@ impl EditorApp {
                 self.focus_editor();
                 result
             }
+            InputEvent::PointerDown {
+                position,
+                button: PointerButton::Right,
+            } => {
+                let mut state = self.state.borrow_mut();
+                if state.recovery_prompt.is_some() || state.modal.is_some() {
+                    return EventResult::Handled;
+                }
+                if state.settings_open || state.quick_open.open || state.search.open {
+                    return EventResult::Handled;
+                }
+                let tab = ui::tabs::hover_at(&state, *position);
+                state.tab_drag = None;
+                state.tab_menu = None;
+                state.menu_open = None;
+                state.menu_hover = None;
+                if let Some(tab) = tab.filter(|index| *index != usize::MAX) {
+                    ui::tab_menu::open(&mut state, tab, *position);
+                }
+                state.dirty = true;
+                EventResult::Handled
+            }
             InputEvent::PointerMove { position } => {
                 let mut state = self.state.borrow_mut();
                 let menubar = state
@@ -340,6 +382,15 @@ impl EditorApp {
                 let sidebar = ui::sidebar::hover_at(&state, *position);
                 let language =
                     state.ws.active_doc().is_some() && state.language_hit.contains(*position);
+                let tab_menu = ui::tab_menu::hover_at(&state, *position);
+                let tab_menu_changed = state.tab_menu.as_mut().is_some_and(|menu| {
+                    if menu.hover == tab_menu {
+                        false
+                    } else {
+                        menu.hover = tab_menu;
+                        true
+                    }
+                });
                 if state.menubar_hover != menubar
                     || state.menu_hover != menu_hover
                     || state.tabs.hover != tabs
@@ -351,6 +402,9 @@ impl EditorApp {
                     state.tabs.hover = tabs;
                     state.sidebar.hover = sidebar;
                     state.language_hover = language;
+                    state.dirty = true;
+                }
+                if tab_menu_changed {
                     state.dirty = true;
                 }
                 drop(state);
@@ -382,6 +436,11 @@ impl EditorApp {
                 if state.search.open && ui::project_search::on_key(&mut state, *key, modifiers) {
                     return EventResult::Handled;
                 }
+                if state.tab_menu.is_some() && *key == Key::Escape {
+                    state.tab_menu = None;
+                    state.dirty = true;
+                    return EventResult::Handled;
+                }
                 if state.menu_open.is_some() && *key == Key::Escape {
                     state.menu_open = None;
                     state.menu_hover = None;
@@ -391,7 +450,15 @@ impl EditorApp {
                 if state.find.open && input::find_key(&mut state, *key, modifiers).is_handled() {
                     return EventResult::Handled;
                 }
+                let alt_z = modifiers.alt
+                    && !modifiers.meta
+                    && !modifiers.ctrl
+                    && state.focus == Focus::Editor
+                    && matches!(key, Key::Character(ch) if ch.eq_ignore_ascii_case(&'z'));
                 if let Some(result) = input::shortcut(&mut state, *key, modifiers) {
+                    if alt_z && result.is_handled() {
+                        self.suppress_text = true;
+                    }
                     return result;
                 }
                 if state.find.open && *key == Key::Escape {
@@ -407,6 +474,10 @@ impl EditorApp {
                 igui_ui::route_input(&mut self.tree, event)
             }
             InputEvent::TextInput { text } => {
+                if self.suppress_text {
+                    self.suppress_text = false;
+                    return EventResult::Handled;
+                }
                 // The host emits `TextInput` for character keys even while Cmd/Ctrl
                 // is held (e.g. ⌘F also arrives as text "f"). Accelerator keys are
                 // commands, never text. Ctrl+Alt is AltGr on Windows, so that stays
@@ -432,6 +503,10 @@ impl EditorApp {
                     return EventResult::Handled;
                 }
                 drop(state);
+                igui_ui::route_input(&mut self.tree, event)
+            }
+            InputEvent::KeyUp { .. } => {
+                self.suppress_text = false;
                 igui_ui::route_input(&mut self.tree, event)
             }
             InputEvent::Ime(ime) => {

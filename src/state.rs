@@ -10,9 +10,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
-use igui_core::{NodeId, Rect, ViewportSize};
+use igui_core::{NodeId, Rect, Vec2, ViewportSize};
 use igui_ui::{Clipboard, TextEdit};
 
 use crate::model::brackets::match_bracket;
@@ -135,6 +135,7 @@ pub enum Action {
     ToggleTheme,
     SetView(ViewMode),
     ToggleScrollSync,
+    ToggleSoftWrap,
     SetLanguage(Option<String>),
     OpenRecent(PathBuf),
 }
@@ -170,6 +171,7 @@ impl Action {
             Action::ToggleTheme => "Toggle Theme".into(),
             Action::SetView(mode) => mode.label().into(),
             Action::ToggleScrollSync => "Sync Scroll".into(),
+            Action::ToggleSoftWrap => "Soft Wrap".into(),
             Action::SetLanguage(None) => "Auto (by extension)".into(),
             Action::SetLanguage(Some(name)) => name.clone(),
             Action::OpenRecent(path) => {
@@ -265,6 +267,10 @@ impl Action {
                 "⌘" => "⇧⌘Y",
                 _ => "Ctrl+Shift+Y",
             },
+            Action::ToggleSoftWrap => match ACCEL {
+                "⌘" => "⌥Z",
+                _ => "Alt+Z",
+            },
             Action::SetLanguage(_) => "",
             Action::OpenRecent(_) => "",
         }
@@ -292,6 +298,7 @@ impl Action {
             Action::Paste => doc.is_some() && state.clipboard.is_some(),
             Action::SelectAll => doc.is_some(),
             Action::SetView(_) => doc.is_some(),
+            Action::ToggleSoftWrap => doc.is_some(),
             Action::SetLanguage(_) => doc.is_some(),
             Action::OpenRecent(path) => path.is_file(),
         }
@@ -301,6 +308,7 @@ impl Action {
         match self {
             Action::SetView(mode) => *mode == state.view_of_active(),
             Action::ToggleScrollSync => state.sync_scroll,
+            Action::ToggleSoftWrap => state.session.soft_wrap,
             Action::SetLanguage(None) => state.language_override_of_active().is_none(),
             Action::SetLanguage(Some(name)) => {
                 state.language_override_of_active() == Some(name.as_str())
@@ -362,6 +370,7 @@ pub fn items(menu: Menu, state: &AppState) -> Vec<Option<Action>> {
             Some(Action::SetView(ViewMode::Preview)),
             None,
             Some(Action::ToggleScrollSync),
+            Some(Action::ToggleSoftWrap),
             Some(Action::Settings),
         ],
     }
@@ -447,6 +456,10 @@ impl Default for FindState {
 pub enum Modal {
     /// Close a dirty tab: Save / Discard / Cancel.
     CloseDirtyTab { tab: usize },
+    /// Close several tabs after a context-menu action: Cancel / Discard.
+    CloseTabs { keep: Option<usize>, from: usize },
+    /// The file changed on disk while the buffer is dirty: Keep / Reload.
+    ExternalChange { tab: usize },
     /// Replace every match in the scanned files: Cancel / Replace all.
     ReplaceInFiles { files: usize, occurrences: usize },
 }
@@ -459,6 +472,8 @@ pub enum ModalButton {
     Save,
     /// Confirms a replace-in-files plan.
     Apply,
+    /// Reloads a dirty buffer after an external change.
+    Reload,
 }
 
 /// A dialog request, executed in `update` (outside input dispatch, on the main
@@ -503,6 +518,10 @@ pub struct EditorUi {
     pub reveal: bool,
     /// Clickable rows of the welcome screen (no document open).
     pub welcome_actions: Vec<(Action, Rect)>,
+    /// Soft-wrap rows for the current document/width (rebuilt by paint).
+    pub wrap: crate::model::wrap::WrapLayout,
+    /// Horizontal scroll saved when wrap turned on, restored when it turns off.
+    pub wrap_scroll_x: f32,
 }
 
 /// Sidebar geometry captured by the last paint.
@@ -528,6 +547,69 @@ pub struct TabsUi {
     pub scroll: f32,
     /// The strip rectangle (scroll/hit diagnostics).
     pub strip: Rect,
+    /// Scroll so the active tab is visible on the next paint (set by tab
+    /// switches/new/close, not by manual wheel scrolling).
+    pub reveal_active: bool,
+}
+
+/// In-progress tab drag (reorder).
+#[derive(Clone, Copy, Debug)]
+pub struct TabDrag {
+    pub from: usize,
+    pub start: Vec2,
+    /// Insertion gap in the *current* layout (before removal).
+    pub marker: usize,
+    /// Final index after removal/insertion.
+    pub insertion: usize,
+    pub active: bool,
+}
+
+/// Disk identity used for external-change detection.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct DiskStamp {
+    len: u64,
+    modified: u128,
+}
+
+/// Actions in a tab's right-click menu.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TabMenuAction {
+    Close,
+    CloseOthers,
+    CloseRight,
+    CopyPath,
+    RevealInSidebar,
+}
+
+impl TabMenuAction {
+    pub const ALL: [TabMenuAction; 5] = [
+        TabMenuAction::Close,
+        TabMenuAction::CloseOthers,
+        TabMenuAction::CloseRight,
+        TabMenuAction::CopyPath,
+        TabMenuAction::RevealInSidebar,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            TabMenuAction::Close => "Close",
+            TabMenuAction::CloseOthers => "Close Others",
+            TabMenuAction::CloseRight => "Close to the Right",
+            TabMenuAction::CopyPath => "Copy Path",
+            TabMenuAction::RevealInSidebar => "Reveal in Sidebar",
+        }
+    }
+}
+
+/// Tab context-menu overlay state.
+#[derive(Clone, Debug)]
+pub struct TabMenuUi {
+    pub tab: usize,
+    /// Pointer position where the menu opened (anchor).
+    pub at: Vec2,
+    pub rect: Rect,
+    pub hits: Vec<(TabMenuAction, Rect)>,
+    pub hover: Option<usize>,
 }
 
 /// A planned replace-in-files run (applied from the confirmation modal).
@@ -626,6 +708,8 @@ pub struct AppState {
     pub sidebar: SidebarUi,
     pub editor: EditorUi,
     pub tabs: TabsUi,
+    pub tab_drag: Option<TabDrag>,
+    pub tab_menu: Option<TabMenuUi>,
     pub menu_open: Option<Menu>,
     pub menubar_hover: Option<Menu>,
     pub menubar_hits: Vec<(Menu, Rect)>,
@@ -697,6 +781,9 @@ pub struct AppState {
     pub language_by_id: HashMap<u64, String>,
     /// Keep editor and preview scroll positions in sync (W3).
     pub sync_scroll: bool,
+    /// Last seen disk identity per open path (`None` = missing on disk).
+    external: HashMap<PathBuf, Option<DiskStamp>>,
+    last_external_check: Instant,
     last_editor_scroll: f32,
     last_preview_scroll: f32,
     sync_rev: u64,
@@ -715,6 +802,14 @@ impl AppState {
             .join("recovery");
         let languages: HashMap<PathBuf, String> = session.languages.iter().cloned().collect();
         let sync_scroll = session.sync_scroll;
+        let external = ws
+            .tabs
+            .iter()
+            .filter_map(|doc| {
+                doc.path()
+                    .map(|path| (path.to_path_buf(), disk_stamp(path)))
+            })
+            .collect();
         Self {
             theme,
             ws,
@@ -723,9 +818,16 @@ impl AppState {
             sidebar: SidebarUi::default(),
             editor: EditorUi {
                 reveal: true,
+                wrap: crate::model::wrap::WrapLayout::default(),
+                wrap_scroll_x: 0.0,
                 ..EditorUi::default()
             },
-            tabs: TabsUi::default(),
+            tabs: TabsUi {
+                reveal_active: true,
+                ..TabsUi::default()
+            },
+            tab_drag: None,
+            tab_menu: None,
             menu_open: None,
             menubar_hover: None,
             menubar_hits: Vec::new(),
@@ -776,6 +878,8 @@ impl AppState {
             language_by_path: languages,
             language_by_id: HashMap::new(),
             sync_scroll,
+            external,
+            last_external_check: Instant::now(),
             last_editor_scroll: 0.0,
             last_preview_scroll: 0.0,
             sync_rev: u64::MAX,
@@ -1052,7 +1156,7 @@ impl AppState {
 
     /// Autosave + recovery flush after the idle delay; tracks edits to reset it.
     pub fn tick_reliability(&mut self) {
-        if self.recovery_prompt.is_some() {
+        if self.recovery_prompt.is_some() || self.modal.is_some() {
             return;
         }
         let mut changed = false;
@@ -1087,12 +1191,19 @@ impl AppState {
 
     fn flush_reliability(&mut self) {
         let mut saved = 0usize;
+        let mut saved_paths = Vec::new();
         if self.settings.autosave {
             for doc in &mut self.ws.tabs {
                 if doc.is_dirty() && doc.path().is_some() && doc.save().is_ok() {
                     saved += 1;
+                    if let Some(path) = doc.path().map(Path::to_path_buf) {
+                        saved_paths.push(path);
+                    }
                 }
             }
+        }
+        for path in saved_paths {
+            self.remember_disk(&path);
         }
         let mut live = std::collections::HashSet::new();
         for doc in &self.ws.tabs {
@@ -1272,14 +1383,31 @@ impl AppState {
             self.sync_rev = rev;
             return;
         }
+        let soft_wrap = self.session.soft_wrap
+            && !self.editor.wrap.is_empty()
+            && self.editor.wrap.key().is_some();
+        let editor_line = if soft_wrap {
+            let row = (editor_scroll / line_h).floor() as usize;
+            self.editor
+                .wrap
+                .line_of_row(row.min(self.editor.wrap.len().saturating_sub(1)))
+                .unwrap_or(0) as f32
+        } else {
+            editor_scroll / line_h
+        };
         let editor_changed = (editor_scroll - self.last_editor_scroll).abs() > 0.5;
         let preview_changed = (preview_scroll - self.last_preview_scroll).abs() > 0.5;
         if editor_changed && !preview_changed {
-            self.preview.scroll = preview_y_for_line(&anchors, editor_scroll / line_h);
+            self.preview.scroll = preview_y_for_line(&anchors, editor_line);
         } else if preview_changed && !editor_changed {
             let line = line_for_preview_y(&anchors, preview_scroll);
             if let Some(doc) = self.ws.active_doc_mut() {
-                doc.scroll_y = line * line_h;
+                if soft_wrap {
+                    let row = self.editor.wrap.first_row_of_line(line.floor() as usize);
+                    doc.scroll_y = row as f32 * line_h;
+                } else {
+                    doc.scroll_y = line * line_h;
+                }
             }
         }
         self.last_editor_scroll = self
@@ -1289,6 +1417,42 @@ impl AppState {
         self.last_preview_scroll = self.preview.scroll;
         self.sync_rev = rev;
         self.dirty = true;
+    }
+
+    /// Enables/disables soft wrap, refusing files outside the hard limits.
+    pub fn set_soft_wrap(&mut self, on: bool) {
+        let was_on = self.session.soft_wrap;
+        if on && !was_on {
+            if let Some(doc) = self.ws.active_doc() {
+                self.editor.wrap_scroll_x = doc.scroll_x;
+            }
+        }
+        if !on && was_on {
+            if let Some(doc) = self.ws.active_doc_mut() {
+                doc.scroll_x = self.editor.wrap_scroll_x;
+            }
+        }
+        if on {
+            if let Some(doc) = self.ws.active_doc() {
+                if doc.text().len() > crate::model::wrap::MAX_WRAP_BYTES
+                    || doc.line_count() > crate::model::wrap::MAX_WRAP_LINES
+                {
+                    self.error(format!(
+                        "soft wrap is off above {} MB / {}k lines",
+                        crate::model::wrap::MAX_WRAP_BYTES / (1024 * 1024),
+                        crate::model::wrap::MAX_WRAP_LINES / 1000
+                    ));
+                    return;
+                }
+            }
+        }
+        if self.session.soft_wrap != on {
+            self.session.soft_wrap = on;
+            self.config_dirty = true;
+            self.editor.reveal = on;
+            self.status(if on { "soft wrap on" } else { "soft wrap off" });
+            self.dirty = true;
+        }
     }
 
     pub fn toggle_sync_scroll(&mut self) {
@@ -1551,6 +1715,122 @@ impl AppState {
 
     // -- document lifecycle ---------------------------------------------
 
+    /// Closes every tab except `keep` (context menu). Dirty targets require a
+    /// single discard confirmation.
+    pub fn request_close_others(&mut self, keep: usize) {
+        if keep >= self.ws.tabs.len() || self.ws.tabs.len() <= 1 {
+            return;
+        }
+        self.request_close_many(Some(keep), 0);
+    }
+
+    /// Closes every tab to the right of `from` (context menu).
+    pub fn request_close_right(&mut self, from: usize) {
+        if from + 1 >= self.ws.tabs.len() {
+            return;
+        }
+        self.request_close_many(None, from + 1);
+    }
+
+    fn request_close_many(&mut self, keep: Option<usize>, from: usize) {
+        let targets: Vec<usize> = (from..self.ws.tabs.len())
+            .filter(|index| keep != Some(*index))
+            .collect();
+        if targets.is_empty() {
+            return;
+        }
+        let dirty = targets.iter().any(|index| self.ws.tabs[*index].is_dirty());
+        self.tab_menu = None;
+        self.menu_open = None;
+        if dirty {
+            self.modal = Some(Modal::CloseTabs { keep, from });
+        } else {
+            self.close_tabs_now(keep, from);
+        }
+        self.dirty = true;
+    }
+
+    fn close_tabs_now(&mut self, keep: Option<usize>, from: usize) {
+        let mut targets: Vec<usize> = (from..self.ws.tabs.len())
+            .filter(|index| keep != Some(*index))
+            .collect();
+        let count = targets.len();
+        targets.sort_unstable_by(|a, b| b.cmp(a));
+        for index in targets {
+            self.close_tab_now(index);
+        }
+        if count > 0 {
+            self.status(format!(
+                "closed {count} tab{}",
+                if count == 1 { "" } else { "s" }
+            ));
+        }
+    }
+
+    /// Runs a tab context-menu command.
+    pub fn run_tab_menu(&mut self, action: TabMenuAction, tab: usize) {
+        self.tab_menu = None;
+        match action {
+            TabMenuAction::Close => self.request_close_tab(tab),
+            TabMenuAction::CloseOthers => self.request_close_others(tab),
+            TabMenuAction::CloseRight => self.request_close_right(tab),
+            TabMenuAction::CopyPath => {
+                let Some(path) = self
+                    .ws
+                    .tabs
+                    .get(tab)
+                    .and_then(|doc| doc.path().map(Path::to_path_buf))
+                else {
+                    self.error("untitled buffer has no path");
+                    return;
+                };
+                let text = path.display().to_string();
+                self.set_clipboard(&text);
+                self.status(format!("copied {text}"));
+            }
+            TabMenuAction::RevealInSidebar => self.reveal_tab(tab),
+        }
+        self.dirty = true;
+    }
+
+    fn reveal_tab(&mut self, tab: usize) {
+        let Some(path) = self
+            .ws
+            .tabs
+            .get(tab)
+            .and_then(|doc| doc.path().map(Path::to_path_buf))
+        else {
+            self.error("untitled buffer has no path");
+            return;
+        };
+        if !self.ws.folder_open || !path.starts_with(&self.ws.root) {
+            self.error("file is outside the open folder");
+            return;
+        }
+        let Some(parent) = path.parent() else {
+            return;
+        };
+        self.ws.tree.expand_to(parent);
+        let row_h = self.theme.m.row_h;
+        let rows = self.ws.tree.rows();
+        if let Some(index) = rows.iter().position(|row| row.path == path) {
+            let view_h = (self.sidebar.rect.size.height - crate::ui::sidebar::HEADER_H).max(0.0);
+            self.sidebar.scroll = (index as f32 * row_h - view_h * 0.5).max(0.0);
+        }
+        self.sidebar.selected = Some(path.clone());
+        if !self.show_sidebar {
+            self.show_sidebar = true;
+            self.session.sidebar = true;
+            self.config_dirty = true;
+            self.needs_rebuild = true;
+        }
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string());
+        self.status(format!("revealed {name}"));
+    }
+
     /// Closes the active tab, asking for confirmation when it is dirty.
     pub fn request_close_active(&mut self) {
         self.request_close_tab(self.ws.active);
@@ -1563,6 +1843,7 @@ impl AppState {
         };
         if doc.is_dirty() {
             self.ws.select(index);
+            self.tabs.reveal_active = true;
             self.modal = Some(Modal::CloseDirtyTab { tab: index });
             self.menu_open = None;
             self.dirty = true;
@@ -1586,6 +1867,7 @@ impl AppState {
     /// Re-opens the workspace after a tab change.
     pub fn after_tabs_changed(&mut self) {
         self.ws.validate_active();
+        self.tabs.reveal_active = true;
         self.sync_layout();
         self.sync_session_tabs();
         self.find.dirty = true;
@@ -1604,6 +1886,8 @@ impl AppState {
                     .map(|doc| doc.name().to_string())
                     .unwrap_or_default();
                 self.sidebar.selected = Some(path.clone());
+                self.tabs.reveal_active = true;
+                self.remember_disk(&path);
                 self.session.push_recent(&path);
                 self.config_dirty = true;
                 self.sync_layout();
@@ -1665,7 +1949,8 @@ impl AppState {
         {
             self.session.push_recent(&path);
             self.config_dirty = true;
-            self.sidebar.selected = Some(path);
+            self.sidebar.selected = Some(path.clone());
+            self.remember_disk(&path);
         }
         self.sync_session_tabs();
     }
@@ -1905,6 +2190,24 @@ impl AppState {
             }
             return;
         }
+        if let Modal::ExternalChange { tab } = modal {
+            self.modal = None;
+            if button == ModalButton::Reload {
+                self.reload_tab(tab, true);
+            } else {
+                self.status("kept the buffer");
+            }
+            self.dirty = true;
+            return;
+        }
+        if let Modal::CloseTabs { keep, from } = modal {
+            self.modal = None;
+            if button == ModalButton::Discard {
+                self.close_tabs_now(keep, from);
+            }
+            self.dirty = true;
+            return;
+        }
         let Some(Modal::CloseDirtyTab { tab }) = self.modal else {
             return;
         };
@@ -1920,6 +2223,7 @@ impl AppState {
                     .is_some_and(|doc| doc.path().is_some());
                 if !has_path {
                     self.ws.select(tab);
+                    self.tabs.reveal_active = true;
                     self.pending_dialog = Some(DialogRequest {
                         kind: DialogKind::SaveAs,
                         then_close: Some(tab),
@@ -1935,7 +2239,7 @@ impl AppState {
                     Err(message) => self.error(message),
                 }
             }
-            ModalButton::Apply => {}
+            ModalButton::Apply | ModalButton::Reload => {}
         }
         self.dirty = true;
     }
@@ -1966,6 +2270,92 @@ impl AppState {
             .unwrap_or_else(|| self.ws.root.display().to_string());
         self.status(format!("folder: {name}"));
         self.dirty = true;
+    }
+
+    fn remember_disk(&mut self, path: &Path) {
+        self.external.insert(path.to_path_buf(), disk_stamp(path));
+    }
+
+    /// Polls metadata for every open file and reacts to outside edits. Clean
+    /// tabs reload automatically; dirty tabs ask before losing their changes.
+    pub fn check_external_changes(&mut self) {
+        if self.modal.is_some() || self.recovery_prompt.is_some() {
+            return;
+        }
+        for index in 0..self.ws.tabs.len() {
+            let Some(path) = self
+                .ws
+                .tabs
+                .get(index)
+                .and_then(|doc| doc.path().map(Path::to_path_buf))
+            else {
+                continue;
+            };
+            let current = disk_stamp(&path);
+            let Some(previous) = self.external.get(&path).copied() else {
+                self.external.insert(path, current);
+                continue;
+            };
+            if previous == current {
+                continue;
+            }
+            self.external.insert(path.clone(), current);
+            if current.is_none() {
+                let name = self.ws.tabs[index].name().to_string();
+                self.error(format!("{name} was deleted on disk"));
+                self.dirty = true;
+                continue;
+            }
+            let dirty = self.ws.tabs.get(index).is_some_and(|doc| doc.is_dirty());
+            if !dirty {
+                self.reload_tab(index, false);
+            } else {
+                self.modal = Some(Modal::ExternalChange { tab: index });
+                self.menu_open = None;
+                self.tab_menu = None;
+                self.dirty = true;
+                return;
+            }
+        }
+    }
+
+    /// Runs the 1-second metadata poll.
+    pub fn tick_external_changes(&mut self) {
+        if self.last_external_check.elapsed() < Duration::from_secs(1) {
+            return;
+        }
+        self.last_external_check = Instant::now();
+        self.check_external_changes();
+    }
+
+    fn reload_tab(&mut self, tab: usize, report: bool) {
+        let Some(path) = self
+            .ws
+            .tabs
+            .get(tab)
+            .and_then(|doc| doc.path().map(Path::to_path_buf))
+        else {
+            return;
+        };
+        let Some(doc) = self.ws.tabs.get_mut(tab) else {
+            return;
+        };
+        let name = doc.name().to_string();
+        match doc.reload() {
+            Ok(()) => {
+                self.remember_disk(&path);
+                self.highlight.reset();
+                self.find.dirty = true;
+                self.sync_layout();
+                if report {
+                    self.status(format!("reloaded {name} from disk"));
+                } else {
+                    self.status(format!("{name} changed on disk — reloaded"));
+                }
+                self.dirty = true;
+            }
+            Err(error) => self.error(format!("reload {name} failed: {error}")),
+        }
     }
 
     /// Closes the sidebar folder, keeping the open tabs as standalone files.
@@ -2078,9 +2468,11 @@ impl AppState {
 
     /// Runs `action` and reports the outcome in the status bar.
     pub fn run(&mut self, action: Action) {
+        self.tab_menu = None;
         match action {
             Action::New => {
                 self.ws.new_tab();
+                self.tabs.reveal_active = true;
                 self.sync_layout();
                 self.sync_session_tabs();
                 self.find.dirty = true;
@@ -2170,6 +2562,10 @@ impl AppState {
             }
             Action::SetView(mode) => self.set_view(mode),
             Action::ToggleScrollSync => self.toggle_sync_scroll(),
+            Action::ToggleSoftWrap => {
+                let on = !self.session.soft_wrap;
+                self.set_soft_wrap(on);
+            }
             Action::SetLanguage(name) => self.set_language(name),
             Action::OpenRecent(path) => self.open_path(path),
         }
@@ -2203,6 +2599,20 @@ impl AppState {
             self.error(format!("session save failed: {error}"));
         }
     }
+}
+
+fn disk_stamp(path: &Path) -> Option<DiskStamp> {
+    let metadata = std::fs::metadata(path).ok()?;
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    Some(DiskStamp {
+        len: metadata.len(),
+        modified,
+    })
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -2380,6 +2790,67 @@ mod tests {
         assert!(state.modal.is_none());
         assert!(state.ws.tabs.is_empty());
         assert!(state.ws.active_doc().is_none());
+    }
+
+    #[test]
+    fn soft_wrap_refuses_files_over_the_line_cap() {
+        let dir = std::env::temp_dir().join(format!("igui-editor-wrap-cap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("many.txt");
+        let text = "line\n".repeat(crate::model::wrap::MAX_WRAP_LINES + 1);
+        std::fs::write(&path, text).unwrap();
+        let mut ws = Workspace::new(&dir);
+        ws.open(&path).unwrap();
+        let mut state = AppState::new(
+            Theme::dark(),
+            ws,
+            Session::default(),
+            dir.join("session.conf"),
+        );
+        state.set_soft_wrap(true);
+        assert!(!state.session.soft_wrap, "over-cap file must refuse wrap");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn close_others_keeps_the_chosen_tab_and_confirms_dirty_targets() {
+        let mut state = state();
+        state.ws.new_tab();
+        state.ws.new_tab();
+        let keep = state.ws.tabs[1].id();
+        state.ws.active = 1;
+        state.request_close_others(1);
+        assert!(state.modal.is_none());
+        assert_eq!(state.ws.tabs.len(), 1);
+        assert_eq!(state.ws.tabs[0].id(), keep);
+
+        state.ws.new_tab();
+        let keep = state.ws.tabs[1].id();
+        state.ws.tabs[0].insert_text("dirty");
+        state.ws.active = 1;
+        state.request_close_others(1);
+        assert!(matches!(
+            state.modal,
+            Some(Modal::CloseTabs { keep: Some(1), .. })
+        ));
+        state.resolve_modal(ModalButton::Cancel);
+        assert_eq!(state.ws.tabs.len(), 2);
+        state.request_close_others(1);
+        state.resolve_modal(ModalButton::Discard);
+        assert_eq!(state.ws.tabs.len(), 1);
+        assert_eq!(state.ws.tabs[0].id(), keep);
+    }
+
+    #[test]
+    fn close_right_only_targets_tabs_to_the_right() {
+        let mut state = state();
+        state.ws.new_tab();
+        state.ws.new_tab();
+        let first = state.ws.tabs[0].id();
+        state.request_close_right(0);
+        assert_eq!(state.ws.tabs.len(), 1);
+        assert_eq!(state.ws.tabs[0].id(), first);
     }
 
     #[test]

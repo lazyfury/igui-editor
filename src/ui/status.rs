@@ -109,6 +109,9 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         right = hit.left() - 16.0;
     } else {
         state.language_hit = Rect::ZERO;
+        if state.menu_open == Some(Menu::Language) {
+            state.menu_open = None;
+        }
         let width = kit::width(measurer, &language, m.font_small);
         kit::text(
             env.ctx,
@@ -121,13 +124,21 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         right -= width + 16.0;
     }
 
-    let facts = [
+    let mut facts = vec![
         theme.name(),
         mode.as_str(),
         size.as_str(),
         "UTF-8",
         spaces.as_str(),
     ];
+    let wrap_effective = state.session.soft_wrap
+        && state.ws.active_doc().is_some_and(|doc| {
+            doc.text().len() <= crate::model::wrap::MAX_WRAP_BYTES
+                && doc.line_count() <= crate::model::wrap::MAX_WRAP_LINES
+        });
+    if wrap_effective {
+        facts.push("WRAP");
+    }
     for fact in facts {
         let width = kit::width(measurer, fact, m.font_small);
         kit::text(

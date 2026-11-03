@@ -16,5 +16,6 @@ pub mod search;
 pub mod session;
 pub mod workspace;
 pub mod workspace_index;
+pub mod wrap;
 
 pub use workspace::Workspace;

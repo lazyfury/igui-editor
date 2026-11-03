@@ -19,6 +19,16 @@ use crate::state::{Action, AppState, Focus, Modal, ModalButton};
 
 /// App-wide commands. `Some` means the key was consumed.
 pub fn shortcut(state: &mut AppState, key: Key, modifiers: Modifiers) -> Option<EventResult> {
+    // Option/Alt+Z is the soft-wrap toggle (not a Cmd/Ctrl accelerator).
+    if modifiers.alt && !modifiers.meta && !modifiers.ctrl {
+        if state.focus == Focus::Editor
+            && matches!(key, Key::Character(ch) if ch.eq_ignore_ascii_case(&'z'))
+        {
+            state.run(Action::ToggleSoftWrap);
+            return Some(EventResult::Handled);
+        }
+        return None;
+    }
     if !(modifiers.meta || modifiers.ctrl) {
         return None;
     }
@@ -216,10 +226,11 @@ pub fn modal_key(state: &mut AppState, key: Key) -> EventResult {
     match key {
         Key::Escape => state.resolve_modal(ModalButton::Cancel),
         Key::Enter => {
-            let confirm = if matches!(state.modal, Some(Modal::ReplaceInFiles { .. })) {
-                ModalButton::Apply
-            } else {
-                ModalButton::Save
+            let confirm = match state.modal {
+                Some(Modal::ReplaceInFiles { .. }) => ModalButton::Apply,
+                Some(Modal::CloseTabs { .. }) => ModalButton::Discard,
+                Some(Modal::ExternalChange { .. }) => ModalButton::Reload,
+                _ => ModalButton::Save,
             };
             state.resolve_modal(confirm);
         }

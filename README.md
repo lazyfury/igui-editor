@@ -6,9 +6,9 @@ through `igui_ui` / `igui_render` only.
 
 Tabs · undo/redo · find & replace · syntax highlighting (JSON language packs) ·
 Markdown split preview (tables included) · Quick Open (`⌘P`) · project search +
-replace (`⇧⌘F`) · scroll sync · drag & drop · settings panel · native file dialogs ·
-recent files · session + window restore · autosave & crash recovery ·
-large-file guards.
+replace (`⇧⌘F`) · scroll sync · tab drag/context menu · soft wrap · external-change
+detection · drag & drop · settings panel · native file dialogs · recent files ·
+session + window restore · autosave & crash recovery · large-file guards.
 
 This checkout is **outside** the igui repository: it consumes the engine through
 path dependencies and never modifies it.
@@ -52,6 +52,7 @@ result is applied on the first frame after it closes.
 | `⇧⌘L` | toggle dark / light |
 | `⇧⌘M` | cycle Editor → Split Preview → Preview Only |
 | `⇧⌘Y` | toggle editor/preview scroll sync |
+| `⌥Z` | toggle soft wrap |
 | `Tab` / `⇧Tab` | indent / outdent (block-aware) |
 | `Enter` | newline with the current indentation |
 | `⌘←` / `⌘→` | smart home / line end |
@@ -61,7 +62,9 @@ result is applied on the first frame after it closes.
 | double click | select word |
 | `Enter` / `⇧Enter` in find | next / previous match |
 | `Esc` | close find · cancel modal |
-| wheel / trackpad | vertical scroll, `⇧`+wheel horizontal; over the tab strip it scrolls overflowing tabs |
+| wheel / trackpad | vertical scroll, `⇧`+wheel horizontal; over the tab strip it scrolls overflowing tabs (no tab scrollbar) |
+| drag a tab | reorder it (order persists across restarts) |
+| right-click a tab | Close / Close Others / Close to the Right / Copy Path / Reveal in Sidebar |
 | drop files / folders | files open in tabs; a folder becomes the workspace |
 
 Find bar: query and replacement fields, `Aa` (case) and `W` (whole word)
@@ -76,8 +79,9 @@ same height even with the find bar open. Line/grip are
 `border`/`faint` at rest, `dim`/`text` on hover, `accent` while dragging (the
 strip tints). Each seam has exactly one line — neither the sidebar nor the
 preview paints its own border. The sidebar handle resizes 180–420 px and
-persists. Tabs shrink to 96 px, then scroll horizontally; the active tab is
-always kept visible.
+persists. Tabs shrink to 96 px, then scroll horizontally with the wheel; the
+active tab is revealed on a switch/new/close, while manual scrolling is free.
+No tab scrollbar is drawn.
 
 Markdown preview (`.md` opens in Split; `⇧⌘M` cycles): headings, paragraphs,
 bold / italic / strikethrough, inline code, fenced code blocks with a language
@@ -87,6 +91,8 @@ preview scrolls with the wheel/trackpad or its scrollbar.
 
 Mouse: click a folder to expand it, a file to open it in a tab, `×` to close a
 tab (unsaved tabs open a Save / Discard / Cancel modal), `+` for a new buffer,
+drag a tab to reorder it, right-click it for Close / Close Others / Close to the
+Right / Copy Path / Reveal in Sidebar (closing several dirty tabs asks once),
 drag the editor scrollbars, drag in the text to select, wheel-scroll the
 preview.
 
@@ -194,7 +200,7 @@ clickable.
 
 | Limit | Behavior |
 |---|---|
-| > 2 MB or > 20k lines | syntax highlighting off |
+| > 2 MB or > 20k lines | syntax highlighting and soft wrap off |
 | > 8 MB | preview disabled (banner); editing continues |
 | > 32 MB | opening refused with a status-bar error |
 | preview > 512 KB | first 512 KB rendered + "truncated" banner |
@@ -231,7 +237,25 @@ the Quick Open ignore rules. Skips binary files and files over 1 MB; caps at
 5k scanned files / 500 hits / 20 per file. Results stream in grouped by line
 with the match highlighted; `Enter` or a click opens the file, selects the match
 and reveals it. The query is debounced (120 ms) and a new query cancels the old
-worker. No replace-in-files yet.
+worker. The replace row and **Replace all in files** flow are described under
+[Replace in files](#replace-in-files).
+
+## Soft wrap (`⌥Z`, View menu)
+
+Off by default and persisted in the session. Long logical lines are split into
+display rows inside the editor; only the editor changes — preview and split
+layout are untouched. The status-bar `Ln/Col` stays logical, `↑`/`↓` and clicks
+use visual rows, and the gutter numbers only appear on a line's first row.
+Horizontal scrolling is suppressed while wrapped. Soft wrap is disabled above
+2 MB / 20k lines (the toggle reports why). The last horizontal scroll offset is
+restored when wrap is turned off.
+
+## External file changes
+
+Every second the app compares open files' length + mtime. A clean tab reloads
+automatically; a dirty tab asks **Keep** or **Reload** before replacing the
+buffer. Deleted files are reported in the status bar and the buffer is kept. No
+filesystem-watcher dependency; the poll is metadata-only.
 
 ## Split view
 
@@ -250,9 +274,9 @@ remembered per document and the last ratio is persisted.
   original name/path and are marked dirty so the first save writes them back.
 - **Window state**: size and position are persisted and restored (skipped while
   maximized/fullscreen).
-- Session format is version 3 (`languages`, `sync_scroll` added on top of v2's
-  `folder`/`split`/`autosave`/`window.*`); v1/v2 files still load (v1 infers the
-  folder from the first tab).
+- Session format is version 4 (`soft_wrap` added on top of v3's
+  `languages`/`sync_scroll`); v1–v3 files still load (v1 infers the folder from
+  the first tab).
 
 ## Theme: "geek", compact, no corners
 
@@ -322,6 +346,10 @@ folder; replace-in-files (cancel is a no-op, apply rewrites a non-open file, an
 open tab is skipped); and scroll sync moves the preview from the editor and the
 editor back from the preview (including the disable toggle).
 
+M6 checks: tab drag-reorder and the right-click Close menu, soft-wrap layout
+(long-line split, wrapped click / Up / Down, `⌥Z`), clean/dirty external reload
+with the Keep/Reload modal, and the session soft-wrap setting persisted.
+
 M4 checks: welcome/no-folder state and empty sidebar, drop overlay, dropping a
 file vs a folder, CLI folder argument, Quick Open (filter → open), project
 search (debounced worker → result → jump selects the match), split-divider drag
@@ -345,8 +373,9 @@ src/
   model/replace.rs    replace-in-files planning/apply (conflict + open skip)
   model/fs_tree.rs    lazy sidebar tree (dirs first, hidden entries skipped)
   model/markdown.rs   Markdown event stream -> flat block model
-  model/session.rs    key=value session file (atomic write, escaping, v2)
-  model/workspace.rs  tabs + file IO
+  model/session.rs    key=value session file (atomic write, escaping, v4)
+  model/workspace.rs  tabs + file IO (open/save/move/close folder)
+  model/wrap.rs       soft-wrap display rows + visual row/column mapping
   dialogs.rs          `Dialogs` trait + scripted test double
   drop.rs             shared file-drop target (winit observer -> update)
   input.rs            keyboard dispatch: modal -> find -> shortcuts -> tree
@@ -355,7 +384,8 @@ src/
   kit.rs              control-node construction and text/line helpers
   ui/menu.rs          menu bar + app-level drop-down overlay
   ui/sidebar.rs       file tree
-  ui/tabs.rs          tab strip
+  ui/tabs.rs          tab strip (drag reorder, close targets)
+  ui/tab_menu.rs      right-click tab menu (close variants / path / reveal)
   ui/editor.rs        gutter, text, selection, caret, scrollbars, IME preedit
   ui/find_bar.rs      find / replace strip
   ui/quick_open.rs    Quick Open palette
@@ -364,7 +394,7 @@ src/
   ui/recovery.rs      startup recovery prompt
   ui/drop.rs          drop overlay
   ui/preview.rs       rendered Markdown pane (cached primitive layout)
-  ui/modal.rs         unsaved-changes confirmation
+  ui/modal.rs         close-dirty / close-many / external / replace modals
   ui/status.rs        file / position / facts / messages
   app.rs              shell construction, input routing, igui_app glue
   host.rs             winit + wgpu plugins, native dialogs, monospace face
@@ -396,10 +426,14 @@ override (persisted by path), replace-in-files with a confirmation modal,
 conflict/open-tab skipping and atomic writes, editor/preview scroll sync via
 Markdown source-line anchors, session v3.
 
+Delivered (M6): tab drag-reorder + right-click context menu, soft wrap with
+visual-row caret/click/navigation mapping and a 2 MB / 20k-line cap, external
+file-change detection (clean auto-reload, dirty Keep/Reload), session v4.
+
 Next candidates: code-plugin loading (dylib/wasm) on top of `SyntaxRegistry`,
 per-hit replace and cross-file undo, incremental preview layout for very large
-documents, tab drag-reorder/context menu, and soft wrap (still needs a design:
-it breaks the line/column mapping).
+documents, word-boundary wrapping, and a filesystem watcher for sidebar/search
+freshness.
 
 Notes:
 
@@ -411,9 +445,12 @@ Notes:
 - Recovery snapshots are written after the 2 s idle delay: a hard kill within
   that window can still lose the last keystrokes (autosave shares the delay).
 - Project search skips binary files, files over 1 MB, and stops at the caps
-  above; there is no replace-in-files yet.
+  above.
 - Quick Open builds its index when opened (no filesystem watcher), so files
-  created while it is closed appear on the next open.
+  created while it is closed appear on the next open. Open files are polled for
+  external changes, but the sidebar/search index is not automatically refreshed.
+- Soft wrap breaks at character boundaries, not words, and uses a full-layout
+  cache; it is intentionally disabled for very large files.
 
 Known engine limitation: `igui_core::Key` has no `PageUp` / `PageDown`, so page
 scrolling is not bound yet (`Document::page` is implemented and tested, waiting

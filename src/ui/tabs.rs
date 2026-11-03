@@ -28,9 +28,12 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
     kit::on_pointer(tree, id, {
         let state = state.clone();
         move |tree, _id, phase, _rect, pos| {
-            if phase == PointerPhase::Down {
-                let mut state = state.borrow_mut();
-                click(&mut state, pos);
+            let mut state = state.borrow_mut();
+            match phase {
+                PointerPhase::Down => click(&mut state, pos),
+                PointerPhase::Move => drag_move(&mut state, pos),
+                PointerPhase::Up => finish_drag(&mut state),
+                PointerPhase::DoubleClick => {}
             }
             igui_ui::request_paint(tree);
         }
@@ -40,6 +43,7 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
         move |tree, _id, delta| {
             let mut state = state.borrow_mut();
             state.tabs.scroll += delta.y + delta.x;
+            state.tabs.reveal_active = false;
             state.dirty = true;
             igui_ui::request_paint(tree);
         }
@@ -72,12 +76,16 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     let total = tab_w * count as f32;
     let max_scroll = (total - available).max(0.0);
     let mut scroll = state.tabs.scroll.clamp(0.0, max_scroll);
-    // Keep the active tab visible after a switch or a resize.
-    let active_left = state.ws.active as f32 * tab_w;
-    if active_left < scroll {
-        scroll = active_left;
-    } else if active_left + tab_w > scroll + available {
-        scroll = active_left + tab_w - available;
+    // Reveal the active tab only after a switch/new/close, not while the user
+    // is scrolling the strip. No scrollbar is drawn; the wheel is the affordance.
+    if state.tabs.reveal_active {
+        let active_left = state.ws.active as f32 * tab_w;
+        if active_left < scroll {
+            scroll = active_left;
+        } else if active_left + tab_w > scroll + available {
+            scroll = active_left + tab_w - available;
+        }
+        state.tabs.reveal_active = false;
     }
     scroll = scroll.clamp(0.0, max_scroll);
     state.tabs.scroll = scroll;
@@ -172,17 +180,39 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         p.dim,
     );
 
+    let drag = state.tab_drag.filter(|drag| drag.active);
+    if let Some(drag) = drag {
+        let marker_x = hits
+            .iter()
+            .find(|(index, _, _)| *index == drag.marker)
+            .map(|(_, tab, _)| tab.left())
+            .or_else(|| hits.last().map(|(_, tab, _)| tab.right()))
+            .unwrap_or(rect.left())
+            .clamp(rect.left(), rect.right() - plus_w);
+        kit::fill(
+            env.ctx,
+            Rect::from_min_size(
+                Vec2::new(marker_x - 1.0, rect.top() + 2.0),
+                Size::new(2.0, rect.height() - 4.0),
+            ),
+            p.accent,
+        );
+    }
+
     state.tabs = TabsUi {
         hits,
         hover: state.tabs.hover,
         plus,
         scroll: state.tabs.scroll,
         strip: rect,
+        reveal_active: state.tabs.reveal_active,
     };
 }
 
 fn click(state: &mut AppState, pos: Vec2) {
+    state.tab_menu = None;
     if state.tabs.plus.contains(pos) {
+        state.tab_drag = None;
         state.run(crate::state::Action::New);
         return;
     }
@@ -191,9 +221,13 @@ fn click(state: &mut AppState, pos: Vec2) {
         if tab.contains(pos) {
             let closable = index == state.ws.active || state.tabs.hover == Some(index);
             if close.contains(pos) && closable {
+                state.tab_drag = None;
                 state.request_close_tab(index);
-            } else if state.ws.active != index {
+                return;
+            }
+            if state.ws.active != index {
                 state.ws.select(index);
+                state.tabs.reveal_active = true;
                 state.editor.preedit = None;
                 state.editor.drag = crate::state::Drag::None;
                 state.focus = crate::state::Focus::Editor;
@@ -201,8 +235,57 @@ fn click(state: &mut AppState, pos: Vec2) {
                 state.sync_layout();
                 state.dirty = true;
             }
+            state.tab_drag = Some(crate::state::TabDrag {
+                from: index,
+                start: pos,
+                marker: index,
+                insertion: index,
+                active: false,
+            });
             return;
         }
+    }
+}
+
+fn drag_move(state: &mut AppState, pos: Vec2) {
+    let Some(mut drag) = state.tab_drag else {
+        return;
+    };
+    if !drag.active {
+        if (pos - drag.start).length() < 4.0 {
+            return;
+        }
+        drag.active = true;
+    }
+    let count = state.ws.tabs.len();
+    let mut marker = count;
+    for (index, tab, _) in &state.tabs.hits {
+        if pos.x < tab.center().x {
+            marker = *index;
+            break;
+        }
+    }
+    let insertion = if marker > drag.from {
+        marker.saturating_sub(1)
+    } else {
+        marker
+    }
+    .min(count.saturating_sub(1));
+    if drag.marker != marker || drag.insertion != insertion {
+        drag.marker = marker;
+        drag.insertion = insertion;
+        state.dirty = true;
+    }
+    state.tab_drag = Some(drag);
+}
+
+fn finish_drag(state: &mut AppState) {
+    let Some(drag) = state.tab_drag.take() else {
+        return;
+    };
+    if drag.active && drag.from != drag.insertion && state.ws.move_tab(drag.from, drag.insertion) {
+        state.after_tabs_changed();
+        state.status("reordered tabs");
     }
 }
 

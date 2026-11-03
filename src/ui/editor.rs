@@ -23,6 +23,7 @@ use igui_scene::SceneTree;
 use igui_ui::{Container, PaintEnv, PointerPhase, TextMeasurer};
 
 use crate::kit::{self, RectExt};
+use crate::model::wrap::{self, WrapKey, WrapLayout};
 use crate::state::{Action, AppState, Drag, Focus};
 
 pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>) -> NodeId {
@@ -111,6 +112,23 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
                 return EventResult::Ignored;
             }
             let shift = modifiers.shift;
+            let measurer = igui_ui::text_measurer(tree);
+            if matches!(key, Key::ArrowUp | Key::ArrowDown)
+                && state.session.soft_wrap
+                && !state.editor.wrap.is_empty()
+            {
+                move_wrapped_vertical(
+                    &mut state,
+                    matches!(key, Key::ArrowUp),
+                    shift,
+                    measurer.as_ref(),
+                );
+                state.editor.reveal = true;
+                state.find.dirty = true;
+                state.dirty = true;
+                igui_ui::request_paint(tree);
+                return EventResult::Handled;
+            }
             let Some(doc) = state.ws.active_doc_mut() else {
                 return EventResult::Ignored;
             };
@@ -235,52 +253,18 @@ fn gutter_width(line_count: usize, measurer: &dyn TextMeasurer, font: f32, pad: 
     pad * 2.0 + digits * measurer.advance('0', font) + 4.0
 }
 
-fn expand_tabs(line: &str, tab: usize) -> String {
-    if !line.contains('\t') {
-        return line.to_string();
-    }
-    let mut out = String::with_capacity(line.len() + tab * 2);
-    for ch in line.chars() {
-        if ch == '\t' {
-            out.extend(std::iter::repeat_n(' ', tab));
-        } else {
-            out.push(ch);
-        }
-    }
-    out
-}
-
-fn width_of(measurer: &dyn TextMeasurer, line: &str, font: f32, tab: usize) -> f32 {
-    let display = expand_tabs(line, tab);
-    measurer.measure_run_weighted(&display, font, FontWeight::NORMAL)
-}
-
-/// Width of `line[..byte]` once tabs are expanded.
 fn x_in_line(measurer: &dyn TextMeasurer, line: &str, byte: usize, font: f32, tab: usize) -> f32 {
     let prefix = &line[..byte.min(line.len())];
-    width_of(measurer, prefix, font, tab)
+    wrap::width_of(measurer, prefix, font, tab)
 }
 
-/// Character column whose boundary is closest to `x`.
-fn column_at_x(measurer: &dyn TextMeasurer, line: &str, x: f32, font: f32, tab: usize) -> usize {
-    if x <= 0.0 {
-        return 0;
-    }
-    let mut used = 0.0;
-    let mut column = 0;
-    for ch in line.chars() {
-        let advance = if ch == '\t' {
-            measurer.advance(' ', font) * tab as f32
-        } else {
-            measurer.advance(ch, font)
-        };
-        if x < used + advance * 0.5 {
-            return column;
-        }
-        used += advance;
-        column += 1;
-    }
-    column
+#[derive(Clone, Copy)]
+struct VisRow {
+    row: usize,
+    line: usize,
+    start_byte: usize,
+    end_byte: usize,
+    first: bool,
 }
 
 /// `(line, column)` under a viewport point, or `None` outside the text area.
@@ -292,17 +276,21 @@ fn hit(state: &AppState, pos: Vec2, measurer: &dyn TextMeasurer) -> Option<(usiz
     if pos.y < editor.text_rect.top() || pos.x < editor.text_rect.left() {
         return None;
     }
-    let line =
-        (((pos.y - editor.text_rect.top()) + doc.scroll_y) / metrics.line_h).floor() as usize;
-    let line = line.min(doc.line_count().saturating_sub(1));
+    let row = (((pos.y - editor.text_rect.top()) + doc.scroll_y) / metrics.line_h).floor() as usize;
+    let tab = metrics.tab_columns();
+    if state.session.soft_wrap && state.editor.wrap.matches(doc.id(), doc.rev()) {
+        let wrap = &state.editor.wrap;
+        let row = wrap.row(row)?;
+        let line_text = doc.line(row.line);
+        let row_start_x = x_in_line(measurer, line_text, row.start_byte, metrics.font, tab);
+        let x = pos.x - editor.text_rect.left() - m.text_pad - row_start_x;
+        let segment = &line_text[row.start_byte..row.end_byte];
+        let column = wrap::column_at_x(measurer, segment, x, metrics.font, tab);
+        return Some((row.line, row.start_col + column));
+    }
+    let line = row.min(doc.line_count().saturating_sub(1));
     let x = pos.x - editor.text_rect.left() - m.text_pad + doc.scroll_x;
-    let column = column_at_x(
-        measurer,
-        doc.line(line),
-        x,
-        metrics.font,
-        metrics.tab_columns(),
-    );
+    let column = wrap::column_at_x(measurer, doc.line(line), x, metrics.font, tab);
     Some((line, column))
 }
 
@@ -396,6 +384,70 @@ fn drag_to(state: &mut AppState, pos: Vec2, _measurer: &dyn TextMeasurer) {
     }
 }
 
+fn move_wrapped_vertical(
+    state: &mut AppState,
+    up: bool,
+    select: bool,
+    measurer: &dyn TextMeasurer,
+) {
+    let metrics = state.editor_metrics();
+    let font = metrics.font;
+    let tab = metrics.tab_columns();
+    let Some(doc) = state.ws.active_doc_mut() else {
+        return;
+    };
+    if !state.editor.wrap.matches(doc.id(), doc.rev()) {
+        if up {
+            doc.move_up(select);
+        } else {
+            doc.move_down(select);
+        }
+        return;
+    }
+    let (line, column) = doc.line_col();
+    let Some(current) = state.editor.wrap.row_of(line, column) else {
+        return;
+    };
+    let row_count = state.editor.wrap.len();
+    let target = if up {
+        current.checked_sub(1)
+    } else if current + 1 < row_count {
+        Some(current + 1)
+    } else {
+        None
+    };
+    let Some(target) = target else {
+        if up {
+            doc.move_doc_start(select);
+        } else {
+            doc.move_doc_end(select);
+        }
+        return;
+    };
+    let Some(target_row) = state.editor.wrap.row(target).copied() else {
+        return;
+    };
+    let current_text = doc.line(line);
+    let current_x = x_in_line(
+        measurer,
+        current_text,
+        doc.caret() - doc.line_start(line),
+        font,
+        tab,
+    );
+    let row_start_x = state.editor.wrap.row(current).map_or(0.0, |row| {
+        x_in_line(measurer, current_text, row.start_byte, font, tab)
+    });
+    let target_text = &doc.line(target_row.line)[target_row.start_byte..target_row.end_byte];
+    let column_in_row =
+        wrap::column_at_x(measurer, target_text, current_x - row_start_x, font, tab);
+    doc.click(
+        target_row.line,
+        target_row.start_col + column_in_row,
+        select,
+    );
+}
+
 // -- paint -------------------------------------------------------------------
 
 fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
@@ -418,7 +470,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     let sb = m.scrollbar;
     let show_gutter = state.settings.line_numbers;
 
-    let (gutter_w, line_count, scroll_x, scroll_y, caret, selection, preedit) = {
+    let (gutter_w, line_count, scroll_x, scroll_y, caret, selection, preedit, doc_id, rev, len) = {
         let doc = state.ws.active_doc().expect("checked above");
         (
             if show_gutter {
@@ -432,6 +484,9 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             doc.caret(),
             doc.selection(),
             state.editor.preedit.clone(),
+            doc.id(),
+            doc.rev(),
+            doc.text().len(),
         )
     };
     let text_rect = Rect::from_min_size(
@@ -442,46 +497,92 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         ),
     );
     let pad = m.text_pad;
-    let content_h = line_count as f32 * line_h;
+
+    // Soft wrap is rebuilt only when the document/width/typography changes.
+    let wrap_enabled = state.session.soft_wrap
+        && len <= wrap::MAX_WRAP_BYTES
+        && line_count <= wrap::MAX_WRAP_LINES;
+    let wrap_width = (text_rect.width() - pad * 2.0).max(16.0);
+    if wrap_enabled {
+        let key = WrapKey::new(doc_id, rev, wrap_width, font, tab);
+        if state.editor.wrap.key() != Some(key) {
+            let layout = {
+                let doc = state.ws.active_doc().expect("checked above");
+                WrapLayout::build(doc, wrap_width, font, tab, measurer)
+            };
+            state.editor.wrap = layout;
+        }
+    } else if state.editor.wrap.key().is_some() {
+        state.editor.wrap = WrapLayout::default();
+    }
+    let wrap_on = wrap_enabled;
+    let row_count = if wrap_on {
+        state.editor.wrap.len()
+    } else {
+        line_count
+    };
+    let content_h = row_count as f32 * line_h;
     let max_scroll_y = (content_h - text_rect.height()).max(0.0);
 
     // Visible window (and the widest visible line for horizontal clamping).
     let mut scroll_y = scroll_y.clamp(0.0, max_scroll_y);
-    let mut scroll_x = scroll_x;
-    let first = (scroll_y / line_h).floor() as usize;
+    let mut scroll_x = if wrap_on { 0.0 } else { scroll_x };
+    let first_row = (scroll_y / line_h).floor() as usize;
     let visible_count = (text_rect.height() / line_h).ceil() as usize + 1;
-    let last = (first + visible_count).min(line_count.saturating_sub(1));
+    let last_row = (first_row + visible_count).min(row_count.saturating_sub(1));
     let mut widest = 0.0_f32;
-    {
+    if !wrap_on {
         let doc = state.ws.active_doc().expect("checked above");
-        for line in first..=last {
-            widest = widest.max(width_of(measurer, doc.line(line), font, tab));
+        for line in first_row..=last_row {
+            widest = widest.max(wrap::width_of(measurer, doc.line(line), font, tab));
         }
     }
-    let content_w = widest + pad * 2.0;
+    let content_w = if wrap_on {
+        text_rect.width()
+    } else {
+        widest + pad * 2.0
+    };
     let max_scroll_x = (content_w - text_rect.width()).max(0.0);
 
     // Reveal the caret on caret-changing input, not while the user scrolls.
     if state.editor.reveal {
         let doc = state.ws.active_doc().expect("checked above");
-        let caret_line = doc.line_of(caret);
+        let (caret_line, caret_col) = doc.line_col();
+        let caret_row = if wrap_on {
+            state
+                .editor
+                .wrap
+                .row_of(caret_line, caret_col)
+                .unwrap_or(caret_line)
+        } else {
+            caret_line
+        };
         let caret_x = x_in_line(
             measurer,
             doc.line(caret_line),
             caret - doc.line_start(caret_line),
             font,
             tab,
-        );
-        let caret_y = caret_line as f32 * line_h;
+        ) - if wrap_on {
+            let row = state.editor.wrap.row(caret_row);
+            row.map_or(0.0, |row| {
+                x_in_line(measurer, doc.line(caret_line), row.start_byte, font, tab)
+            })
+        } else {
+            0.0
+        };
+        let caret_y = caret_row as f32 * line_h;
         if caret_y < scroll_y {
             scroll_y = caret_y;
         } else if caret_y + line_h > scroll_y + text_rect.height() {
             scroll_y = caret_y + line_h - text_rect.height() + 2.0;
         }
-        if caret_x < scroll_x {
-            scroll_x = caret_x;
-        } else if caret_x + 12.0 > scroll_x + text_rect.width() - pad {
-            scroll_x = caret_x + 12.0 - text_rect.width() + pad;
+        if !wrap_on {
+            if caret_x < scroll_x {
+                scroll_x = caret_x;
+            } else if caret_x + 12.0 > scroll_x + text_rect.width() - pad {
+                scroll_x = caret_x + 12.0 - text_rect.width() + pad;
+            }
         }
         state.editor.reveal = false;
     }
@@ -515,17 +616,58 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         );
     }
 
-    let first = (scroll_y / line_h).floor() as usize;
-    let last = (first + visible_count).min(line_count.saturating_sub(1));
-    let caret_line = {
+    let first_row = (scroll_y / line_h).floor() as usize;
+    let last_row = (first_row + visible_count).min(row_count.saturating_sub(1));
+    let (caret_line, caret_col) = {
         let doc = state.ws.active_doc().expect("checked above");
-        doc.line_of(caret)
+        doc.line_col()
+    };
+    let caret_row = if wrap_on {
+        state
+            .editor
+            .wrap
+            .row_of(caret_line, caret_col)
+            .unwrap_or(caret_line)
+    } else {
+        caret_line
+    };
+    let vis: Vec<VisRow> = {
+        let doc = state.ws.active_doc().expect("checked above");
+        if wrap_on {
+            (first_row..=last_row)
+                .filter_map(|index| {
+                    state.editor.wrap.row(index).map(|row| VisRow {
+                        row: index,
+                        line: row.line,
+                        start_byte: row.start_byte,
+                        end_byte: row.end_byte,
+                        first: row.first,
+                    })
+                })
+                .collect()
+        } else {
+            (first_row..=last_row)
+                .map(|line| VisRow {
+                    row: line,
+                    line,
+                    start_byte: 0,
+                    end_byte: doc.line(line).len(),
+                    first: true,
+                })
+                .collect()
+        }
+    };
+    let row_y = |row: usize| {
+        text_rect.top() + (row as f32 - first_row as f32) * line_h
+            - (scroll_y - first_row as f32 * line_h)
     };
 
-    // Current-line highlight, full width (gutter + text).
-    if caret_line >= first && caret_line <= last {
-        let y = text_rect.top() + (caret_line - first) as f32 * line_h
-            - (scroll_y - first as f32 * line_h);
+    // Current-line highlight, full width (gutter + text), all wrapped rows.
+    for vis in &vis {
+        if vis.line != caret_line {
+            continue;
+        }
+        let y = row_y(vis.row);
         env.ctx.fill_rect(
             Rect::from_min_size(
                 Vec2::new(rect.left(), y),
@@ -541,8 +683,11 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         env.ctx.save();
         env.ctx.clip_rect(text_rect);
         let doc = state.ws.active_doc().expect("checked above");
-        for line in first..=last {
-            let text = doc.line(line);
+        for vis in &vis {
+            if !vis.first {
+                continue;
+            }
+            let text = doc.line(vis.line);
             let mut columns = 0usize;
             for ch in text.chars() {
                 match ch {
@@ -554,8 +699,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             if columns == 0 {
                 continue;
             }
-            let y = text_rect.top() + (line - first) as f32 * line_h
-                - (scroll_y - first as f32 * line_h);
+            let y = row_y(vis.row);
             let mut column = tab;
             while column <= columns {
                 let x = text_rect.left() + pad + column as f32 * space - scroll_x;
@@ -569,32 +713,41 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         env.ctx.restore();
     }
 
-    // Selection rectangles, per visible line.
+    // Selection rectangles, per visual row.
     if let Some((sel_start, sel_end)) = selection {
         env.ctx.save();
         env.ctx.clip_rect(text_rect);
         let doc = state.ws.active_doc().expect("checked above");
-        for line in first..=last {
-            let line_start = doc.line_start(line);
-            let line_end = doc.line_end(line);
-            let from = sel_start.max(line_start);
-            let to = sel_end.min(line_end);
-            let covers_newline = sel_end > line_end && sel_start <= line_end;
+        for vis in &vis {
+            let line_text = doc.line(vis.line);
+            let line_start = doc.line_start(vis.line);
+            let line_end = doc.line_end(vis.line);
+            let row_start_byte = line_start + vis.start_byte;
+            let row_end_byte = line_start + vis.end_byte;
+            let from = sel_start.max(row_start_byte);
+            let to = sel_end.min(row_end_byte);
+            let covers_newline =
+                vis.end_byte >= line_text.len() && sel_end > line_end && sel_start <= line_end;
             if from > to || (from == to && !covers_newline) {
                 continue;
             }
-            let x0 = if sel_start <= line_start {
+            let row_start_x = x_in_line(measurer, line_text, vis.start_byte, font, tab);
+            let row_end_x = x_in_line(measurer, line_text, vis.end_byte, font, tab);
+            let x0 = if sel_start <= row_start_byte {
                 0.0
             } else {
-                x_in_line(measurer, doc.line(line), from - line_start, font, tab)
+                x_in_line(measurer, line_text, from - line_start, font, tab) - row_start_x
             };
-            let x1 = if sel_end >= line_end {
-                text_rect.width()
+            let x1 = if sel_end >= row_end_byte {
+                if covers_newline {
+                    text_rect.width()
+                } else {
+                    row_end_x - row_start_x
+                }
             } else {
-                x_in_line(measurer, doc.line(line), to - line_start, font, tab)
+                x_in_line(measurer, line_text, to - line_start, font, tab) - row_start_x
             };
-            let y = text_rect.top() + (line - first) as f32 * line_h
-                - (scroll_y - first as f32 * line_h);
+            let y = row_y(vis.row);
             env.ctx.fill_rect(
                 Rect::from_min_size(
                     Vec2::new(text_rect.left() + pad + x0 - scroll_x, y),
@@ -613,27 +766,30 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         env.ctx.save();
         env.ctx.clip_rect(text_rect);
         let doc = state.ws.active_doc().expect("checked above");
-        for line in first..=last {
-            let line_start = doc.line_start(line);
-            let line_end = doc.line_end(line);
-            let y = text_rect.top() + (line - first) as f32 * line_h
-                - (scroll_y - first as f32 * line_h);
-            let line_text = doc.line(line);
+        for vis in &vis {
+            let line_text = doc.line(vis.line);
+            let line_start = doc.line_start(vis.line);
+            let line_end = doc.line_end(vis.line);
+            let row_start_byte = line_start + vis.start_byte;
+            let row_end_byte = line_start + vis.end_byte;
+            let row_start_x = x_in_line(measurer, line_text, vis.start_byte, font, tab);
+            let row_end_x = x_in_line(measurer, line_text, vis.end_byte, font, tab);
+            let y = row_y(vis.row);
             for (index, &(match_start, match_end)) in matches.iter().enumerate() {
-                if match_start >= line_end || match_end <= line_start {
+                if match_start >= row_end_byte || match_end <= row_start_byte {
                     continue;
                 }
-                let from = match_start.max(line_start);
-                let to = match_end.min(line_end);
+                let from = match_start.max(row_start_byte);
+                let to = match_end.min(row_end_byte);
                 if from >= to {
                     continue;
                 }
-                let x0 = if match_start <= line_start {
-                    0.0
+                let x0 = x_in_line(measurer, line_text, from - line_start, font, tab) - row_start_x;
+                let x1 = if match_end >= line_end {
+                    row_end_x - row_start_x
                 } else {
-                    x_in_line(measurer, line_text, from - line_start, font, tab)
+                    x_in_line(measurer, line_text, to - line_start, font, tab) - row_start_x
                 };
-                let x1 = x_in_line(measurer, line_text, to - line_start, font, tab);
                 let color = if Some(index) == current {
                     p.accent.alpha_mul(0.32)
                 } else {
@@ -651,31 +807,32 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         env.ctx.restore();
     }
 
-    // Text lines.
+    // Text rows.
     env.ctx.save();
     env.ctx.clip_rect(text_rect);
     let ascent = measurer.ascent(font);
     let mut scratch = String::new();
-    for line in first..=last {
+    for vis in &vis {
         let line_text = {
             let doc = state.ws.active_doc().expect("checked above");
-            doc.line(line)
+            doc.line(vis.line)
         };
+        let segment = &line_text[vis.start_byte..vis.end_byte];
         scratch.clear();
-        if line_text.contains('\t') {
-            scratch.push_str(&expand_tabs(line_text, tab));
+        if segment.contains('\t') {
+            scratch.push_str(&wrap::expand_tabs(segment, tab));
         } else {
-            scratch.push_str(line_text);
+            scratch.push_str(segment);
         }
         if scratch.is_empty() {
             continue;
         }
-        let y =
-            text_rect.top() + (line - first) as f32 * line_h - (scroll_y - first as f32 * line_h);
+        let row_start_x = x_in_line(measurer, line_text, vis.start_byte, font, tab);
+        let y = row_y(vis.row);
         let baseline = y + (line_h - font) * 0.5 + ascent;
         env.ctx.draw_text_weighted(
             scratch.as_str(),
-            Vec2::new(text_rect.left() + pad - scroll_x, baseline),
+            Vec2::new(text_rect.left() + pad + row_start_x - scroll_x, baseline),
             font,
             FontWeight::NORMAL,
             TextAlign::Left,
@@ -687,24 +844,26 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     // which keeps tab expansion and horizontal metrics identical to the caret.
     if state.settings.syntax {
         let doc = state.ws.active_doc().expect("checked above");
-        for line in first..=last {
-            let Some(tokens) = state.highlight.tokens(line) else {
+        for vis in &vis {
+            let Some(tokens) = state.highlight.tokens(vis.line) else {
                 continue;
             };
             if tokens.is_empty() {
                 continue;
             }
-            let line_text = doc.line(line);
-            let y = text_rect.top() + (line - first) as f32 * line_h
-                - (scroll_y - first as f32 * line_h);
+            let line_text = doc.line(vis.line);
+            let row_start_x = x_in_line(measurer, line_text, vis.start_byte, font, tab);
+            let y = row_y(vis.row);
             let baseline = y + (line_h - font) * 0.5 + ascent;
             for token in tokens {
-                if token.end <= token.start || token.end > line_text.len() {
+                let from = token.start.max(vis.start_byte);
+                let to = token.end.min(vis.end_byte);
+                if from >= to || token.end <= token.start || token.end > line_text.len() {
                     continue;
                 }
-                let text = &line_text[token.start..token.end];
-                let x = x_in_line(measurer, line_text, token.start, font, tab);
-                let drawn = expand_tabs(text, tab);
+                let text = &line_text[from..to];
+                let x = x_in_line(measurer, line_text, from, font, tab) - row_start_x;
+                let drawn = wrap::expand_tabs(text, tab);
                 env.ctx.draw_text_weighted(
                     drawn.as_str(),
                     Vec2::new(text_rect.left() + pad + x - scroll_x, baseline),
@@ -722,14 +881,26 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     if let Some((text, _cursor)) = preedit {
         let doc = state.ws.active_doc().expect("checked above");
         let line = doc.line_of(caret);
+        let row = state
+            .editor
+            .wrap
+            .row_of(line, caret_col)
+            .unwrap_or(if wrap_on { caret_row } else { line });
+        let row_start_x = if wrap_on {
+            state.editor.wrap.row(row).map_or(0.0, |row| {
+                x_in_line(measurer, doc.line(row.line), row.start_byte, font, tab)
+            })
+        } else {
+            0.0
+        };
         let x = x_in_line(
             measurer,
             doc.line(line),
             caret - doc.line_start(line),
             font,
             tab,
-        );
-        let y = text_rect.top() + line as f32 * line_h - scroll_y;
+        ) - row_start_x;
+        let y = row_y(row);
         let baseline = y + (line_h - font) * 0.5 + ascent;
         env.ctx.save();
         env.ctx.clip_rect(text_rect);
@@ -755,14 +926,30 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     {
         let doc = state.ws.active_doc().expect("checked above");
         let line = doc.line_of(caret);
+        let row = if wrap_on {
+            state
+                .editor
+                .wrap
+                .row_of(line, caret_col)
+                .unwrap_or(caret_row)
+        } else {
+            line
+        };
+        let row_start_x = if wrap_on {
+            state.editor.wrap.row(row).map_or(0.0, |row| {
+                x_in_line(measurer, doc.line(row.line), row.start_byte, font, tab)
+            })
+        } else {
+            0.0
+        };
         let x = x_in_line(
             measurer,
             doc.line(line),
             caret - doc.line_start(line),
             font,
             tab,
-        );
-        let y = text_rect.top() + line as f32 * line_h - scroll_y;
+        ) - row_start_x;
+        let y = row_y(row);
         let caret_rect = Rect::from_min_size(
             Vec2::new(text_rect.left() + pad + x - scroll_x, y),
             Size::new(2.0, line_h),
@@ -785,14 +972,27 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                 continue;
             }
             let line = doc.line_of(byte);
-            if line < first || line > last {
+            let column = text[doc.line_start(line)..byte].chars().count();
+            let row = if wrap_on {
+                state.editor.wrap.row_of(line, column).unwrap_or(line)
+            } else {
+                line
+            };
+            if row < first_row || row > last_row {
                 continue;
             }
+            let row_start_x = if wrap_on {
+                state.editor.wrap.row(row).map_or(0.0, |row| {
+                    x_in_line(measurer, doc.line(row.line), row.start_byte, font, tab)
+                })
+            } else {
+                0.0
+            };
             let offset = byte - doc.line_start(line);
-            let x = x_in_line(measurer, doc.line(line), offset, font, tab);
+            let x = x_in_line(measurer, doc.line(line), offset, font, tab) - row_start_x;
             let ch = text[byte..].chars().next().unwrap_or(' ');
             let width = measurer.advance(ch, font).max(2.0);
-            let y = text_rect.top() + line as f32 * line_h - scroll_y;
+            let y = row_y(row);
             env.ctx.fill_rect(
                 Rect::from_min_size(
                     Vec2::new(text_rect.left() + pad + x - scroll_x, y + line_h - 2.0),
@@ -804,15 +1004,17 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         env.ctx.restore();
     }
 
-    // Gutter numbers (active line in accent, the rest dim).
+    // Gutter numbers: one label per logical line (on its first visual row).
     if show_gutter {
         let number_font = (font - 1.0).max(9.0);
         let right = gutter_rect.right() - m.gutter_pad;
-        for line in first..=last {
-            let y = text_rect.top() + (line - first) as f32 * line_h
-                - (scroll_y - first as f32 * line_h);
+        for vis in &vis {
+            if !vis.first {
+                continue;
+            }
+            let y = row_y(vis.row);
             let baseline = y + (line_h - number_font) * 0.5 + ascent;
-            let label = (line + 1).to_string();
+            let label = (vis.line + 1).to_string();
             kit::text_right(
                 env.ctx,
                 measurer,
@@ -820,7 +1022,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                 right,
                 baseline,
                 number_font,
-                if line == caret_line {
+                if vis.line == caret_line {
                     p.accent
                 } else {
                     p.faint

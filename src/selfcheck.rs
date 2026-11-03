@@ -103,6 +103,29 @@ impl Harness {
         self.event(InputEvent::TextInput { text: text.into() });
     }
 
+    fn drag(&mut self, from: Vec2, to: Vec2) {
+        self.event(InputEvent::PointerDown {
+            position: from,
+            button: PointerButton::Left,
+        });
+        self.event(InputEvent::PointerMove { position: to });
+        self.event(InputEvent::PointerUp {
+            position: to,
+            button: PointerButton::Left,
+        });
+    }
+
+    fn right_click(&mut self, position: Vec2) {
+        self.event(InputEvent::PointerDown {
+            position,
+            button: PointerButton::Right,
+        });
+        self.event(InputEvent::PointerUp {
+            position,
+            button: PointerButton::Right,
+        });
+    }
+
     fn find_hit(&self, hit: crate::state::FindHit) -> Vec2 {
         self.app
             .state()
@@ -260,6 +283,158 @@ fn check(dir: &Path) -> Result<(), String> {
     harness.frame()?;
     if harness.app.state().ws.tabs.len() != tabs_before {
         return Err("clicking the tab's top-right corner did not close it".into());
+    }
+
+    // -- tab drag reorder + context menu --------------------------------
+    for _ in 0..2 {
+        harness.shortcut(
+            Key::Character('n'),
+            Modifiers {
+                meta: true,
+                ..Modifiers::NONE
+            },
+        );
+    }
+    harness.frame()?;
+    let dragged_id = harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .map(|doc| doc.id())
+        .ok_or("no active tab for the drag test")?;
+    let (from, to) = {
+        let state = harness.app.state();
+        let active = state.ws.active;
+        let Some((_, tab, _)) = state
+            .tabs
+            .hits
+            .iter()
+            .find(|(index, _, _)| *index == active)
+        else {
+            return Err("the dragged tab has no rect".into());
+        };
+        let Some((_, first, _)) = state.tabs.hits.first() else {
+            return Err("no first tab rect".into());
+        };
+        (
+            tab.center(),
+            Vec2::new(first.left() + 2.0, first.center().y),
+        )
+    };
+    harness.drag(from, to);
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        if state.ws.active != 0 || state.ws.tabs.first().map(|doc| doc.id()) != Some(dragged_id) {
+            return Err(format!(
+                "dragging a tab to the front did not reorder it (active={} first={:?})",
+                state.ws.active,
+                state.ws.tabs.first().map(|doc| doc.id())
+            ));
+        }
+    }
+    // Right-click opens the tab menu; Esc dismisses it.
+    let tab_center = harness
+        .app
+        .state()
+        .tabs
+        .hits
+        .first()
+        .map(|(_, tab, _)| tab.center())
+        .ok_or("no tab rect for the context menu")?;
+    harness.right_click(tab_center);
+    if harness.app.state().tab_menu.is_none() {
+        return Err("right-clicking a tab did not open its context menu".into());
+    }
+    harness.frame()?;
+    harness.key(Key::Escape);
+    if harness.app.state().tab_menu.is_some() {
+        return Err("Esc did not close the tab context menu".into());
+    }
+    // Close the two dragged/new untitled tabs through the menu (never main.rs).
+    for _ in 0..2 {
+        let tab_center = {
+            let state = harness.app.state();
+            let index = state
+                .ws
+                .tabs
+                .iter()
+                .position(|doc| doc.name().starts_with("untitled"))
+                .ok_or("no untitled tab left to close")?;
+            state
+                .tabs
+                .hits
+                .iter()
+                .find(|(hit, _, _)| *hit == index)
+                .map(|(_, tab, _)| tab.center())
+                .ok_or("the untitled tab has no rect")?
+        };
+        harness.right_click(tab_center);
+        harness.frame()?;
+        let close_item = harness
+            .app
+            .state()
+            .tab_menu
+            .as_ref()
+            .and_then(|menu| {
+                menu.hits
+                    .iter()
+                    .find(|(action, _)| *action == crate::state::TabMenuAction::Close)
+                    .map(|(_, rect)| rect.center())
+            })
+            .ok_or("the tab context menu has no Close item")?;
+        harness.click(close_item);
+        harness.frame()?;
+    }
+    if harness.app.state().ws.tabs.len() != tabs_before {
+        return Err("the tab context menu did not close the untitled tabs".into());
+    }
+    // Reveal the remaining file through the context menu.
+    let main_index = harness
+        .app
+        .state()
+        .ws
+        .tabs
+        .iter()
+        .position(|doc| doc.name() == "main.rs")
+        .ok_or("main.rs is not open after the tab menu test")?;
+    let main_center = harness
+        .app
+        .state()
+        .tabs
+        .hits
+        .iter()
+        .find(|(index, _, _)| *index == main_index)
+        .map(|(_, tab, _)| tab.center())
+        .ok_or("main.rs tab has no rect")?;
+    harness.right_click(main_center);
+    harness.frame()?;
+    let reveal_item = harness
+        .app
+        .state()
+        .tab_menu
+        .as_ref()
+        .and_then(|menu| {
+            menu.hits
+                .iter()
+                .find(|(action, _)| *action == crate::state::TabMenuAction::RevealInSidebar)
+                .map(|(_, rect)| rect.center())
+        })
+        .ok_or("the tab context menu has no Reveal item")?;
+    harness.click(reveal_item);
+    harness.frame()?;
+    if harness
+        .app
+        .state()
+        .sidebar
+        .selected
+        .as_deref()
+        .and_then(|path| path.file_name())
+        .and_then(|name| name.to_str())
+        != Some("main.rs")
+    {
+        return Err("Reveal in Sidebar did not select the tab's file".into());
     }
 
     // -- typing, save, undo/redo ----------------------------------------
@@ -1411,6 +1586,23 @@ fn check(dir: &Path) -> Result<(), String> {
             }
         }
     }
+    // Wheel-scrolling the strip must move even when the active tab is at the
+    // right edge (no scrollbar is drawn; the strip itself is the target).
+    let strip_center = harness.app.state().tabs.strip.center();
+    let before_scroll = harness.app.state().tabs.scroll;
+    harness.event(InputEvent::Wheel {
+        position: strip_center,
+        delta: Vec2::new(0.0, -60.0),
+        phase: igui_core::TouchPhase::Moved,
+        device: igui_core::ScrollDevice::Wheel,
+    });
+    harness.frame()?;
+    if harness.app.state().tabs.scroll >= before_scroll {
+        return Err("wheel scrolling did not move the overflowing tab strip".into());
+    }
+    // Restore the active tab for the checks that follow.
+    harness.app.state_mut().tabs.reveal_active = true;
+    harness.frame()?;
 
     // ================= M4: quick open, search, split, reliability =====
 
@@ -2254,6 +2446,265 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
     }
     if !store.list().is_empty() {
         return Err("Discard All did not delete the snapshots".into());
+    }
+
+    // -- external changes: clean reload, dirty Keep/Reload ----------------
+    let external_dir = dir.join("external");
+    fs::create_dir_all(&external_dir).map_err(|error| format!("fixture: {error}"))?;
+    let external_path = external_dir.join("external.txt");
+    fs::write(&external_path, "remote one\n").map_err(|error| format!("fixture: {error}"))?;
+    let mut harness = Harness::new(
+        Some(external_path.clone()),
+        external_dir.join("session.conf"),
+        ScriptedDialogs::new(vec![]),
+    );
+    harness.frame()?;
+    fs::write(&external_path, "remote one changed\n")
+        .map_err(|error| format!("fixture: {error}"))?;
+    harness.app.state_mut().check_external_changes();
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        let doc = state
+            .ws
+            .active_doc()
+            .ok_or("no document after the external reload")?;
+        if doc.text() != "remote one changed\n" || doc.is_dirty() {
+            return Err("a clean tab did not reload after an external change".into());
+        }
+    }
+    {
+        let mut state = harness.app.state_mut();
+        state
+            .ws
+            .active_doc_mut()
+            .ok_or("no active document")?
+            .insert_text("local edit\n");
+    }
+    harness.frame()?;
+    fs::write(&external_path, "remote two changed\n")
+        .map_err(|error| format!("fixture: {error}"))?;
+    harness.app.state_mut().check_external_changes();
+    harness.frame()?;
+    if !matches!(
+        harness.app.state().modal,
+        Some(crate::state::Modal::ExternalChange { .. })
+    ) {
+        return Err("a dirty tab did not prompt for an external change".into());
+    }
+    let keep = harness
+        .app
+        .state()
+        .modal_buttons
+        .iter()
+        .find(|(button, _)| *button == ModalButton::Cancel)
+        .map(|(_, rect)| rect.center())
+        .ok_or("the external-change modal has no Keep button")?;
+    harness.click(keep);
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        if state.modal.is_some() {
+            return Err("Keep did not close the external-change modal".into());
+        }
+        if !state
+            .ws
+            .active_doc()
+            .is_some_and(|doc| doc.text().contains("local edit"))
+        {
+            return Err("Keep lost the dirty buffer".into());
+        }
+    }
+    fs::write(&external_path, "remote three changed\n")
+        .map_err(|error| format!("fixture: {error}"))?;
+    harness.app.state_mut().check_external_changes();
+    harness.frame()?;
+    let reload = harness
+        .app
+        .state()
+        .modal_buttons
+        .iter()
+        .find(|(button, _)| *button == ModalButton::Reload)
+        .map(|(_, rect)| rect.center())
+        .ok_or("the external-change modal has no Reload button")?;
+    harness.click(reload);
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        let doc = state.ws.active_doc().ok_or("no document after Reload")?;
+        if doc.text() != "remote three changed\n" || doc.is_dirty() {
+            return Err("Reload did not take the disk text".into());
+        }
+    }
+
+    // -- soft wrap: layout, click mapping, vertical movement, toggle ---------
+    let wrap_dir = dir.join("wrap");
+    fs::create_dir_all(&wrap_dir).map_err(|error| format!("fixture: {error}"))?;
+    let wrap_path = wrap_dir.join("wrap.txt");
+    let long_line = format!("{} END\n", "word ".repeat(90));
+    fs::write(&wrap_path, &long_line).map_err(|error| format!("fixture: {error}"))?;
+    let mut harness = Harness::new(
+        Some(wrap_path.clone()),
+        wrap_dir.join("session.conf"),
+        ScriptedDialogs::new(vec![]),
+    );
+    harness.frame()?;
+    {
+        let mut state = harness.app.state_mut();
+        if let Some(doc) = state.ws.active_doc_mut() {
+            doc.scroll_x = 80.0;
+        }
+    }
+    harness.frame()?;
+    // Simulate the macOS event order: KeyDown, the Option+Z character as
+    // TextInput, then KeyUp. The text must not reach the document.
+    harness.event(InputEvent::ModifiersChanged(Modifiers {
+        alt: true,
+        ..Modifiers::NONE
+    }));
+    harness.event(InputEvent::KeyDown {
+        key: Key::Character('z'),
+    });
+    harness.type_text("Ω");
+    harness.event(InputEvent::KeyUp {
+        key: Key::Character('z'),
+    });
+    harness.event(InputEvent::ModifiersChanged(Modifiers::NONE));
+    let frame = harness.frame()?;
+    if !harness.app.state().session.soft_wrap {
+        return Err("Alt+Z did not enable soft wrap".into());
+    }
+    if harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .is_some_and(|doc| doc.text().contains('Ω'))
+    {
+        return Err("Alt+Z leaked its character into the document".into());
+    }
+    if harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .is_some_and(|doc| doc.scroll_x != 0.0)
+    {
+        return Err("soft wrap did not suppress horizontal scrolling".into());
+    }
+    let (text_rect, line_h, rows, line_count) = {
+        let state = harness.app.state();
+        (
+            state.editor.text_rect,
+            state.editor_metrics().line_h,
+            state.editor.wrap.len(),
+            state.ws.active_doc().map_or(0, |doc| doc.line_count()),
+        )
+    };
+    if rows <= line_count {
+        return Err(format!(
+            "soft wrap did not split the long line (rows={rows} lines={line_count})"
+        ));
+    }
+    if !texts(&frame).iter().any(|text| text.contains("word")) {
+        return Err("soft-wrapped text was not painted".into());
+    }
+    // Click the second visual row: same logical line, non-zero column.
+    let click_at = Vec2::new(text_rect.left() + 24.0, text_rect.top() + line_h * 1.5);
+    harness.click(click_at);
+    {
+        let state = harness.app.state();
+        let (line, column) = state
+            .ws
+            .active_doc()
+            .ok_or("no document after wrapped click")?
+            .line_col();
+        if line != 0 || column == 0 {
+            return Err(format!(
+                "wrapped click mapped to line {line}, column {column}"
+            ));
+        }
+    }
+    {
+        let mut state = harness.app.state_mut();
+        state
+            .ws
+            .active_doc_mut()
+            .ok_or("no document for wrap navigation")?
+            .click(0, 0, false);
+    }
+    harness.frame()?;
+    harness.key(Key::ArrowDown);
+    {
+        let state = harness.app.state();
+        let (line, column) = state
+            .ws
+            .active_doc()
+            .ok_or("no document after wrapped down")?
+            .line_col();
+        if line != 0 || column == 0 {
+            return Err(format!(
+                "ArrowDown did not move to the next visual row (line {line}, column {column})"
+            ));
+        }
+    }
+    harness.key(Key::ArrowUp);
+    {
+        let state = harness.app.state();
+        let (line, column) = state
+            .ws
+            .active_doc()
+            .ok_or("no document after wrapped up")?
+            .line_col();
+        if line != 0 || column != 0 {
+            return Err(format!(
+                "ArrowUp did not return to the first visual row (line {line}, column {column})"
+            ));
+        }
+    }
+    harness.shortcut(
+        Key::Character('z'),
+        Modifiers {
+            alt: true,
+            ..Modifiers::NONE
+        },
+    );
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        if state.session.soft_wrap {
+            return Err("Alt+Z did not disable soft wrap".into());
+        }
+        if !state.editor.wrap.is_empty()
+            || (state.editor.content_h - line_count as f32 * line_h).abs() > 0.5
+        {
+            return Err("soft wrap off did not restore logical line heights".into());
+        }
+        if state
+            .ws
+            .active_doc()
+            .is_some_and(|doc| (doc.scroll_x - 80.0).abs() > 0.5)
+        {
+            return Err("soft wrap did not restore the horizontal scroll offset".into());
+        }
+    }
+    // The setting is persisted; the session file restores it.
+    harness.shortcut(
+        Key::Character('z'),
+        Modifiers {
+            alt: true,
+            ..Modifiers::NONE
+        },
+    );
+    harness.frame()?;
+    let restored = EditorApp::with_config(
+        None,
+        None,
+        wrap_dir.join("session.conf"),
+        Box::new(ScriptedDialogs::new(vec![])),
+    );
+    if !restored.state().session.soft_wrap {
+        return Err("soft wrap was not restored from the session".into());
     }
     Ok(())
 }

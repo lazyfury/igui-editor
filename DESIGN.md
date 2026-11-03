@@ -1,6 +1,6 @@
 # igui-editor — design
 
-Agreed direction (M1–M5 implemented). This document records the decisions so
+Agreed direction (M1–M6 implemented). This document records the decisions so
 future work does not re-litigate them.
 
 ## Product
@@ -138,8 +138,10 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    dividers share one 4 px drag-handle implementation (`ui::handle`; see
    [§Drag handle](#drag-handle-specification)), so their visuals cannot drift.
    It updates the sidebar's flex basis and calls `mark_dirty` during the drag (no
-   tree rebuild). Tabs shrink to 96 px, then scroll horizontally with the active
-   tab kept visible. Both states persist (sidebar width, split ratio).
+   tree rebuild). Tabs shrink to 96 px, then scroll horizontally with the wheel;
+   the active tab is revealed on switch/new/close, not re-clamped after manual
+   scrolling. No scrollbar is drawn. Both states persist (sidebar width, split
+   ratio).
 19. **A workspace folder is optional.** `Workspace { root, folder_open, tree }`:
    `folder_open == false` means no folder (welcome state, empty sidebar, Quick
    Open/project search refuse). Opening a file never implicitly opens a folder;
@@ -167,7 +169,7 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    2 s idle; every dirty buffer (including untitled) gets a raw `.txt` +
    metadata snapshot under `<config>/recovery/`, and a startup prompt offers
    Restore All / Discard All. Window size/position persist in the session
-   (restored unless maximized). Session format is version 3.
+   (restored unless maximized). Session format is version 4.
 24. **Language packs are data, not code.** `<config>/languages/*.json` packs are
    validated, capped and registered into `SyntaxRegistry` after the built-ins
    (the registry keeps the first registration, so a pack can never shadow a
@@ -187,6 +189,25 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    A frame's authoritative side is whichever scroll changed (tracked from the
    previous frame), and the other side is interpolated from the anchors, so the
    pair cannot ping-pong. Split + toggle only; persisted as `sync_scroll`.
+   Under soft wrap the editor's visual row is mapped back to a source line.
+27. **Tabs reorder in the workspace, not the view.** A drag on the strip
+   records `(from, insertion)` from tab centres and moves the `Document` in
+   `Workspace::tabs`, keeping the active document's identity; the order is
+   already the session's `tabs.N` order. The right-click menu reuses the overlay
+   pattern; Close Others / Close to the Right collect targets and ask once
+   (Cancel / Discard) if any target is dirty. No tree rebuild during a drag.
+28. **External changes are metadata-only.** Each open path has a
+   `(length, mtime)` stamp refreshed on open/save. Once a second the UI thread
+   compares stamps: clean tabs reload through `Document::reload`, dirty tabs show
+   Keep / Reload, missing files are reported and the buffer is kept. No
+   filesystem watcher dependency; the session is untouched.
+29. **Soft wrap is a display-row cache.** `model::wrap` maps each logical line
+   to one or more `(start/end column+byte, first)` rows, keyed by document id,
+   revision, width, font and tab width. The editor paints/hit-tests/scrolls by
+   visual row, while the document stays line/column based (status Ln/Col stays
+   logical). Gutter labels and current-line fill follow the row spans; horizontal
+   scroll is suppressed; wrap turns off above 2 MB / 20k lines. Wrapping is at
+   character boundaries, not words.
 
 ## Theme spec (geek / compact / no corners)
 
@@ -262,19 +283,36 @@ when the find bar changes the content top.
 **M1 (done)** — shell, sidebar tree, tabs, full text editing, selection,
 undo/redo, clipboard, save, dark/light, IME preedit, self-check.
 
-**M2** — multi-document polish (close-with-confirm via a custom modal), recent
-files, find/replace bar, settings persistence (plain key=value file), Markdown
-edit/preview split with a self-written block renderer on `pulldown-cmark`'s
-event stream, `Save As`.
+**M2 (done)** — multi-document polish (close-with-confirm via a custom modal),
+recent files, find/replace bar, settings persistence (plain key=value file),
+Markdown edit/preview split with a self-written block renderer on
+`pulldown-cmark`'s event stream, `Save As`.
 
-**M3** — lightweight per-line tokenizer (Rust / JSON / TOML / Markdown) with
-dirty-line caching, indent guides, bracket matching, large-file virtualization
-(measure cache + visible-only painting already in place), settings panel
-(font size, tab width, wrap, theme).
+**M3 (done)** — per-line tokenizers (Rust / C / C++ / JS / TS / Go / GDScript /
+JSON / TOML / Markdown), incremental highlight cache, indent guides, bracket
+matching, large-file guards, settings panel, sidebar drag-resize, tab overflow.
+
+**M4 (done)** — optional workspace folder + welcome state, file/folder drag &
+drop, CLI folder argument, Quick Open, project search worker, draggable split
+divider, autosave, crash recovery, window geometry, session v2.
+
+**M5 (done)** — declarative JSON language packs + footer language override,
+replace-in-files (plan → confirm → atomic apply), editor/preview scroll sync via
+Markdown source-line anchors, session v3.
+
+**M6 (done)** — tab drag-reorder + right-click context menu, soft wrap with
+visual-row caret/click/navigation mapping and a 2 MB / 20k-line cap, external
+file-change polling (clean reload, dirty Keep/Reload), session v4.
+
+Next candidates: code-plugin loading (dylib/wasm), per-hit replace and
+cross-file undo, incremental preview layout for very large documents,
+word-boundary wrapping, filesystem watcher for sidebar/search freshness.
 
 ## Non-goals for the editor core
 
 - Rope/CRDT: a `String` with a line-start index is enough while files are
-  bounded; revisit if M3's large-file work demands it.
-- Syntax trees: M3 needs coloring, not parsing.
-- Multi-cursor, split view, VCS integration: not planned for M1–M3.
+  bounded; revisit if large-file work demands it.
+- Syntax trees: highlighting needs coloring, not parsing.
+- Multi-cursor, VCS integration: not planned.
+- A filesystem watcher: external changes are polled; sidebar/search indexes are
+  rebuilt on demand.

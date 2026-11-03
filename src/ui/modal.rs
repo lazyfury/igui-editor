@@ -22,10 +22,16 @@ pub const CLOSE_BUTTONS: [ModalButton; 3] =
     [ModalButton::Cancel, ModalButton::Discard, ModalButton::Save];
 /// Buttons for the replace-in-files modal.
 pub const REPLACE_BUTTONS: [ModalButton; 2] = [ModalButton::Cancel, ModalButton::Apply];
+/// Buttons for closing several tabs (no per-tab Save).
+pub const CLOSE_TABS_BUTTONS: [ModalButton; 2] = [ModalButton::Cancel, ModalButton::Discard];
+/// Buttons for an external-change prompt.
+pub const EXTERNAL_BUTTONS: [ModalButton; 2] = [ModalButton::Cancel, ModalButton::Reload];
 
 fn buttons_for(modal: Modal) -> &'static [ModalButton] {
     match modal {
         Modal::CloseDirtyTab { .. } => &CLOSE_BUTTONS,
+        Modal::CloseTabs { .. } => &CLOSE_TABS_BUTTONS,
+        Modal::ExternalChange { .. } => &EXTERNAL_BUTTONS,
         Modal::ReplaceInFiles { .. } => &REPLACE_BUTTONS,
     }
 }
@@ -83,6 +89,30 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
                 format!("Save changes to {name} before closing?"),
             )
         }
+        Modal::CloseTabs { keep, from } => {
+            let count = (from..state.ws.tabs.len())
+                .filter(|index| keep != Some(*index))
+                .count();
+            (
+                "Close tabs".to_string(),
+                format!(
+                    "Close {count} tab{}? Unsaved changes will be lost.",
+                    if count == 1 { "" } else { "s" }
+                ),
+            )
+        }
+        Modal::ExternalChange { tab } => {
+            let name = state
+                .ws
+                .tabs
+                .get(tab)
+                .map(|doc| doc.name().to_string())
+                .unwrap_or_else(|| "this file".into());
+            (
+                "File changed on disk".to_string(),
+                format!("Reload {name} and lose the unsaved changes in this buffer?"),
+            )
+        }
         Modal::ReplaceInFiles { files, occurrences } => {
             let replacement = state
                 .pending_replace
@@ -121,7 +151,10 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
 
     state.modal_buttons = buttons.clone();
     for (button, rect) in &buttons {
-        let primary = matches!(button, ModalButton::Save | ModalButton::Apply);
+        let primary = matches!(
+            button,
+            ModalButton::Save | ModalButton::Apply | ModalButton::Reload
+        );
         let danger = matches!(button, ModalButton::Discard);
         let fill = if primary {
             p.accent
@@ -133,10 +166,12 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
         kit::fill(ctx, *rect, fill);
         ctx.stroke_rect(*rect, 1.0, if primary { p.accent } else { p.border });
         let label = match button {
+            ModalButton::Cancel if matches!(modal, Modal::ExternalChange { .. }) => "Keep",
             ModalButton::Cancel => "Cancel",
             ModalButton::Discard => "Discard",
             ModalButton::Save => "Save",
             ModalButton::Apply => "Replace all",
+            ModalButton::Reload => "Reload",
         };
         let color = if primary {
             p.bg

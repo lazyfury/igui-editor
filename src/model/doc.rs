@@ -266,6 +266,27 @@ impl Document {
         true
     }
 
+    /// Reloads the buffer from disk after an external change, dropping undo
+    /// history and preserving the caret/scroll where still valid.
+    pub fn reload(&mut self) -> std::io::Result<()> {
+        let Some(path) = self.path.clone() else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "untitled buffer has no disk file",
+            ));
+        };
+        let raw = std::fs::read_to_string(path)?;
+        self.text = normalize(&raw);
+        self.caret = floor_boundary(&self.text, self.caret.min(self.text.len()));
+        self.anchor = floor_boundary(&self.text, self.anchor.min(self.text.len()));
+        self.dirty = false;
+        self.rev += 1;
+        self.edit_span = None;
+        self.undo = UndoStack::default();
+        self.rebuild_lines();
+        Ok(())
+    }
+
     /// Writes the buffer back to its file. Untitled buffers have no path.
     pub fn save(&mut self) -> std::io::Result<()> {
         let Some(path) = self.path.clone() else {

@@ -194,6 +194,24 @@ impl Workspace {
             .map_err(|error| format!("save failed: {error}"))
     }
 
+    /// Moves the tab at `from` to index `to`, keeping the active document
+    /// focused (its index follows the move).
+    pub fn move_tab(&mut self, from: usize, to: usize) -> bool {
+        if from >= self.tabs.len() || to >= self.tabs.len() || from == to {
+            return false;
+        }
+        let doc = self.tabs.remove(from);
+        self.tabs.insert(to, doc);
+        if self.active == from {
+            self.active = to;
+        } else if from < self.active && to >= self.active {
+            self.active -= 1;
+        } else if from > self.active && to <= self.active {
+            self.active += 1;
+        }
+        true
+    }
+
     /// Removes `index` regardless of the dirty flag (the UI confirmed first).
     pub fn force_close(&mut self, index: usize) {
         if index < self.tabs.len() {
@@ -307,6 +325,30 @@ mod tests {
         workspace.force_close(0);
         assert!(workspace.tabs.is_empty());
         assert_eq!(workspace.active, 0);
+    }
+
+    #[test]
+    fn moving_tabs_keeps_the_active_document() {
+        let mut workspace = Workspace::new(std::env::temp_dir());
+        workspace.new_tab();
+        workspace.new_tab();
+        workspace.new_tab();
+        let ids: Vec<u64> = workspace.tabs.iter().map(|doc| doc.id()).collect();
+        workspace.active = 1;
+        assert!(workspace.move_tab(1, 2));
+        assert_eq!(workspace.active, 2);
+        assert_eq!(
+            workspace
+                .tabs
+                .iter()
+                .map(|doc| doc.id())
+                .collect::<Vec<_>>(),
+            vec![ids[0], ids[2], ids[1]]
+        );
+        workspace.active = 0;
+        assert!(workspace.move_tab(2, 0));
+        assert_eq!(workspace.active, 1);
+        assert!(!workspace.move_tab(0, 0));
     }
 
     #[test]
