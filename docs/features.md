@@ -56,7 +56,10 @@ bridge. Six built-in servers are registered:
 
 Each spec declares `IGUI_EDITOR_*` overrides (`IGUI_EDITOR_GOPLS`,
 `IGUI_EDITOR_TS_SERVER`, `IGUI_EDITOR_CLANGD`, `IGUI_EDITOR_PYRIGHT`,
-`IGUI_EDITOR_RUST_ANALYZER`, `IGUI_EDITOR_GODOT`). Servers are installed
+`IGUI_EDITOR_RUST_ANALYZER`, `IGUI_EDITOR_GODOT`). Repository-local
+`node_modules/.bin` shims are **not** executed by default; set
+`IGUI_EDITOR_TRUST_WORKSPACE=1` only for projects you trust. PATH and the
+user/global toolchains remain available either way. Servers are installed
 separately; the editor never installs them itself. When an executable is
 missing, a copy-only prompt names the tool and shows the install command
 (e.g. `go install golang.org/x/tools/gopls@latest`) with **COPY COMMAND**,

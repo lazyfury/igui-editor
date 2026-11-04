@@ -101,7 +101,7 @@ same service.
 
 1. Terminal: multiple sessions, selection/copy and scrollback.
 2. Git: discard, branch and network operations (network stays in the terminal).
-3. Workspace Trust before executing repo-local language servers.
+3. Workspace Trust UI (the opt-in local-binary guard is implemented).
 4. Extension host (deferred): JSON-RPC/WASM mapping of the same capabilities.
 
 ## LSP service (Rust, Go, TS/JS, C/C++, Python, Godot)
@@ -119,6 +119,11 @@ PluginHost
 ```
 
 ### Built-in servers
+
+Repository-local `node_modules/.bin` shims are only considered when
+`IGUI_EDITOR_TRUST_WORKSPACE=1`; the default is PATH plus the user/global
+toolchain directories. This keeps opening an untrusted project from executing
+its own language-server binary.
 
 | Spec | Command (`IGUI_EDITOR_*`) | Transport | Project markers | Workspace markers |
 |---|---|---|---|---|

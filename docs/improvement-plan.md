@@ -141,13 +141,26 @@ Acceptance:
 - Long unbreakable tokens still split instead of overflowing.
 - Caret/click visual row mapping remains consistent.
 
+### Task 3: trusted workspace binaries (done)
+
+- [x] Stop resolving language servers from `node_modules/.bin` by default.
+- [x] Allow them only with `IGUI_EDITOR_TRUST_WORKSPACE=1`; PATH and global
+      toolchains still work.
+- [x] Test the trusted and untrusted resolution paths.
+- [x] Document the guard in features/services.
+
+Acceptance:
+
+- A repository-local shim is not selected unless explicitly trusted.
+- The normal PATH/toolchain resolution still works.
+
 ## Deferred to the next feature slice
 
 These are intentionally not part of this plan's implementation phases:
 
 - Native macOS close guard + Dock reopen.
 - Terminal multiple sessions, selection/copy, scrollback.
-- Workspace Trust / repo-local language-server confirmation.
+- Workspace Trust UI (the opt-in local-binary guard is implemented).
 - CI workflow with a pinned sibling `igui` checkout.
 - Incremental line index and incremental Markdown preview layout.
 - Grapheme-aware caret movement.
@@ -165,6 +178,7 @@ These are intentionally not part of this plan's implementation phases:
 | Session 1 | 6 docs | done | Docs updated; final `scripts/check.sh` passed with 232 unit tests + 2 doc tests. |
 | Session 2 | Follow-up 1 | done | Incremental line index; 234 unit tests; typing bench 1.41 → 1.04 ms/frame. |
 | Session 2 | Follow-up 2 | done | Word-boundary soft wrap; 237 unit tests; selfcheck green. |
+| Session 2 | Follow-up 3 | done | Repo-local LSP shims require explicit trust; 238 unit tests. |
 
 ## Final acceptance checklist
 

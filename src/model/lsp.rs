@@ -200,7 +200,11 @@ impl LspClient {
             .and_then(|name| std::env::var(name).ok())
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| spec.command.to_string());
-        let mut process = Command::new(resolve_command(&command, root));
+        let mut process = Command::new(resolve_command(
+            &command,
+            root,
+            workspace_binaries_enabled(),
+        ));
         process
             .args(&spec.args)
             .current_dir(root)
@@ -546,11 +550,17 @@ pub fn byte_for_position(doc: &Document, line: u32, character: u32) -> usize {
 /// GUI-launched apps often have a minimal `PATH`; look in the usual toolchain
 /// locations before giving up. Absolute/relative paths and commands with a
 /// slash are left untouched.
-fn resolve_command(command: &str, root: &Path) -> std::ffi::OsString {
+fn resolve_command(command: &str, root: &Path, allow_workspace: bool) -> std::ffi::OsString {
     if command.contains('/') {
         return command.into();
     }
-    let mut directories: Vec<PathBuf> = vec![root.join("node_modules").join(".bin")];
+    let mut directories: Vec<PathBuf> = Vec::new();
+    // A repository can ship its own `.bin` shims. Never execute those unless
+    // the user explicitly trusts the workspace; PATH and user/global toolchains
+    // below remain available in either case.
+    if allow_workspace {
+        directories.push(root.join("node_modules").join(".bin"));
+    }
     directories.extend(std::env::split_paths(
         &std::env::var_os("PATH").unwrap_or_default(),
     ));
@@ -590,6 +600,21 @@ fn resolve_command(command: &str, root: &Path) -> std::ffi::OsString {
         }
     }
     command.into()
+}
+
+/// Whether repository-local executable shims may be used.
+///
+/// This is deliberately opt-in: opening an untrusted project must not run a
+/// `node_modules/.bin` file just because its language id matches.
+fn workspace_binaries_enabled() -> bool {
+    std::env::var("IGUI_EDITOR_TRUST_WORKSPACE")
+        .ok()
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes"
+            )
+        })
 }
 
 /// Root for a language server.
@@ -2345,6 +2370,24 @@ fn parse_location(result: &Value) -> Option<Location> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workspace_binaries_require_explicit_trust() {
+        let dir =
+            std::env::temp_dir().join(format!("igui-editor-lsp-trust-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let bin = dir.join("node_modules").join(".bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let command = format!("igui-editor-test-lsp-{}", std::process::id());
+        let candidate = bin.join(&command);
+        std::fs::write(&candidate, "#!/bin/sh\n").unwrap();
+
+        let untrusted = resolve_command(&command, &dir, false);
+        assert_ne!(Path::new(&untrusted), candidate.as_path());
+        let trusted = resolve_command(&command, &dir, true);
+        assert_eq!(Path::new(&trusted), candidate.as_path());
+        let _ = std::fs::remove_dir_all(dir);
+    }
     use std::io::Cursor;
 
     fn fixture_dir(tag: &str) -> PathBuf {

@@ -44,7 +44,7 @@ Replace All are bounded/batched, terminal clipboard commands are focus-aware,
 sidebar rows are cached and external URLs are scheme-restricted.
 
 Next candidates: window-close guard + Dock reopen, terminal multiple
-sessions/selection/scrollback, workspace trust for repo-local language servers,
+sessions/selection/scrollback, Workspace Trust UI (the opt-in local-binary guard is implemented),
 CI with a pinned sibling `igui` checkout, cross-file undo, incremental preview
 layout for very large documents and grapheme-aware editing.
 
