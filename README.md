@@ -135,8 +135,9 @@ reproduce them.
   (diagnostics, hover, completion, definition, symbols).
 - **Navigation** — file tree, Quick Open, outline, tab drag/reorder and context
   menu, project search.
-- **Native** — Git panel (status/diff/stage/commit), PTY terminal, macOS
-  Finder/`open -a`/Dock Recent/open events, native open/save dialogs.
+- **Native** — Git panel (status/diff/stage/commit), PTY terminal, native macOS
+  system menu bar + custom borderless window chrome, Finder/`open -a`/Dock
+  Recent/open events, native open/save dialogs.
 - **Reliability** — external-change detection, autosave, crash recovery,
   session + window restore, large-file guards.
 - **Look** — own square "geek" palette (dark/light), no component library,

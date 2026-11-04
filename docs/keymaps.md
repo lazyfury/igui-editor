@@ -1,9 +1,10 @@
 # Keymap design and editor audit
 
 Status: command routing goes through a pure `keymap` resolver; VS Code and
-JetBrains profiles are wired, and Vim has a Normal/Visual/Insert subset. Menus
-now resolve their shortcut hints from the active profile, and the menu bar plus
-tab switching are keyboard-operable. This document records the design and the
+JetBrains profiles are wired, and Vim has a Normal/Visual/Insert subset. In-app
+menus resolve their shortcut hints from the active profile; on macOS the
+application menu is native (system menu bar) and the in-app header is hidden in
+favour of simulated window controls. This document records the design and the
 remaining scope.
 
 ## Current editor audit
@@ -19,7 +20,7 @@ remaining scope.
 | Clipboard | Cut/copy/paste; empty-selection cut/copy operates on the current line |
 | Files | Open/save/save-as, tabs, close guards, external-change reload, autosave/recovery |
 | Tabs | `primary+1…8` select by index, `primary+9` last, `Ctrl+Tab` / `Ctrl+Shift+Tab` cycle |
-| Menus | `F10`, arrows, `Home`/`End`, `Enter`/`Space`, `Esc`; hints follow the profile |
+| Menus | macOS: native `NSMenu`; other platforms: mouse-driven in-app menus with keymap-derived hints |
 | Search | Find/replace, project search + replace, next/previous |
 | Views | Edit/split/preview, soft wrap, scroll sync |
 | Language | Syntax highlighting, language packs, LSP diagnostics/hover/completion/definition, semantic tokens |

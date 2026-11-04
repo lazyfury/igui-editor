@@ -994,6 +994,11 @@ pub struct AppState {
     pub menu_open: Option<Menu>,
     pub menubar_hover: Option<Menu>,
     pub menubar_hits: Vec<(Menu, Rect)>,
+    /// Native-style window chrome painted by the header.
+    pub header_rect: Rect,
+    pub header_close: Rect,
+    pub header_minimize: Rect,
+    pub header_zoom: Rect,
     pub menu_rect: Rect,
     /// Popup item rectangles, in item order (separators have no rect).
     pub menu_items: Vec<(Action, Rect)>,
@@ -1148,6 +1153,10 @@ impl AppState {
             menu_open: None,
             menubar_hover: None,
             menubar_hits: Vec::new(),
+            header_rect: Rect::ZERO,
+            header_close: Rect::ZERO,
+            header_minimize: Rect::ZERO,
+            header_zoom: Rect::ZERO,
             menu_rect: Rect::ZERO,
             menu_items: Vec::new(),
             menu_hover: None,

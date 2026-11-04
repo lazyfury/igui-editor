@@ -85,7 +85,7 @@ Read the minimum set; do not preload the whole tree.
 | Terminal | `src/model/pty.rs`, `src/state/terminal.rs`, `src/ui/terminal.rs` | Login shell (`-l`), UTF-8 locale and augmented PATH are enforced for child processes. |
 | Git panel | `src/model/git.rs`, `src/ui/git.rs` | Service boundary in `docs/services.md`. |
 | Settings / theme / metrics | `src/settings.rs`, `src/theme.rs` | [`docs/design.md`](docs/design.md). |
-| Dialogs / macOS integration | `src/dialogs.rs`, `src/host.rs`, `src/macos/` | Async sheets only; no nested modal loops. |
+| Dialogs / macOS integration | `src/dialogs.rs`, `src/host.rs`, `src/macos/`, `src/native.rs` | Async sheets only; native menu/window chrome route through `NativeRequest`. |
 | Session / recovery / window state | `src/model/session.rs`, `src/model/recovery.rs`, `src/state/reliability.rs` | Atomic writes. |
 | Headless verification | `src/selfcheck.rs` | [`docs/verification.md`](docs/verification.md). |
 | Packaging / release profile | `packaging/`, `Cargo.toml` | [`docs/packaging.md`](docs/packaging.md). |

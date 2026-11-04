@@ -234,7 +234,13 @@ fn check(dir: &Path) -> Result<(), String> {
     let painted = texts(&frame);
     expect(&painted, "fn main() {", "the opened file's first line")?;
     expect(&painted, "println!", "the opened file's second line")?;
-    expect(&painted, "File", "menu bar labels")?;
+    if cfg!(target_os = "macos") {
+        if harness.app.state().header_close.width() == 0.0 {
+            return Err("custom macOS traffic lights were not painted".into());
+        }
+    } else {
+        expect(&painted, "File", "menu bar labels")?;
+    }
     expect(&painted, "UTF-8", "status bar facts")?;
     expect(&painted, "main.rs", "active tab / status file")?;
     expect(&painted, "EXPLORER", "sidebar header")?;
@@ -728,33 +734,44 @@ fn check(dir: &Path) -> Result<(), String> {
         return Err("⇧⌘Z did not redo the typing".into());
     }
 
-    // -- File menu -> Save ----------------------------------------------
+    // -- File -> Save ---------------------------------------------------
     harness.type_text(" ");
     harness.frame()?;
-    let file_item = harness
-        .app
-        .state()
-        .menubar_hits
-        .iter()
-        .find(|(menu, _)| *menu == Menu::File)
-        .map(|(_, rect)| rect.center())
-        .ok_or("no File menu hit rect")?;
-    harness.click(file_item);
-    if harness.app.state().menu_open != Some(Menu::File) {
-        return Err("clicking File did not open its menu".into());
-    }
-    harness.frame()?;
-    let measurer = igui_ui::text_measurer(harness.app.tree());
-    let save_item = {
-        let state = harness.app.state();
-        let (_, items) = crate::ui::menu::popup_layout(&state, measurer.as_ref());
-        items
+    if cfg!(target_os = "macos") {
+        // The macOS File menu is native; exercise the same command directly.
+        harness.shortcut(
+            Key::Character('s'),
+            Modifiers {
+                meta: true,
+                ..Modifiers::NONE
+            },
+        );
+    } else {
+        let file_item = harness
+            .app
+            .state()
+            .menubar_hits
             .iter()
-            .find(|(action, _)| *action == Some(Action::Save))
+            .find(|(menu, _)| *menu == Menu::File)
             .map(|(_, rect)| rect.center())
-            .ok_or("Save item has no rect")?
-    };
-    harness.click(save_item);
+            .ok_or("no File menu hit rect")?;
+        harness.click(file_item);
+        if harness.app.state().menu_open != Some(Menu::File) {
+            return Err("clicking File did not open its menu".into());
+        }
+        harness.frame()?;
+        let measurer = igui_ui::text_measurer(harness.app.tree());
+        let save_item = {
+            let state = harness.app.state();
+            let (_, items) = crate::ui::menu::popup_layout(&state, measurer.as_ref());
+            items
+                .iter()
+                .find(|(action, _)| *action == Some(Action::Save))
+                .map(|(_, rect)| rect.center())
+                .ok_or("Save item has no rect")?
+        };
+        harness.click(save_item);
+    }
     harness.frame()?;
     if harness
         .app
@@ -1593,27 +1610,31 @@ fn check(dir: &Path) -> Result<(), String> {
     }
 
     // Discoverability: View > Settings… opens the same panel.
-    let view_item = harness
-        .app
-        .state()
-        .menubar_hits
-        .iter()
-        .find(|(menu, _)| *menu == Menu::View)
-        .map(|(_, rect)| rect.center())
-        .ok_or("no View menu hit rect")?;
-    harness.click(view_item);
-    harness.frame()?;
-    let measurer = igui_ui::text_measurer(harness.app.tree());
-    let settings_item = {
-        let state = harness.app.state();
-        let (_, items) = crate::ui::menu::popup_layout(&state, measurer.as_ref());
-        items
+    if cfg!(target_os = "macos") {
+        harness.app.state_mut().run(Action::Settings);
+    } else {
+        let view_item = harness
+            .app
+            .state()
+            .menubar_hits
             .iter()
-            .find(|(action, _)| *action == Some(Action::Settings))
+            .find(|(menu, _)| *menu == Menu::View)
             .map(|(_, rect)| rect.center())
-            .ok_or("View menu has no Settings item")?
-    };
-    harness.click(settings_item);
+            .ok_or("no View menu hit rect")?;
+        harness.click(view_item);
+        harness.frame()?;
+        let measurer = igui_ui::text_measurer(harness.app.tree());
+        let settings_item = {
+            let state = harness.app.state();
+            let (_, items) = crate::ui::menu::popup_layout(&state, measurer.as_ref());
+            items
+                .iter()
+                .find(|(action, _)| *action == Some(Action::Settings))
+                .map(|(_, rect)| rect.center())
+                .ok_or("View menu has no Settings item")?
+        };
+        harness.click(settings_item);
+    }
     harness.frame()?;
     if !harness.app.state().settings_open {
         return Err("View > Settings… did not open the settings panel".into());
@@ -2387,29 +2408,33 @@ fn check(dir: &Path) -> Result<(), String> {
     expect(&texts(&frame), "lib.rs", "sidebar now lists the new root")?;
 
     // -- File > Close Folder clears tabs and the session folder ------------
-    let file_item = harness
-        .app
-        .state()
-        .menubar_hits
-        .iter()
-        .find(|(menu, _)| *menu == Menu::File)
-        .map(|(_, rect)| rect.center())
-        .ok_or("no File menu hit rect after opening a folder")?;
-    harness.click(file_item);
-    harness.frame()?;
-    let close_folder_item = {
-        let state = harness.app.state();
-        if !Action::CloseFolder.enabled(&state) {
-            return Err("Close Folder is disabled while a folder is open".into());
-        }
-        let (_, items) = crate::ui::menu::popup_layout(&state, measurer.as_ref());
-        items
+    if cfg!(target_os = "macos") {
+        harness.app.state_mut().run(Action::CloseFolder);
+    } else {
+        let file_item = harness
+            .app
+            .state()
+            .menubar_hits
             .iter()
-            .find(|(action, _)| *action == Some(Action::CloseFolder))
+            .find(|(menu, _)| *menu == Menu::File)
             .map(|(_, rect)| rect.center())
-            .ok_or("the File menu has no Close Folder item")?
-    };
-    harness.click(close_folder_item);
+            .ok_or("no File menu hit rect after opening a folder")?;
+        harness.click(file_item);
+        harness.frame()?;
+        let close_folder_item = {
+            let state = harness.app.state();
+            if !Action::CloseFolder.enabled(&state) {
+                return Err("Close Folder is disabled while a folder is open".into());
+            }
+            let (_, items) = crate::ui::menu::popup_layout(&state, measurer.as_ref());
+            items
+                .iter()
+                .find(|(action, _)| *action == Some(Action::CloseFolder))
+                .map(|(_, rect)| rect.center())
+                .ok_or("the File menu has no Close Folder item")?
+        };
+        harness.click(close_folder_item);
+    }
     harness.frame()?;
     // A dirty tab opens the confirmation; discard for this flow.
     if harness.app.state().modal.is_some() {
@@ -3730,36 +3755,6 @@ fn check_keymaps(dir: &Path) -> Result<(), String> {
     }
     if let Some(doc) = harness.app.state_mut().ws.active_doc_mut() {
         doc.undo();
-    }
-
-    // F10 opens the File menu; arrows move the selection and Enter runs it.
-    // The painted hint comes from the active keymap, not a duplicate table.
-    set_keymap(&mut harness, KeymapId::VsCode);
-    harness.key(Key::F10);
-    let menu_frame = harness.frame()?;
-    if harness.app.state().menu_open != Some(Menu::File) {
-        return Err("F10 did not open the File menu".into());
-    }
-    let expected_hint = if cfg!(target_os = "macos") {
-        "⌘N"
-    } else {
-        "Ctrl+N"
-    };
-    if !texts(&menu_frame)
-        .iter()
-        .any(|text| text.contains(expected_hint))
-    {
-        return Err(format!(
-            "File menu hint does not follow the keymap ({expected_hint})"
-        ));
-    }
-    let before_tabs = harness.app.state().ws.tabs.len();
-    harness.key(Key::ArrowDown);
-    harness.key(Key::ArrowUp);
-    harness.key(Key::Enter);
-    harness.frame()?;
-    if harness.app.state().ws.tabs.len() != before_tabs + 1 {
-        return Err("menu keyboard navigation did not run New".into());
     }
 
     // Direct tab access and cycling.

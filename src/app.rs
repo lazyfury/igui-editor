@@ -321,6 +321,19 @@ impl EditorApp {
                     }
                     return EventResult::Handled;
                 }
+                #[cfg(target_os = "macos")]
+                if state.header_rect.contains(*position) {
+                    if state.header_close.contains(*position) {
+                        crate::macos::request_quit();
+                    } else if state.header_minimize.contains(*position) {
+                        crate::macos::minimize_window();
+                    } else if state.header_zoom.contains(*position) {
+                        crate::macos::toggle_zoom();
+                    } else {
+                        crate::macos::begin_window_drag();
+                    }
+                    return EventResult::Handled;
+                }
                 if state.problems.open {
                     match ui::problems::click(&mut state, *position) {
                         ui::problems::Click::Jump(_) => return EventResult::Handled,
@@ -660,13 +673,6 @@ impl EditorApp {
                     return EventResult::Handled;
                 }
                 if state.search.open && ui::project_search::on_key(&mut state, *key, modifiers) {
-                    return EventResult::Handled;
-                }
-                if !modifiers.meta && !modifiers.ctrl && !modifiers.alt && *key == Key::F10 {
-                    ui::menu::toggle_keyboard(&mut state);
-                    return EventResult::Handled;
-                }
-                if ui::menu::on_key(&mut state, *key, modifiers) {
                     return EventResult::Handled;
                 }
                 if state.problems.open && *key == Key::Escape {
@@ -1026,8 +1032,78 @@ impl EditorApp {
                         .count();
                     self.state.borrow_mut().request_quit(dirty);
                 }
+                crate::native::NativeRequest::Command(command) => {
+                    self.run_native_command(command);
+                }
             }
         }
+    }
+
+    /// Runs a command selected from the native macOS menu.
+    fn run_native_command(&mut self, command: crate::native::NativeCommand) {
+        use crate::native::NativeCommand as C;
+        use crate::state::ViewMode;
+        match command {
+            C::Quit => crate::macos::request_quit(),
+            C::Minimize => crate::macos::minimize_window(),
+            C::Zoom => crate::macos::toggle_zoom(),
+            C::New => self.state.borrow_mut().run(Action::New),
+            C::NewFile => self.state.borrow_mut().run(Action::NewFile),
+            C::Open => self.state.borrow_mut().run(Action::Open),
+            C::OpenFolder => self.state.borrow_mut().run(Action::OpenFolder),
+            C::CloseFolder => self.state.borrow_mut().run(Action::CloseFolder),
+            C::Save => self.state.borrow_mut().run(Action::Save),
+            C::SaveAs => self.state.borrow_mut().run(Action::SaveAs),
+            C::CloseTab => self.state.borrow_mut().run(Action::CloseTab),
+            C::Undo => self.state.borrow_mut().run(Action::Undo),
+            C::Redo => self.state.borrow_mut().run(Action::Redo),
+            C::Cut => self.run_edit_command('x', Action::Cut),
+            C::Copy => self.run_edit_command('c', Action::Copy),
+            C::Paste => self.run_edit_command('v', Action::Paste),
+            C::SelectAll => self.run_edit_command('a', Action::SelectAll),
+            C::Find => self.state.borrow_mut().run(Action::Find),
+            C::FindReplace => self.state.borrow_mut().run(Action::FindReplace),
+            C::FindNext => self.state.borrow_mut().run(Action::FindNext),
+            C::FindPrevious => self.state.borrow_mut().run(Action::FindPrevious),
+            C::QuickOpen => self.state.borrow_mut().run(Action::QuickOpen),
+            C::ProjectSearch => self.state.borrow_mut().run(Action::ProjectSearch),
+            C::ToggleSidebar => self.state.borrow_mut().run(Action::ToggleSidebar),
+            C::ToggleOutline => self.state.borrow_mut().run(Action::ToggleOutline),
+            C::ToggleTheme => self.state.borrow_mut().run(Action::ToggleTheme),
+            C::SetViewEdit => self.state.borrow_mut().run(Action::SetView(ViewMode::Edit)),
+            C::SetViewSplit => self
+                .state
+                .borrow_mut()
+                .run(Action::SetView(ViewMode::Split)),
+            C::SetViewPreview => self
+                .state
+                .borrow_mut()
+                .run(Action::SetView(ViewMode::Preview)),
+            C::ToggleScrollSync => self.state.borrow_mut().run(Action::ToggleScrollSync),
+            C::ToggleSoftWrap => self.state.borrow_mut().run(Action::ToggleSoftWrap),
+            C::ToggleTerminal => self.state.borrow_mut().run(Action::ToggleTerminal),
+            C::Settings => self.state.borrow_mut().run(Action::Settings),
+        }
+    }
+
+    /// Native Edit-menu commands must follow the focused find/replace field,
+    /// just like the keyboard path.
+    fn run_edit_command(&mut self, key: char, action: Action) {
+        let mut state = self.state.borrow_mut();
+        if matches!(state.focus, Focus::Find | Focus::Replace)
+            && input::find_key(
+                &mut state,
+                Key::Character(key),
+                igui_core::Modifiers {
+                    meta: true,
+                    ..igui_core::Modifiers::NONE
+                },
+            )
+            .is_handled()
+        {
+            return;
+        }
+        state.run(action);
     }
 
     /// Drains file-drop state collected by the winit observer.

@@ -10,7 +10,6 @@
 | `⌘W` | close tab (asks Save / Discard / Cancel when dirty) |
 | `⌘1` … `⌘8` / `⌘9` | select tab by position / select the last tab |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | next / previous tab (`Ctrl+Tab` on macOS; `Ctrl` is literal there) |
-| `F10` | open the File menu; `↑`/`↓` move, `←`/`→` switch menus, `Enter` runs, `Esc` closes |
 | `⌘Z` / `⇧⌘Z` | undo / redo (typing runs coalesce) |
 | `⌘X` / `⌘C` / `⌘V` | cut / copy / paste (empty selection: cut/copy the current line) |
 | `⌘⇧K` (VS Code) | delete the current line |
@@ -89,10 +88,11 @@ label, nested lists, quotes with an accent rule, rules, images as `▢ alt`,
 styled links (no navigation) and **tables with per-column alignment**. The
 preview scrolls with the wheel/trackpad or its scrollbar.
 
-The menu bar is keyboard-operable: `F10` opens File, arrows move between items
-and menus, `Enter`/`Space` runs the focused command, and `Esc` closes the menu
-without touching the document. Menu hints are resolved from the active keymap
-profile, so VS Code / JetBrains / Vim show the chords they actually use.
+On macOS the application menu is the **native system menu bar** (App, File,
+Edit, View, Window, Help); the in-app header only carries the simulated window
+controls. On other platforms the in-app File/Edit/View menus remain
+mouse-operated. Menu shortcut hints in the in-app UI are resolved from the active
+keymap profile, so VS Code / JetBrains / Vim show the chords they actually use.
 
 Mouse: click a folder to expand it, a file to open it in a tab, `×` to close a
 tab (unsaved tabs open a Save / Discard / Cancel modal), `+` for a new buffer,

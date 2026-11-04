@@ -18,13 +18,14 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Imp, NSObject, NSObjectProtocol, Sel};
 use objc2::{define_class, msg_send, sel, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSApplication, NSApplicationTerminateReply, NSDocumentController, NSMenu, NSMenuItem,
+    NSApplication, NSApplicationTerminateReply, NSDocumentController, NSEventModifierFlags, NSMenu,
+    NSMenuItem,
 };
 use objc2_foundation::{
     ns_string, NSAppleEventDescriptor, NSAppleEventManager, NSArray, NSString, NSURL,
 };
 
-use crate::native::{self, NativeRequest};
+use crate::native::{self, NativeCommand, NativeRequest};
 
 const CORE_EVENT_CLASS: u32 = u32::from_be_bytes(*b"aevt");
 const OPEN_DOCUMENTS: u32 = u32::from_be_bytes(*b"odoc");
@@ -45,6 +46,8 @@ thread_local! {
     static DIRTY: Cell<usize> = const { Cell::new(0) };
     static ALLOW_QUIT: Cell<bool> = const { Cell::new(false) };
     static SET_DELEGATE_IMP: Cell<Option<Imp>> = const { Cell::new(None) };
+    static MENU_TARGET: RefCell<Option<ManuallyDrop<Retained<AppMenuTarget>>>> = const { RefCell::new(None) };
+    static MAIN_MENU: RefCell<Option<ManuallyDrop<Retained<NSMenu>>>> = const { RefCell::new(None) };
 }
 
 fn wake() {
@@ -153,6 +156,7 @@ pub fn install_dock() {
         return;
     };
     let app = NSApplication::sharedApplication(mtm);
+    install_main_menu(mtm);
     let Some(delegate) = app.delegate() else {
         return;
     };
@@ -187,6 +191,54 @@ pub fn note_recent(path: &Path) {
     let path = NSString::from_str(&path.to_string_lossy());
     let url = NSURL::fileURLWithPath(&path);
     NSDocumentController::sharedDocumentController(mtm).noteNewRecentDocumentURL(&url);
+}
+
+/// Simulated red traffic light: ask AppKit to terminate; the existing
+/// `applicationShouldTerminate:` guard handles dirty buffers.
+pub fn request_quit() {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    NSApplication::sharedApplication(mtm).terminate(None);
+}
+
+pub fn minimize_window() {
+    with_window(|window| window.set_minimized(true));
+}
+
+pub fn toggle_zoom() {
+    with_window(|window| {
+        let maximized = window.is_maximized();
+        window.set_maximized(!maximized);
+    });
+}
+
+fn with_window(mut action: impl FnMut(&winit::window::Window)) {
+    WINDOW.with(|slot| {
+        let slot = slot.borrow();
+        let Some(shared) = slot.as_ref() else {
+            return;
+        };
+        let Some(window) = shared.borrow().as_ref().cloned() else {
+            return;
+        };
+        action(&window);
+    });
+}
+
+/// Simulated titlebar drag. The current NSEvent is valid while winit is
+/// dispatching the pointer-down that triggered this call.
+pub fn begin_window_drag() {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let app = NSApplication::sharedApplication(mtm);
+    let Some(window) = app.keyWindow().or_else(|| app.mainWindow()) else {
+        return;
+    };
+    if let Some(event) = app.currentEvent() {
+        window.performWindowDragWithEvent(&event);
+    }
 }
 
 pub fn clear_system_recent() {
@@ -245,6 +297,468 @@ impl OpenHandler {
         let this = Self::alloc(mtm).set_ivars(EmptyIvars);
         unsafe { msg_send![super(this), init] }
     }
+}
+
+// -- Main menu --------------------------------------------------------------
+
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[name = "IguiAppMenuTarget"]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = EmptyIvars]
+    struct AppMenuTarget;
+
+    impl AppMenuTarget {
+        #[unsafe(method(performCommand:))]
+        fn perform_command(&self, sender: &NSMenuItem) {
+            if let Some(command) = NativeCommand::from_tag(sender.tag()) {
+                native::push(NativeRequest::Command(command));
+                wake();
+            }
+        }
+    }
+
+    unsafe impl NSObjectProtocol for AppMenuTarget {}
+);
+
+impl AppMenuTarget {
+    fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(EmptyIvars);
+        unsafe { msg_send![super(this), init] }
+    }
+}
+
+fn menu_target(mtm: MainThreadMarker) -> Retained<AppMenuTarget> {
+    MENU_TARGET.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if let Some(target) = slot.as_ref() {
+            return (**target).clone();
+        }
+        let target = AppMenuTarget::new(mtm);
+        *slot = Some(ManuallyDrop::new(target.clone()));
+        target
+    })
+}
+
+fn command_item(
+    mtm: MainThreadMarker,
+    target: &AppMenuTarget,
+    title: &str,
+    command: NativeCommand,
+    key: &str,
+    modifiers: NSEventModifierFlags,
+) -> Retained<NSMenuItem> {
+    let item = NSMenuItem::new(mtm);
+    item.setTitle(&NSString::from_str(title));
+    item.setTag(command.tag());
+    unsafe {
+        item.setTarget(Some(target as &AnyObject));
+        item.setAction(Some(sel!(performCommand:)));
+    }
+    if !key.is_empty() {
+        item.setKeyEquivalent(&NSString::from_str(key));
+        item.setKeyEquivalentModifierMask(modifiers);
+    }
+    item
+}
+
+fn standard_item(
+    mtm: MainThreadMarker,
+    title: &str,
+    key: &str,
+    modifiers: NSEventModifierFlags,
+    action: Option<Sel>,
+) -> Retained<NSMenuItem> {
+    let item = NSMenuItem::new(mtm);
+    item.setTitle(&NSString::from_str(title));
+    if let Some(action) = action {
+        unsafe { item.setAction(Some(action)) };
+    }
+    if !key.is_empty() {
+        item.setKeyEquivalent(&NSString::from_str(key));
+        item.setKeyEquivalentModifierMask(modifiers);
+    }
+    item
+}
+
+fn submenu_item(mtm: MainThreadMarker, title: &str, menu: &NSMenu) -> Retained<NSMenuItem> {
+    let item = NSMenuItem::new(mtm);
+    item.setTitle(&NSString::from_str(title));
+    item.setSubmenu(Some(menu));
+    item
+}
+
+fn build_main_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
+    let target = menu_target(mtm);
+    let app = NSApplication::sharedApplication(mtm);
+    let main = NSMenu::new(mtm);
+    main.setTitle(ns_string!("Main Menu"));
+
+    let app_menu = NSMenu::new(mtm);
+    app_menu.setTitle(ns_string!("igui-editor"));
+    app_menu.addItem(&standard_item(
+        mtm,
+        "About igui-editor",
+        "",
+        NSEventModifierFlags::empty(),
+        Some(sel!(orderFrontStandardAboutPanel:)),
+    ));
+    app_menu.addItem(&NSMenuItem::separatorItem(mtm));
+    app_menu.addItem(&command_item(
+        mtm,
+        &target,
+        "Settings…",
+        NativeCommand::Settings,
+        ",",
+        NSEventModifierFlags::Command,
+    ));
+    app_menu.addItem(&NSMenuItem::separatorItem(mtm));
+    let services_menu = NSMenu::new(mtm);
+    services_menu.setTitle(ns_string!("Services"));
+    app.setServicesMenu(Some(&services_menu));
+    app_menu.addItem(&submenu_item(mtm, "Services", &services_menu));
+    app_menu.addItem(&NSMenuItem::separatorItem(mtm));
+    app_menu.addItem(&standard_item(
+        mtm,
+        "Hide igui-editor",
+        "h",
+        NSEventModifierFlags::Command,
+        Some(sel!(hide:)),
+    ));
+    app_menu.addItem(&standard_item(
+        mtm,
+        "Hide Others",
+        "h",
+        NSEventModifierFlags::Command | NSEventModifierFlags::Option,
+        Some(sel!(hideOtherApplications:)),
+    ));
+    app_menu.addItem(&standard_item(
+        mtm,
+        "Show All",
+        "",
+        NSEventModifierFlags::empty(),
+        Some(sel!(unhideAllApplications:)),
+    ));
+    app_menu.addItem(&NSMenuItem::separatorItem(mtm));
+    app_menu.addItem(&command_item(
+        mtm,
+        &target,
+        "Quit igui-editor",
+        NativeCommand::Quit,
+        "q",
+        NSEventModifierFlags::Command,
+    ));
+    main.addItem(&submenu_item(mtm, "igui-editor", &app_menu));
+
+    let file_menu = NSMenu::new(mtm);
+    file_menu.setTitle(ns_string!("File"));
+    for item in [
+        command_item(
+            mtm,
+            &target,
+            "New Buffer",
+            NativeCommand::New,
+            "n",
+            NSEventModifierFlags::Command,
+        ),
+        command_item(
+            mtm,
+            &target,
+            "New File…",
+            NativeCommand::NewFile,
+            "n",
+            NSEventModifierFlags::Command | NSEventModifierFlags::Shift,
+        ),
+        command_item(
+            mtm,
+            &target,
+            "Open…",
+            NativeCommand::Open,
+            "o",
+            NSEventModifierFlags::Command,
+        ),
+        command_item(
+            mtm,
+            &target,
+            "Open Folder…",
+            NativeCommand::OpenFolder,
+            "o",
+            NSEventModifierFlags::Command | NSEventModifierFlags::Shift,
+        ),
+        command_item(
+            mtm,
+            &target,
+            "Close Folder",
+            NativeCommand::CloseFolder,
+            "",
+            NSEventModifierFlags::empty(),
+        ),
+        NSMenuItem::separatorItem(mtm),
+        command_item(
+            mtm,
+            &target,
+            "Save",
+            NativeCommand::Save,
+            "s",
+            NSEventModifierFlags::Command,
+        ),
+        command_item(
+            mtm,
+            &target,
+            "Save As…",
+            NativeCommand::SaveAs,
+            "s",
+            NSEventModifierFlags::Command | NSEventModifierFlags::Shift,
+        ),
+        NSMenuItem::separatorItem(mtm),
+        command_item(
+            mtm,
+            &target,
+            "Close Tab",
+            NativeCommand::CloseTab,
+            "w",
+            NSEventModifierFlags::Command,
+        ),
+    ] {
+        file_menu.addItem(&item);
+    }
+    main.addItem(&submenu_item(mtm, "File", &file_menu));
+
+    let edit_menu = NSMenu::new(mtm);
+    edit_menu.setTitle(ns_string!("Edit"));
+    for item in [
+        command_item(
+            mtm,
+            &target,
+            "Undo",
+            NativeCommand::Undo,
+            "z",
+            NSEventModifierFlags::Command,
+        ),
+        command_item(
+            mtm,
+            &target,
+            "Redo",
+            NativeCommand::Redo,
+            "z",
+            NSEventModifierFlags::Command | NSEventModifierFlags::Shift,
+        ),
+        NSMenuItem::separatorItem(mtm),
+        command_item(
+            mtm,
+            &target,
+            "Cut",
+            NativeCommand::Cut,
+            "x",
+            NSEventModifierFlags::Command,
+        ),
+        command_item(
+            mtm,
+            &target,
+            "Copy",
+            NativeCommand::Copy,
+            "c",
+            NSEventModifierFlags::Command,
+        ),
+        command_item(
+            mtm,
+            &target,
+            "Paste",
+            NativeCommand::Paste,
+            "v",
+            NSEventModifierFlags::Command,
+        ),
+        command_item(
+            mtm,
+            &target,
+            "Select All",
+            NativeCommand::SelectAll,
+            "a",
+            NSEventModifierFlags::Command,
+        ),
+        NSMenuItem::separatorItem(mtm),
+        command_item(
+            mtm,
+            &target,
+            "Find…",
+            NativeCommand::Find,
+            "f",
+            NSEventModifierFlags::Command,
+        ),
+        command_item(
+            mtm,
+            &target,
+            "Find and Replace…",
+            NativeCommand::FindReplace,
+            "f",
+            NSEventModifierFlags::Command | NSEventModifierFlags::Option,
+        ),
+        command_item(
+            mtm,
+            &target,
+            "Find Next",
+            NativeCommand::FindNext,
+            "g",
+            NSEventModifierFlags::Command,
+        ),
+        command_item(
+            mtm,
+            &target,
+            "Find Previous",
+            NativeCommand::FindPrevious,
+            "g",
+            NSEventModifierFlags::Command | NSEventModifierFlags::Shift,
+        ),
+        NSMenuItem::separatorItem(mtm),
+        command_item(
+            mtm,
+            &target,
+            "Quick Open…",
+            NativeCommand::QuickOpen,
+            "p",
+            NSEventModifierFlags::Command,
+        ),
+        command_item(
+            mtm,
+            &target,
+            "Search in Folder…",
+            NativeCommand::ProjectSearch,
+            "f",
+            NSEventModifierFlags::Command | NSEventModifierFlags::Shift,
+        ),
+    ] {
+        edit_menu.addItem(&item);
+    }
+    main.addItem(&submenu_item(mtm, "Edit", &edit_menu));
+
+    let view_menu = NSMenu::new(mtm);
+    view_menu.setTitle(ns_string!("View"));
+    for item in [
+        command_item(
+            mtm,
+            &target,
+            "Sidebar",
+            NativeCommand::ToggleSidebar,
+            "b",
+            NSEventModifierFlags::Command,
+        ),
+        command_item(
+            mtm,
+            &target,
+            "Outline",
+            NativeCommand::ToggleOutline,
+            "o",
+            NSEventModifierFlags::Command | NSEventModifierFlags::Option,
+        ),
+        command_item(
+            mtm,
+            &target,
+            "Toggle Theme",
+            NativeCommand::ToggleTheme,
+            "l",
+            NSEventModifierFlags::Command | NSEventModifierFlags::Shift,
+        ),
+        NSMenuItem::separatorItem(mtm),
+        command_item(
+            mtm,
+            &target,
+            "Editor",
+            NativeCommand::SetViewEdit,
+            "",
+            NSEventModifierFlags::empty(),
+        ),
+        command_item(
+            mtm,
+            &target,
+            "Split Preview",
+            NativeCommand::SetViewSplit,
+            "",
+            NSEventModifierFlags::empty(),
+        ),
+        command_item(
+            mtm,
+            &target,
+            "Preview Only",
+            NativeCommand::SetViewPreview,
+            "",
+            NSEventModifierFlags::empty(),
+        ),
+        NSMenuItem::separatorItem(mtm),
+        command_item(
+            mtm,
+            &target,
+            "Scroll Sync",
+            NativeCommand::ToggleScrollSync,
+            "y",
+            NSEventModifierFlags::Command | NSEventModifierFlags::Shift,
+        ),
+        command_item(
+            mtm,
+            &target,
+            "Soft Wrap",
+            NativeCommand::ToggleSoftWrap,
+            "z",
+            NSEventModifierFlags::Option,
+        ),
+        command_item(
+            mtm,
+            &target,
+            "Terminal",
+            NativeCommand::ToggleTerminal,
+            "`",
+            NSEventModifierFlags::Control,
+        ),
+    ] {
+        view_menu.addItem(&item);
+    }
+    main.addItem(&submenu_item(mtm, "View", &view_menu));
+
+    let window_menu = NSMenu::new(mtm);
+    window_menu.setTitle(ns_string!("Window"));
+    window_menu.addItem(&command_item(
+        mtm,
+        &target,
+        "Minimize",
+        NativeCommand::Minimize,
+        "m",
+        NSEventModifierFlags::Command,
+    ));
+    window_menu.addItem(&command_item(
+        mtm,
+        &target,
+        "Zoom",
+        NativeCommand::Zoom,
+        "",
+        NSEventModifierFlags::empty(),
+    ));
+    window_menu.addItem(&NSMenuItem::separatorItem(mtm));
+    window_menu.addItem(&standard_item(
+        mtm,
+        "Bring All to Front",
+        "",
+        NSEventModifierFlags::empty(),
+        Some(sel!(arrangeInFront:)),
+    ));
+    app.setWindowsMenu(Some(&window_menu));
+    main.addItem(&submenu_item(mtm, "Window", &window_menu));
+
+    let help_menu = NSMenu::new(mtm);
+    help_menu.setTitle(ns_string!("Help"));
+    app.setHelpMenu(Some(&help_menu));
+    main.addItem(&submenu_item(mtm, "Help", &help_menu));
+
+    app.setMainMenu(Some(&main));
+    main
+}
+
+fn install_main_menu(mtm: MainThreadMarker) {
+    MAIN_MENU.with(|slot| {
+        if slot.borrow().is_some() {
+            return;
+        }
+        let menu = build_main_menu(mtm);
+        *slot.borrow_mut() = Some(ManuallyDrop::new(menu));
+    });
 }
 
 // -- Dock menu --------------------------------------------------------------

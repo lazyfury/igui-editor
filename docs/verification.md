@@ -19,11 +19,12 @@ scripts/bench.sh                            # Markdown pipeline performance
 file**, then asserts:
 
 1. `igui_profile::inspect` finds no `Error`-level structural problems,
-2. the opened file's text, line numbers, menu labels and status facts are in
-   the recorded draw list, and the editor emits a clip,
+2. the opened file's text, line numbers, status facts and (non-macOS) menu
+   labels are in   the recorded draw list, and the editor emits a clip,
 3. typing paints and mutates the model, `⌘S` round-trips through disk,
    `⌘Z` / `⇧⌘Z` undo/redo, the window title tracks the dirty flag,
-4. `File > Save` works through the drop-down's real hit rectangles,
+4. `File > Save` works through the in-app drop-down on non-macOS (macOS runs
+   the same command directly because the menu is native),
 5. `⌘F` → typing finds and selects a match (`1 / 1` in the bar), Replace All
    rewrites the document, `Esc` returns typing to the editor,
 6. `⇧⌘S` and `⌘O` go through the dialog layer and land on disk / in a tab,
@@ -75,5 +76,7 @@ search (debounced worker → result → jump selects the match), split-divider d
 creation/removal, the startup restore/discard prompt, window geometry
 persistence, and folder/split/window restored from the session.
 
-No OS capture of any kind is used. Performance methodology and budgets are in
-[benchmarks.md](benchmarks.md).
+No OS capture of any kind is used. Native AppKit menus and the borderless
+window chrome are a manual smoke-test item; the headless check covers the
+custom header hit rectangles but cannot drive macOS's menu bar. Performance
+methodology and budgets are in [benchmarks.md](benchmarks.md).

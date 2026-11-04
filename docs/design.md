@@ -63,11 +63,13 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    (compact, square, CJK-capable) is not the component library's default, and its
    radius constants are baked into components. The app owns a small palette +
    metric module instead, and paints every surface with `igui_ui` primitives.
-3. **Tabs, gutter, menu and popup stay app-local.** No new component is promoted
-   into the engine during M1.
-4. **The drop-down is an app-level overlay** painted after the tree. Geometry
-   comes from one function (`ui/menu::popup_layout`) used by both paint and hit
-   testing, so the menu never depends on z-order or a second window.
+3. **Tabs, gutter, in-app popups and the window chrome stay app-local.** No new
+   component is promoted into the engine. On macOS the application menu is a
+   native `NSMenu`; it enqueues [`NativeCommand`]s and the app still executes the
+   same `Action`/window operations. Other platforms keep the in-app menus.
+4. **The in-app drop-down is an app-level overlay** painted after the tree.
+   Geometry comes from one function (`ui/menu::popup_layout`) used by both paint
+   and hit testing, so the menu never depends on z-order or a second window.
 5. **Mouse hit rectangles are recorded during paint** (tabs, menu bar, sidebar
    rows). Pointer events happen after a frame, so this is stable and avoids a
    parallel layout implementation.
@@ -358,8 +360,12 @@ file-change polling (clean reload, dirty Keep/Reload), session v4.
 
 **M7 (done)** — macOS document-type registration, Finder/`open -a` request
 queue, Dock Recent / New File / Clear, quick file creation (`⇧⌘N`), system
-recent items, dirty quit confirmation. Native macOS top menu / close-guard /
-Dock reopen remain follow-ups.
+recent items, dirty quit confirmation.
+
+**M13 (done)** — native macOS main menu (App/File/Edit/View/Window/Help),
+borderless full-size-content window, simulated traffic lights in the custom
+header, header drag and native zoom/minimize routing; the in-app header menu is
+hidden on macOS.
 
 **M8/M9 (first slice)** — native service/built-in plugin registry (Git and
 Terminal descriptors), Git status/diff/stage/unstage/commit, native PTY terminal
@@ -373,8 +379,8 @@ IME caret, vim application cursor mode and live PTY repaint. Next: multiple
 terminal sessions, selection/copy, scrollback.
 
 Next candidates: terminal drag-resize/multiple sessions/session restore, Git
-discard/branch/network operations, native macOS top menu/close guard, per-hit
-replace and cross-file undo, incremental preview layout for very large
+discard/branch/network operations, native close-guard/Dock-reopen polish,
+per-hit replace and cross-file undo, incremental preview layout for very large
 documents, word-boundary wrapping.
 
 ## Non-goals for the editor core

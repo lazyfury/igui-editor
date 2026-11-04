@@ -201,6 +201,15 @@ contents do not. Multiple sessions are a follow-up.
 
 ## macOS integration
 
+- **Native menu bar**: App (About/Settings/Services/Hide/Quit), File, Edit,
+  View, Window (Minimize/Zoom) and Help are real `NSMenu`s. Their key
+  equivalents dispatch through the native request queue into the same
+  `Action` commands as the keyboard. The in-app header menu is hidden on macOS.
+- **Custom window chrome**: the macOS window is borderless/full-size-content
+  with the native title bar and traffic lights hidden. The header paints
+  simulated red/yellow/green controls; red uses the existing dirty-quit guard,
+  yellow minimizes and green toggles zoom. Pressing anywhere else on the header
+  starts an AppKit window drag.
 - The `.app` registers text/Markdown document types (`txt`, `md`, `markdown`,
   `mdown`, `mkd`) with Editor role and `Alternate` rank. Finder double-click,
   `open -a`, “Open With” and cold launch all feed the same native request queue.

@@ -7,8 +7,8 @@ mod imp;
 pub use fallback::*;
 #[cfg(target_os = "macos")]
 pub use imp::{
-    clear_system_recent, install, install_dock, note_recent, reply_quit, set_dirty_count,
-    set_recent,
+    begin_window_drag, clear_system_recent, install, install_dock, minimize_window, note_recent,
+    reply_quit, request_quit, set_dirty_count, set_recent, toggle_zoom,
 };
 
 #[cfg(not(target_os = "macos"))]
@@ -22,4 +22,8 @@ mod fallback {
     pub fn set_dirty_count(_dirty: usize) {}
     pub fn reply_quit(_terminate: bool) {}
     pub fn clear_system_recent() {}
+    pub fn minimize_window() {}
+    pub fn toggle_zoom() {}
+    pub fn begin_window_drag() {}
+    pub fn request_quit() {}
 }

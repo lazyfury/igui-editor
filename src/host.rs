@@ -171,7 +171,13 @@ pub fn build(open: Option<PathBuf>, mode: Option<Mode>) -> App {
     .plugin(WinitPlugin::new(WindowConfig {
         title: "igui-editor".into(),
         size: (width as f64, height as f64),
-        titlebar: TitlebarMode::Native,
+        titlebar: if cfg!(target_os = "macos") {
+            // Borderless + full content; the app paints its own traffic lights
+            // and drag region in the header.
+            TitlebarMode::Hidden
+        } else {
+            TitlebarMode::Native
+        },
         ime: true,
     }))
     .plugin(WgpuPlugin::new(GpuConfig {

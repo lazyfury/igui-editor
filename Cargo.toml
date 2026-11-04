@@ -68,6 +68,7 @@ objc2-app-kit = { version = "0.3", features = [
     "NSMenuItem",
     "NSResponder",
     "NSWindow",
+    "NSEvent",
 ] }
 objc2-foundation = { version = "0.3", features = [
     "NSAppleEventDescriptor",
