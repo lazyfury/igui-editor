@@ -37,7 +37,10 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
 /// of single-colored text.
 struct HoverLine {
     text: String,
+    /// A full fenced-code line (painted with a block background).
     code: bool,
+    /// Inline-code byte ranges inside `text` (painted with a code background).
+    code_ranges: Vec<(usize, usize)>,
     tokens: Vec<Highlight>,
 }
 
@@ -98,7 +101,27 @@ fn build_hover_lines(
     let mut first_content = true;
     for raw in text.lines() {
         let trimmed = raw.trim_end();
-        if trimmed.trim_start().starts_with("```") || trimmed.trim_start().starts_with("~~~") {
+        let start = trimmed.trim_start();
+        // Fallback for raw Godot BBCode; current Godot LSP normally converts
+        // these to Markdown fences before sending the hover.
+        if start == "[codeblocks]" || start == "[/codeblocks]" {
+            first_content = false;
+            continue;
+        }
+        if start.starts_with("[codeblock") || start == "[gdscript]" {
+            let info = start.strip_prefix("[codeblock").unwrap_or("").trim();
+            let info = info.strip_suffix(']').unwrap_or(info).trim();
+            let info = info.strip_prefix("lang=").unwrap_or(info).trim();
+            fence = Some((hover_provider(registry, info, active.clone()), 0));
+            first_content = false;
+            continue;
+        }
+        if start == "[/codeblock]" || start == "[/gdscript]" {
+            fence = None;
+            first_content = false;
+            continue;
+        }
+        if start.starts_with("```") || start.starts_with("~~~") {
             if fence.is_some() {
                 fence = None;
             } else {
@@ -119,6 +142,7 @@ fn build_hover_lines(
             lines.push(HoverLine {
                 text: expanded,
                 code: true,
+                code_ranges: Vec::new(),
                 tokens,
             });
             first_content = false;
@@ -129,13 +153,27 @@ fn build_hover_lines(
             .or_else(|| trimmed.strip_prefix("## "))
             .or_else(|| trimmed.strip_prefix("### "))
             .unwrap_or(trimmed);
-        let cleaned = clean_inline(cleaned);
+        let (cleaned, inline_ranges) = clean_inline_with_code(cleaned);
         if cleaned.is_empty() {
             lines.push(HoverLine {
                 text: String::new(),
                 code: false,
+                code_ranges: Vec::new(),
                 tokens: Vec::new(),
             });
+        } else if !inline_ranges.is_empty() {
+            // Godot's `[code]…[/code]` becomes `` `…` `` in LSP markdown.
+            // Keep those spans as inline code and highlight code-like keywords.
+            let tokens = inline_code_tokens(&cleaned, &inline_ranges, active.as_deref());
+            let wrapped = wrap_styled_line(
+                &cleaned,
+                &inline_ranges,
+                &tokens,
+                max_width - 20.0,
+                measurer,
+                font,
+            );
+            lines.extend(wrapped);
         } else if first_content
             && looks_like_declaration(&cleaned)
             && active
@@ -150,6 +188,7 @@ fn build_hover_lines(
             lines.push(HoverLine {
                 text: cleaned,
                 code: true,
+                code_ranges: Vec::new(),
                 tokens,
             });
         } else {
@@ -159,6 +198,7 @@ fn build_hover_lines(
                 lines.push(HoverLine {
                     text: line,
                     code: false,
+                    code_ranges: Vec::new(),
                     tokens: Vec::new(),
                 });
             }
@@ -168,18 +208,178 @@ fn build_hover_lines(
     lines
 }
 
+fn inline_code_tokens(
+    text: &str,
+    ranges: &[(usize, usize)],
+    active: Option<&dyn SyntaxProvider>,
+) -> Vec<Highlight> {
+    let Some(provider) = active else {
+        return Vec::new();
+    };
+    let mut tokens = Vec::new();
+    for &(start, end) in ranges {
+        let span = &text[start..end];
+        if span.is_empty() || span.len() > provider.max_line_len() {
+            continue;
+        }
+        let (found, _) = provider.highlight_line(span, provider.neutral_state());
+        for token in found {
+            let token_start = start + token.start;
+            let token_end = start + token.end;
+            if token_start < token_end && token_end <= end {
+                tokens.push(Highlight {
+                    start: token_start,
+                    end: token_end,
+                    kind: token.kind,
+                });
+            }
+        }
+    }
+    tokens
+}
+
+/// Byte ranges for visual lines, used when inline-code styling must survive
+/// wrapping. Long words are split on character boundaries.
+fn wrap_byte_spans(
+    text: &str,
+    max_width: f32,
+    measurer: &dyn TextMeasurer,
+    font: f32,
+) -> Vec<(usize, usize)> {
+    let mut lines = Vec::new();
+    let mut index = 0usize;
+    let mut line_start = 0usize;
+    let mut line_end = 0usize;
+    let mut line_w = 0.0f32;
+    while index < text.len() {
+        let rest = &text[index..];
+        let raw_len = rest.find(' ').map_or(rest.len(), |position| position + 1);
+        let raw_end = index + raw_len;
+        let raw = &text[index..raw_end];
+        let word = raw.trim_end();
+        let word_end = index + word.len();
+        if word.is_empty() {
+            index = raw_end;
+            continue;
+        }
+        let raw_w = kit::width(measurer, raw, font);
+        let word_w = kit::width(measurer, word, font);
+        if line_start == line_end && word_w > max_width {
+            let mut chunk_start = index;
+            let mut chunk_w = 0.0f32;
+            for (offset, ch) in text[index..word_end].char_indices() {
+                let advance = measurer.advance(ch, font);
+                if chunk_w + advance > max_width && chunk_start < index + offset {
+                    lines.push((chunk_start, index + offset));
+                    chunk_start = index + offset;
+                    chunk_w = 0.0;
+                }
+                chunk_w += advance;
+            }
+            if chunk_start < word_end {
+                lines.push((chunk_start, word_end));
+            }
+            line_start = word_end;
+            line_end = word_end;
+            line_w = 0.0;
+            index = raw_end;
+            continue;
+        }
+        if line_start != line_end && line_w + raw_w > max_width {
+            lines.push((line_start, line_end));
+            line_start = index;
+            line_end = word_end;
+            line_w = word_w;
+        } else {
+            if line_start == line_end {
+                line_start = index;
+                line_w = 0.0;
+            }
+            line_end = word_end;
+            line_w += raw_w;
+        }
+        index = raw_end;
+    }
+    if line_start < line_end {
+        lines.push((line_start, line_end));
+    }
+    lines
+}
+
+fn clip_ranges(ranges: &[(usize, usize)], start: usize, end: usize) -> Vec<(usize, usize)> {
+    ranges
+        .iter()
+        .filter_map(|&(from, to)| {
+            let from = from.max(start);
+            let to = to.min(end);
+            (from < to && to >= start).then(|| (from - start, to - start))
+        })
+        .collect()
+}
+
+fn clip_tokens(tokens: &[Highlight], start: usize, end: usize) -> Vec<Highlight> {
+    tokens
+        .iter()
+        .filter_map(|token| {
+            let from = token.start.max(start);
+            let to = token.end.min(end);
+            (from < to && to >= start).then(|| Highlight {
+                start: from - start,
+                end: to - start,
+                kind: token.kind,
+            })
+        })
+        .collect()
+}
+
+fn wrap_styled_line(
+    text: &str,
+    code_ranges: &[(usize, usize)],
+    tokens: &[Highlight],
+    max_width: f32,
+    measurer: &dyn TextMeasurer,
+    font: f32,
+) -> Vec<HoverLine> {
+    wrap_byte_spans(text, max_width, measurer, font)
+        .into_iter()
+        .map(|(start, end)| HoverLine {
+            text: text[start..end].to_string(),
+            code: false,
+            code_ranges: clip_ranges(code_ranges, start, end),
+            tokens: clip_tokens(tokens, start, end),
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
 fn draw_hover_line(
     ctx: &mut PaintContext,
     theme: &crate::theme::Theme,
     measurer: &dyn TextMeasurer,
     line: &HoverLine,
     x: f32,
+    line_top: f32,
+    line_h: f32,
     baseline: f32,
     font: f32,
 ) {
     let p = theme.p;
     if line.text.is_empty() {
         return;
+    }
+    if !line.code {
+        for &(start, end) in &line.code_ranges {
+            let from = x + kit::width(measurer, &line.text[..start], font);
+            let to = x + kit::width(measurer, &line.text[..end], font);
+            kit::fill(
+                ctx,
+                Rect::from_min_size(
+                    Vec2::new(from - 1.0, line_top + 1.0),
+                    Size::new((to - from).max(1.0) + 2.0, (line_h - 2.0).max(1.0)),
+                ),
+                p.bg,
+            );
+        }
     }
     if line.tokens.is_empty() {
         kit::text(ctx, &line.text, x, baseline, font, p.text);
@@ -251,6 +451,7 @@ fn paint_hover(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut Pain
         lines.push(HoverLine {
             text: "…".into(),
             code: false,
+            code_ranges: Vec::new(),
             tokens: Vec::new(),
         });
     }
@@ -298,7 +499,7 @@ fn paint_hover(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut Pain
         }
         let x = panel.left() + if line.code { 14.0 } else { 10.0 };
         let baseline = kit::line_baseline(measurer, y, line_h, font);
-        draw_hover_line(ctx, &theme, measurer, line, x, baseline, font);
+        draw_hover_line(ctx, &theme, measurer, line, x, y, line_h, baseline, font);
         y += line_h;
     }
     ctx.restore();
@@ -535,10 +736,23 @@ fn paint_completion_preview(
 /// the path, so links collapse to their label (which is the readable `res://`
 /// path) and inline code/emphasis lose their markers.
 fn clean_inline(line: &str) -> String {
+    clean_inline_with_code(line).0
+}
+
+/// Removes inline Markdown markers while recording backtick spans as byte
+/// ranges. Godot turns BBCode `[code]…[/code]` into these spans before sending
+/// the hover, so this is where Godot comment keywords become code-like.
+fn clean_inline_with_code(line: &str) -> (String, Vec<(usize, usize)>) {
     let mut out = String::with_capacity(line.len());
+    let mut code = Vec::new();
+    append_inline(line, &mut out, &mut code);
+    (out, code)
+}
+
+fn append_inline(input: &str, out: &mut String, code: &mut Vec<(usize, usize)>) {
     let mut index = 0;
-    while index < line.len() {
-        let rest = &line[index..];
+    while index < input.len() {
+        let rest = &input[index..];
         if rest.starts_with('[') {
             if let Some(label_end) = rest.find("](") {
                 let after_label = label_end + 2;
@@ -546,7 +760,7 @@ fn clean_inline(line: &str) -> String {
                     let label = &rest[1..label_end];
                     let target = &rest[after_label..after_label + target_end];
                     let shown = if label.is_empty() { target } else { label };
-                    out.push_str(&clean_inline(shown));
+                    append_inline(shown, out, code);
                     index += after_label + target_end + 1;
                     continue;
                 }
@@ -554,23 +768,48 @@ fn clean_inline(line: &str) -> String {
         }
         if let Some(after) = rest.strip_prefix("**") {
             if let Some(end) = after.find("**") {
-                out.push_str(&clean_inline(&after[..end]));
+                append_inline(&after[..end], out, code);
                 index += 2 + end + 2;
                 continue;
             }
         }
         if let Some(after) = rest.strip_prefix('`') {
             if let Some(end) = after.find('`') {
+                let start = out.len();
                 out.push_str(&after[..end]);
+                if out.len() > start {
+                    code.push((start, out.len()));
+                }
                 index += 1 + end + 1;
                 continue;
             }
         }
-        let ch = rest.chars().next().expect("index < line.len()");
+        // Some servers (or future Godot versions) leave inline BBCode in the
+        // hover text instead of converting it to Markdown backticks.
+        if let Some(after) = rest
+            .strip_prefix("[code]")
+            .or_else(|| rest.strip_prefix("[kbd]"))
+        {
+            if let Some(end) = after.find("[/code]").or_else(|| after.find("[/kbd]")) {
+                let open_len = if rest.starts_with("[code]") { 6 } else { 5 };
+                let close_len = if after[end..].starts_with("[/code]") {
+                    7
+                } else {
+                    6
+                };
+                let start = out.len();
+                out.push_str(&after[..end]);
+                if out.len() > start {
+                    code.push((start, out.len()));
+                }
+                index += open_len + end + close_len;
+                continue;
+            }
+        }
+        let ch = rest.chars().next().expect("index < input.len()");
         out.push(ch);
         index += ch.len_utf8();
     }
-    out
 }
 
 fn wrap_line(
@@ -653,6 +892,98 @@ mod tests {
             "missing keyword token: {:?}",
             lines[0].tokens
         );
+    }
+
+    #[test]
+    fn inline_code_spans_keep_keyword_colors_and_code_ranges() {
+        let registry = SyntaxRegistry::with_builtins();
+        let gdscript = registry.by_name("gdscript");
+        let lines = build_hover_lines(
+            "Call `func` and `await` from `_ready`.",
+            &registry,
+            gdscript,
+            480.0,
+            &Probe,
+            12.0,
+        );
+        assert_eq!(lines.len(), 1);
+        assert!(!lines[0].code_ranges.is_empty());
+        assert_eq!(lines[0].text, "Call func and await from _ready.");
+        for keyword in ["func", "await"] {
+            assert!(
+                lines[0]
+                    .tokens
+                    .iter()
+                    .any(|token| token.kind == TokenKind::Keyword
+                        && &lines[0].text[token.start..token.end] == keyword),
+                "missing {keyword} token: {:?}",
+                lines[0].tokens
+            );
+        }
+    }
+
+    #[test]
+    fn raw_bbcode_codeblocks_are_accepted_as_a_fallback() {
+        let registry = SyntaxRegistry::with_builtins();
+        let gdscript = registry.by_name("gdscript");
+        let lines = build_hover_lines(
+            "[codeblock lang=gdscript]\nfunc _ready():\n\tpass\n[/codeblock]",
+            &registry,
+            gdscript,
+            480.0,
+            &Probe,
+            12.0,
+        );
+        assert_eq!(lines.len(), 2);
+        assert!(lines.iter().all(|line| line.code));
+        assert!(lines[0]
+            .tokens
+            .iter()
+            .any(|token| token.kind == TokenKind::Keyword
+                && &lines[0].text[token.start..token.end] == "func"));
+    }
+
+    #[test]
+    fn wrapped_inline_code_keeps_its_background_and_tokens() {
+        let registry = SyntaxRegistry::with_builtins();
+        let gdscript = registry.by_name("gdscript");
+        let lines = build_hover_lines(
+            "Call `func` with a very long explanation that must wrap around the narrow card width because it keeps going.",
+            &registry,
+            gdscript,
+            140.0,
+            &Probe,
+            12.0,
+        );
+        assert!(lines.len() > 1);
+        assert!(lines.iter().any(|line| !line.code_ranges.is_empty()));
+        assert!(lines.iter().any(|line| {
+            line.tokens.iter().any(|token| {
+                token.kind == TokenKind::Keyword && &line.text[token.start..token.end] == "func"
+            })
+        }));
+    }
+
+    #[test]
+    fn raw_bbcode_code_spans_are_accepted_as_a_fallback() {
+        let registry = SyntaxRegistry::with_builtins();
+        let gdscript = registry.by_name("gdscript");
+        let lines = build_hover_lines(
+            "Use [code]func[/code] here.",
+            &registry,
+            gdscript,
+            480.0,
+            &Probe,
+            12.0,
+        );
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "Use func here.");
+        assert_eq!(lines[0].code_ranges.len(), 1);
+        assert!(lines[0]
+            .tokens
+            .iter()
+            .any(|token| token.kind == TokenKind::Keyword
+                && &lines[0].text[token.start..token.end] == "func"));
     }
 
     #[test]

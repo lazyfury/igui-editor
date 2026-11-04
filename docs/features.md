@@ -67,7 +67,12 @@ non-project buffers.
   active document language when the fence is unlabeled) drives the same syntax
   provider as the editor, so keywords, types, functions, strings and comments
   stay colored. A leading plain-text declaration such as `func Node._ready()`
-  or `fn main()` is highlighted the same way.
+  or `fn main()` is highlighted the same way. Inline code (Markdown backticks,
+  or raw BBCode `[code]…[/code]` from an older server) gets a code background
+  and is tokenized with the active language, which covers Godot's `[code]`
+  comment snippets as well as `[method …]`/`[member …]` references converted
+  by Godot's LSP. Raw `[codeblock lang=…]`, `[gdscript]` and `[codeblocks]`
+  wrappers are also accepted as a fallback.
 - `F1` shows server hover, `F12` jumps to definition (macOS top-row media keys
   may need `Fn`; `⌘⇧I` / `⌘⇧D` are also available), and `⌘I` (`Ctrl+I` on
   Linux/Windows) opens completion. Typing an identifier also activates
