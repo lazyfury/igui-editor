@@ -212,8 +212,10 @@ supports ANSI/256-color cells, cursor, resize, plain text, arrows, Ctrl letters,
 Alt prefixes, application cursor mode (vim/less) and IME candidate placement at
 the terminal cursor. The wheel scrolls the vt100 scrollback (up to 4,000 rows);
 typing or clicking the live screen returns to the prompt. Drag across cells to
-select text, `⌘C` / `Ctrl+C` copies the selection and `⌘A` / `Ctrl+A` selects the
-visible screen; typing, wheel scrolling or switching tabs clears the selection.
+select text, `⌘C` / `Ctrl+Shift+C` copies the selection, `⌘V` / `Ctrl+Shift+V`
+pastes and `⌘A` / `Ctrl+Shift+A` selects the visible screen. Plain `Ctrl+C` and
+`Ctrl+A` still go to the shell. Typing, wheel scrolling or switching tabs clears
+the selection.
 The terminal requests frames while a PTY is alive, so full-screen programs repaint
 without extra input.
 

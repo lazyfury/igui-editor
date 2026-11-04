@@ -306,6 +306,7 @@ impl Keymap {
         };
         keymap.add_global();
         keymap.add_movement();
+        keymap.add_terminal();
         match id {
             KeymapId::VsCode => keymap.add_vscode(),
             KeymapId::JetBrains => keymap.add_ide(),
@@ -412,6 +413,14 @@ impl Keymap {
             "primary+shift+down",
             Action::MoveDocEnd(true),
         );
+    }
+
+    /// Clipboard chords that do not collide with the shell's Ctrl letters on
+    /// Linux/Windows (Ctrl+Shift+C/V are the conventional terminal copy/paste).
+    fn add_terminal(&mut self) {
+        self.bind(Scope::Terminal, "primary+shift+c", Action::Copy);
+        self.bind(Scope::Terminal, "primary+shift+v", Action::Paste);
+        self.bind(Scope::Terminal, "primary+shift+a", Action::SelectAll);
     }
 
     fn add_vscode(&mut self) {
@@ -774,6 +783,23 @@ mod tests {
             .shortcut_label(&Action::DuplicateLine)
             .expect("idea duplicate binding");
         assert!(duplicate.ends_with('D'), "{duplicate}");
+    }
+
+    #[test]
+    fn terminal_clipboard_chords_are_terminal_scoped() {
+        let keymap = Keymap::for_id(KeymapId::VsCode);
+        assert_eq!(
+            keymap.resolve(Scope::Terminal, &[chord("primary+shift+c")]),
+            Resolution::Command(Action::Copy)
+        );
+        assert_eq!(
+            keymap.resolve(Scope::Editor, &[chord("primary+shift+c")]),
+            Resolution::None
+        );
+        assert_eq!(
+            keymap.resolve(Scope::Terminal, &[chord("primary+shift+a")]),
+            Resolution::Command(Action::SelectAll)
+        );
     }
 
     #[test]

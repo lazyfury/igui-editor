@@ -225,6 +225,21 @@ Acceptance:
 - Word movement never splits a combining mark from its base letter or an emoji
   from its modifier.
 
+### Task 9: terminal clipboard chords on Linux/Windows (done)
+
+- [x] Add terminal-scoped `primary+shift+c/v/a` bindings so Ctrl+Shift+C/V/A work
+      without stealing Ctrl+C/Ctrl+A from the shell.
+- [x] Let the terminal key path forward those chords to the keymap instead of
+      encoding them as control bytes.
+- [x] Test terminal scope resolution.
+- [x] Document the platform-specific chords.
+
+Acceptance:
+
+- On Linux/Windows, Ctrl+Shift+C/V/A operate on the terminal selection while
+  Ctrl+C/Ctrl+A still reach the shell.
+- On macOS, Cmd+C/V/A continue to use the selection.
+
 ## Deferred to the next feature slice
 
 These are intentionally not part of this plan's implementation phases:
@@ -253,6 +268,7 @@ These are intentionally not part of this plan's implementation phases:
 | Session 2 | Follow-up 6 | done | Terminal cell selection/copy; 242 unit tests. |
 | Session 2 | Follow-up 7 | done | Grapheme-aware movement/deletion/selection; 246 unit tests. |
 | Session 2 | Follow-up 8 | done | Grapheme-aware word movement; 247 unit tests. |
+| Session 2 | Follow-up 9 | done | Terminal Ctrl+Shift clipboard chords; 248 unit tests. |
 
 ## Final acceptance checklist
 

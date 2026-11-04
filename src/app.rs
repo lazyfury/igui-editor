@@ -991,17 +991,28 @@ impl EditorApp {
                     return EventResult::Handled;
                 }
                 if state.focus == Focus::Terminal && !modifiers.meta {
-                    let application_cursor = state
-                        .terminal
-                        .parser
-                        .as_ref()
-                        .is_some_and(|parser| parser.screen().application_cursor());
-                    if let Some(bytes) =
-                        ui::terminal::encode_key(*key, modifiers, application_cursor)
-                    {
-                        state.terminal_write(&bytes);
+                    // Conventional terminal clipboard chords must reach the
+                    // keymap instead of being encoded as shell control bytes.
+                    let clipboard_chord = modifiers.ctrl
+                        && modifiers.shift
+                        && matches!(
+                            key,
+                            Key::Character(ch)
+                                if matches!(ch.to_ascii_lowercase(), 'c' | 'v' | 'a')
+                        );
+                    if !clipboard_chord {
+                        let application_cursor = state
+                            .terminal
+                            .parser
+                            .as_ref()
+                            .is_some_and(|parser| parser.screen().application_cursor());
+                        if let Some(bytes) =
+                            ui::terminal::encode_key(*key, modifiers, application_cursor)
+                        {
+                            state.terminal_write(&bytes);
+                        }
+                        return EventResult::Handled;
                     }
-                    return EventResult::Handled;
                 }
                 if state.tree_menu.is_some() && *key == Key::Escape {
                     state.tree_menu = None;
