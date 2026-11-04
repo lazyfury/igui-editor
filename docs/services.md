@@ -56,7 +56,7 @@ lsp.symbols
 
 Git read + stage/unstage/commit are wired. Terminal capabilities are declared;
 the first panel exposes one session with a draggable, persisted height,
-open state, vt100 scrollback and cell selection/copy. Multiple sessions are next.
+open state, vt100 scrollback, cell selection/copy and multiple shell tabs.
 
 ## Git service
 
@@ -102,7 +102,7 @@ same service.
 
 ## Next
 
-1. Terminal: multiple sessions.
+1. Terminal: session restore (live shells are intentionally not persisted).
 2. Git: discard, branch and network operations (network stays in the terminal).
 3. Workspace Trust UI (the opt-in local-binary guard is implemented).
 4. Extension host (deferred): JSON-RPC/WASM mapping of the same capabilities.

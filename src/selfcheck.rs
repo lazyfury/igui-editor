@@ -3558,7 +3558,14 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
         },
     );
     harness.frame()?;
-    if !harness.app.state().terminal.open || harness.app.state().terminal.session.is_none() {
+    if !harness.app.state().terminal.open
+        || harness
+            .app
+            .state()
+            .terminal
+            .active()
+            .is_none_or(|session| session.session.is_none())
+    {
         return Err("Ctrl+` did not open a PTY terminal".into());
     }
     harness
@@ -3568,7 +3575,7 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
     let mut seen = String::new();
     for _ in 0..100 {
         harness.frame()?;
-        if let Some(parser) = harness.app.state().terminal.parser.as_ref() {
+        if let Some(parser) = harness.app.state().terminal.active_parser() {
             seen = parser.screen().contents();
         }
         if seen.contains("terminal-selfcheck") && seen.contains("中文") {
@@ -3590,13 +3597,14 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
     // the visible terminal misalignment).
     {
         let state = harness.app.state();
-        let parser_size = state.terminal.parser.as_ref().map(|p| p.screen().size());
+        let parser_size = state.terminal.active_parser().map(|p| p.screen().size());
         if parser_size.map(|(rows, cols)| (rows.get(), cols.get()))
-            != Some((state.terminal.rows, state.terminal.cols))
+            != Some((state.terminal.active_rows(), state.terminal.active_cols()))
         {
             return Err(format!(
                 "terminal grid mismatch after open: parser={parser_size:?} cached=({}, {})",
-                state.terminal.rows, state.terminal.cols
+                state.terminal.active_rows(),
+                state.terminal.active_cols()
             ));
         }
         let cell_w = state.terminal.cell_w;
@@ -3771,19 +3779,55 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
     harness.frame()?;
     {
         let state = harness.app.state();
-        if !state.terminal.open || state.terminal.session.is_none() {
+        if !state.terminal.open
+            || state
+                .terminal
+                .active()
+                .is_none_or(|session| session.session.is_none())
+        {
             return Err("reopening the terminal did not spawn a session".into());
         }
-        let parser_size = state.terminal.parser.as_ref().map(|p| p.screen().size());
+        let parser_size = state.terminal.active_parser().map(|p| p.screen().size());
         if parser_size.map(|(rows, cols)| (rows.get(), cols.get()))
-            != Some((state.terminal.rows, state.terminal.cols))
+            != Some((state.terminal.active_rows(), state.terminal.active_cols()))
         {
             return Err(format!(
                 "terminal grid mismatch after reopen: parser={parser_size:?} cached=({}, {})",
-                state.terminal.rows, state.terminal.cols
+                state.terminal.active_rows(),
+                state.terminal.active_cols()
             ));
         }
     }
+
+    // Multiple shell sessions: + adds a tab, tab 1 switches back, × closes.
+    let frame = harness.frame()?;
+    let new_hit = harness.app.state().terminal.new_hit.center();
+    let first_tab = harness
+        .app
+        .state()
+        .terminal
+        .tab_hits
+        .first()
+        .map(|(_, rect)| rect.center())
+        .ok_or_else(|| "terminal session tab was not painted".to_string())?;
+    harness.click(new_hit);
+    harness.frame()?;
+    if harness.app.state().terminal.sessions.len() != 2 || harness.app.state().terminal.active != 1
+    {
+        return Err("terminal + did not open a second session".into());
+    }
+    harness.click(first_tab);
+    harness.frame()?;
+    if harness.app.state().terminal.active != 0 {
+        return Err("terminal tab click did not select the first session".into());
+    }
+    let close_hit = harness.app.state().terminal.close_hit.center();
+    harness.click(close_hit);
+    harness.frame()?;
+    if harness.app.state().terminal.sessions.len() != 1 {
+        return Err("terminal × did not close the active session".into());
+    }
+    let _ = frame;
     Ok(())
 }
 

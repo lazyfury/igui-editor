@@ -1003,8 +1003,7 @@ impl EditorApp {
                     if !clipboard_chord {
                         let application_cursor = state
                             .terminal
-                            .parser
-                            .as_ref()
+                            .active_parser()
                             .is_some_and(|parser| parser.screen().application_cursor());
                         if let Some(bytes) =
                             ui::terminal::encode_key(*key, modifiers, application_cursor)
@@ -1210,7 +1209,12 @@ impl EditorApp {
     pub fn caret(&self) -> Option<Rect> {
         let state = self.state.borrow();
         if state.terminal.open && state.focus == Focus::Terminal {
-            return Some(state.terminal.caret_rect);
+            return Some(
+                state
+                    .terminal
+                    .active()
+                    .map_or(Rect::ZERO, |session| session.caret_rect),
+            );
         }
         drop(state);
         igui_ui::focused_caret(&self.tree)

@@ -409,12 +409,11 @@ with vt100 cell rendering and `⌃\`` toggle. Extension host remains deferred.
 (last 50) and read-only commit detail overlay.
 
 **M11 (in progress)** — terminal horizontal shared handle, persisted height/open,
-IME caret, vim application cursor mode, live PTY repaint, vt100 scrollback and
-inclusive cell selection/copy. Next: multiple terminal sessions.
+IME caret, vim application cursor mode, live PTY repaint, vt100 scrollback,
+inclusive cell selection/copy and multiple shell tabs.
 
-Next candidates: terminal multiple sessions, Git
-discard/branch/network operations, Dock reopen, cross-file undo and incremental
-preview layout for very large documents.
+Next candidates: Git discard/branch/network operations, Dock reopen, cross-file
+undo and incremental preview layout for very large documents.
 
 ## Non-goals for the editor core
 

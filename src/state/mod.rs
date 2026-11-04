@@ -688,16 +688,46 @@ impl TerminalSelection {
     }
 }
 
+pub struct TerminalSession {
+    pub session: Option<PtySession>,
+    pub parser: Option<vt100::Parser>,
+    pub cwd: PathBuf,
+    /// Last grid handed to this parser/PTY.
+    pub rows: u16,
+    pub cols: u16,
+    pub scrollback: usize,
+    pub selection: Option<TerminalSelection>,
+    pub selecting: bool,
+    pub caret_rect: Rect,
+}
+
+impl Default for TerminalSession {
+    fn default() -> Self {
+        Self {
+            session: None,
+            parser: None,
+            cwd: PathBuf::from("."),
+            rows: 24,
+            cols: 80,
+            scrollback: 0,
+            selection: None,
+            selecting: false,
+            caret_rect: Rect::ZERO,
+        }
+    }
+}
+
 pub struct TerminalState {
     pub open: bool,
     pub focused: bool,
-    pub session: Option<PtySession>,
-    pub parser: Option<vt100::Parser>,
+    pub sessions: Vec<TerminalSession>,
+    pub active: usize,
     pub rect: Rect,
-    /// Last grid handed to the parser/PTY; also the spawn size for the next
-    /// session. Never treated as the source of truth (the parser's screen is).
-    pub rows: u16,
-    pub cols: u16,
+    /// Header rectangle, used to route tab/new/close clicks before selection.
+    pub header_rect: Rect,
+    pub tab_hits: Vec<(usize, Rect)>,
+    pub new_hit: Rect,
+    pub close_hit: Rect,
     /// Fixed-pitch family resolved from [`crate::fonts::MONO_FAMILIES`].
     pub font: Option<String>,
     /// One column's advance in pixels, as last painted.
@@ -705,18 +735,34 @@ pub struct TerminalState {
     /// Whether [`TerminalState::font`] has been probed (needs the backend
     /// measurer, which is only available during painting).
     pub font_checked: bool,
-    pub cwd: PathBuf,
-    pub caret_rect: Rect,
-    /// Offset from the live screen into the vt100 scrollback (0 = live).
-    pub scrollback: usize,
     /// Cached body height of one terminal row (paint geometry).
     pub line_h: f32,
-    pub selection: Option<TerminalSelection>,
-    pub selecting: bool,
     pub height: f32,
     pub node: Option<NodeId>,
     pub drag: Option<(f32, f32)>,
     pub handle_rect: Rect,
+}
+
+impl TerminalState {
+    pub fn active(&self) -> Option<&TerminalSession> {
+        self.sessions.get(self.active)
+    }
+
+    pub fn active_mut(&mut self) -> Option<&mut TerminalSession> {
+        self.sessions.get_mut(self.active)
+    }
+
+    pub fn active_parser(&self) -> Option<&vt100::Parser> {
+        self.active()?.parser.as_ref()
+    }
+
+    pub fn active_rows(&self) -> u16 {
+        self.active().map_or(24, |session| session.rows)
+    }
+
+    pub fn active_cols(&self) -> u16 {
+        self.active().map_or(80, |session| session.cols)
+    }
 }
 
 impl Default for TerminalState {
@@ -724,20 +770,17 @@ impl Default for TerminalState {
         Self {
             open: false,
             focused: false,
-            session: None,
-            parser: None,
+            sessions: Vec::new(),
+            active: 0,
             rect: Rect::ZERO,
-            rows: 24,
-            cols: 80,
+            header_rect: Rect::ZERO,
+            tab_hits: Vec::new(),
+            new_hit: Rect::ZERO,
+            close_hit: Rect::ZERO,
             font: None,
             font_checked: false,
             cell_w: 0.0,
-            cwd: PathBuf::from("."),
-            caret_rect: Rect::ZERO,
-            scrollback: 0,
             line_h: 0.0,
-            selection: None,
-            selecting: false,
             height: 220.0,
             node: None,
             drag: None,
@@ -1366,11 +1409,7 @@ impl AppState {
     /// Rust destructors. Also used when the quit confirmation is accepted.
     pub fn shutdown_children(&mut self) {
         self.lsp.shutdown();
-        self.terminal.session = None;
-        self.terminal.parser = None;
-        self.terminal.scrollback = 0;
-        self.terminal.selection = None;
-        self.terminal.selecting = false;
+        self.shutdown_terminal_sessions();
     }
 
     pub fn status(&mut self, message: impl Into<String>) {
@@ -1559,6 +1598,29 @@ mod tests {
     }
 
     #[test]
+    fn terminal_session_selection_and_close_keep_the_active_index_valid() {
+        let mut state = state_with_tabs(1);
+        state.terminal.open = true;
+        state.terminal.sessions = vec![
+            TerminalSession::default(),
+            TerminalSession::default(),
+            TerminalSession::default(),
+        ];
+        state.terminal.active = 1;
+        state.terminal_select_session(2);
+        assert_eq!(state.terminal.active, 2);
+        state.terminal_close_session(0);
+        assert_eq!(state.terminal.sessions.len(), 2);
+        assert_eq!(state.terminal.active, 1);
+        state.terminal_close_session(1);
+        assert_eq!(state.terminal.sessions.len(), 1);
+        assert_eq!(state.terminal.active, 0);
+        state.terminal_close_session(0);
+        assert!(!state.terminal.open);
+        assert!(state.terminal.sessions.is_empty());
+    }
+
+    #[test]
     fn shutdown_children_clears_native_sessions() {
         let mut state = state_with_tabs(1);
         let parser = vt100::Parser::new(
@@ -1566,17 +1628,18 @@ mod tests {
             std::num::NonZeroU16::new(20).unwrap(),
             0,
         );
-        state.terminal.parser = Some(parser);
-        state.terminal.selection = Some(TerminalSelection {
-            anchor: (0, 0),
-            caret: (0, 2),
-        });
-        state.terminal.scrollback = 3;
+        state.terminal.sessions = vec![TerminalSession {
+            parser: Some(parser),
+            selection: Some(TerminalSelection {
+                anchor: (0, 0),
+                caret: (0, 2),
+            }),
+            scrollback: 3,
+            ..TerminalSession::default()
+        }];
+        state.terminal.active = 0;
         state.shutdown_children();
-        assert!(state.terminal.parser.is_none());
-        assert!(state.terminal.session.is_none());
-        assert!(state.terminal.selection.is_none());
-        assert_eq!(state.terminal.scrollback, 0);
+        assert!(state.terminal.sessions.is_empty());
         assert_eq!(state.lsp.status(), &crate::model::lsp::LspStatus::Off);
     }
 
@@ -1593,13 +1656,17 @@ mod tests {
             0,
         );
         parser.process(b"hello world");
-        state.terminal.parser = Some(parser);
-        state.terminal.rows = 2;
-        state.terminal.cols = 20;
-        state.terminal.selection = Some(TerminalSelection {
-            anchor: (0, 0),
-            caret: (0, 4),
-        });
+        state.terminal.sessions = vec![TerminalSession {
+            parser: Some(parser),
+            rows: 2,
+            cols: 20,
+            selection: Some(TerminalSelection {
+                anchor: (0, 0),
+                caret: (0, 4),
+            }),
+            ..TerminalSession::default()
+        }];
+        state.terminal.active = 0;
         state.focus = Focus::Terminal;
 
         state.run(Action::Copy);

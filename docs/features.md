@@ -255,8 +255,11 @@ panel re-sizes the PTY instead of drawing a stale 80×24 screen. `Ctrl+\`` close
 and kills the child. Focus is visible through the caret: the active editor caret is accent and
 2 px, the inactive caret dims, and the terminal header text/cursor accent only
 while it owns keyboard focus. Editor and terminal tops have no accent rule.
-Open state and height persist in the session (v10); the shell process and screen
-contents do not. Multiple sessions are a follow-up.
+The terminal header shows one tab per shell; `+` opens another shell in the
+same cwd and `×` closes the active one. Each tab keeps its own parser,
+scrollback and selection, while editor text/terminal cell fonts stay shared.
+Open state and height persist in the session; shell processes and screen
+contents do not, and sessions are not restored after a restart.
 
 ## macOS integration
 

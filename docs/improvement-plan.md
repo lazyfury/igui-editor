@@ -286,12 +286,28 @@ Acceptance:
 - A Godot project's headless process is gone after an app quit.
 - Language-server/PTY cleanup still works for normal stop and eviction.
 
+### Task 13: multiple terminal sessions (done)
+
+- [x] Split terminal state into `TerminalSession` entries plus one active index.
+- [x] Add header tabs, `+` new shell and `×` close-active controls.
+- [x] Keep per-session parser, cwd, scrollback and selection; poll/resize the
+      active and inactive PTYs correctly.
+- [x] State/self-check tests cover selection, close-index adjustment, adding a
+      second shell and closing it.
+- [x] Document that sessions are not persisted across restart.
+
+Acceptance:
+
+- `+` opens a second shell, tabs switch sessions, and `×` closes the active
+  session without corrupting the active index.
+- Closing the last session closes the panel; quitting still kills every PTY.
+
 ## Deferred to the next feature slice
 
 These are intentionally not part of this plan's implementation phases:
 
 - Native macOS Dock reopen.
-- Terminal multiple sessions.
+- Terminal session restore (live shells are not persisted).
 - Incremental Markdown preview layout.
 
 ## Progress log
@@ -317,6 +333,7 @@ These are intentionally not part of this plan's implementation phases:
 | Session 2 | Follow-up 10 | done | Workspace Trust UI, session v13; 248 unit tests. |
 | Session 2 | Follow-up 11 | done | macOS dirty-window close guard; 249 unit tests. |
 | Session 2 | Follow-up 12 | done | Native child cleanup on quit; 251 unit tests + packaged Godot test. |
+| Session 2 | Follow-up 13 | done | Multiple terminal sessions; 252 unit tests + selfcheck tabs. |
 
 ## Final acceptance checklist
 

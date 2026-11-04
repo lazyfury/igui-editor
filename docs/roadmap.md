@@ -43,8 +43,8 @@ shortcuts now have one source, saves are atomic with EOL preservation, find and
 Replace All are bounded/batched, terminal clipboard commands are focus-aware,
 sidebar rows are cached and external URLs are scheme-restricted.
 
-Next candidates: Dock reopen, terminal multiple sessions, cross-file undo and
-incremental preview layout for very large documents.
+Next candidates: Dock reopen, cross-file undo and incremental preview layout
+for very large documents.
 
 Notes:
 

@@ -98,6 +98,27 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
                 PointerPhase::Down => {
                     state.focus = Focus::Terminal;
                     state.terminal.focused = true;
+                    if state.terminal.header_rect.contains(pos) {
+                        if state.terminal.new_hit.contains(pos) {
+                            state.terminal_new_session();
+                        } else if state.terminal.close_hit.contains(pos) {
+                            let active = state.terminal.active;
+                            state.terminal_close_session(active);
+                        } else {
+                            let tab = state
+                                .terminal
+                                .tab_hits
+                                .iter()
+                                .find(|(_, rect)| rect.contains(pos))
+                                .map(|(index, _)| *index);
+                            if let Some(index) = tab {
+                                state.terminal_select_session(index);
+                            }
+                        }
+                        state.dirty = true;
+                        igui_ui::request_paint(tree);
+                        return;
+                    }
                     if let Some(cell) = state.terminal_cell_at(pos) {
                         state.terminal_begin_selection(cell);
                     }
@@ -208,6 +229,12 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     let p = theme.p;
     let focused = state.focus == Focus::Terminal;
     kit::fill(env.ctx, rect, p.bg);
+    let header = Rect::from_min_size(rect.origin, Size::new(rect.width(), HEADER));
+    state.terminal.header_rect = header;
+    state.terminal.tab_hits.clear();
+    state.terminal.new_hit = Rect::ZERO;
+    state.terminal.close_hit = Rect::ZERO;
+
     let icon_rect = Rect::from_min_size(
         Vec2::new(
             rect.left() + 10.0,
@@ -221,24 +248,92 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         icon_rect,
         if focused { p.accent } else { p.faint },
     );
+    let title_x = rect.left() + 10.0 + icon::SMALL + 5.0;
     kit::text(
         env.ctx,
         "TERMINAL",
-        rect.left() + 10.0 + icon::SMALL + 5.0,
+        title_x,
         rect.top() + 18.0,
         m.font_small,
         if focused { p.accent } else { p.faint },
     );
-    let cwd = state.terminal.cwd.display().to_string();
+
+    // Session tabs, then + and close. Hit rectangles are consumed by input.
+    let label_w = kit::width(env.measurer, "TERMINAL", m.font_small);
+    let mut x = title_x + label_w + 12.0;
+    let right_limit = rect.right() - 96.0;
+    for index in 0..state.terminal.sessions.len() {
+        if x + 24.0 > right_limit {
+            break;
+        }
+        let tab = Rect::from_min_size(
+            Vec2::new(x, rect.top() + 4.0),
+            Size::new(24.0, HEADER - 8.0),
+        );
+        let active = index == state.terminal.active;
+        if active {
+            kit::fill(env.ctx, tab, p.active);
+        }
+        kit::text(
+            env.ctx,
+            &(index + 1).to_string(),
+            tab.center().x - 3.0,
+            tab.center().y + 5.0,
+            m.font_small,
+            if active { p.accent } else { p.dim },
+        );
+        state.terminal.tab_hits.push((index, tab));
+        x += 26.0;
+    }
+    if !state.terminal.sessions.is_empty() && x + 24.0 <= right_limit {
+        let new = Rect::from_min_size(
+            Vec2::new(x, rect.top() + 4.0),
+            Size::new(24.0, HEADER - 8.0),
+        );
+        kit::text(
+            env.ctx,
+            "+",
+            new.center().x - 4.0,
+            new.center().y + 5.0,
+            m.font_ui,
+            p.dim,
+        );
+        state.terminal.new_hit = new;
+        state.terminal.close_hit = Rect::from_min_size(
+            Vec2::new(new.right() + 4.0, new.top()),
+            Size::new(24.0, new.height()),
+        );
+    }
+
+    let cwd = state
+        .terminal
+        .active()
+        .map(|session| session.cwd.display().to_string())
+        .unwrap_or_default();
+    let cwd_right = if state.terminal.close_hit != Rect::ZERO {
+        state.terminal.close_hit.left() - 8.0
+    } else {
+        rect.right() - 10.0
+    };
+    if state.terminal.close_hit != Rect::ZERO {
+        let c = state.terminal.close_hit.center();
+        kit::text(env.ctx, "×", c.x - 4.0, c.y + 5.0, m.font_ui, p.dim);
+    }
     kit::text_right(
         env.ctx,
         env.measurer,
-        &kit::truncate_left(env.measurer, &cwd, m.font_small, rect.width() - 120.0),
-        rect.right() - 10.0,
+        &kit::truncate_left(
+            env.measurer,
+            &cwd,
+            m.font_small,
+            (cwd_right - right_limit).max(0.0) + 80.0,
+        ),
+        cwd_right,
         rect.top() + 18.0,
         m.font_small,
         p.faint,
     );
+
     let body = Rect::from_min_size(
         Vec2::new(rect.left() + 8.0, rect.top() + HEADER),
         Size::new(
@@ -267,17 +362,16 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     let cell_w = cell_width(env.measurer, font, family);
     let cols = (body.width() / cell_w).floor().max(8.0) as u16;
     let rows = (body.height() / line_h).floor().max(2.0) as u16;
+    state.terminal.cell_w = cell_w;
 
-    // The parser's screen is the source of truth for the grid: a freshly
-    // spawned session starts at the *previous* session's size, which may not
-    // match the current panel (reopening after a resize). Comparing against
-    // the cached `rows/cols` instead skips this resize and leaves the shell
-    // painting into a clipped screen.
-    let mut resized = false;
-    let Some(parser) = state.terminal.parser.as_mut() else {
+    let Some(session) = state.terminal.active_mut() else {
+        return;
+    };
+    let Some(parser) = session.parser.as_mut() else {
         return;
     };
     let (screen_rows, screen_cols) = parser.screen().size();
+    let mut resized = false;
     if rows != screen_rows.get() || cols != screen_cols.get() {
         parser.set_size(
             std::num::NonZeroU16::new(rows).unwrap(),
@@ -286,24 +380,18 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         resized = true;
     }
     if resized {
-        if let Some(session) = state.terminal.session.as_mut() {
-            session.resize(rows, cols);
+        if let Some(shell) = session.session.as_mut() {
+            shell.resize(rows, cols);
         }
     }
-    state.terminal.rows = rows;
-    state.terminal.cols = cols;
-    state.terminal.cell_w = cell_w;
-
-    let Some(parser) = state.terminal.parser.as_mut() else {
-        return;
-    };
+    session.rows = rows;
+    session.cols = cols;
     let max_scrollback = parser.screen().scrollback_len();
-    state.terminal.scrollback = state.terminal.scrollback.min(max_scrollback);
-    parser
-        .screen_mut()
-        .set_scrollback(state.terminal.scrollback);
+    session.scrollback = session.scrollback.min(max_scrollback);
+    parser.screen_mut().set_scrollback(session.scrollback);
     let screen = parser.screen();
-    let selection = state.terminal.selection;
+    let selection = session.selection;
+    let scrollback = session.scrollback;
     let rows = rows.min(screen.size().0.get());
     let cols = cols.min(screen.size().1.get());
     env.ctx.save();
@@ -365,12 +453,8 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     let crow = crow.min(rows.saturating_sub(1));
     let ccol = ccol.min(cols.saturating_sub(1));
     let caret = caret_rect(body, cell_w, line_h, crow, ccol);
-    state.terminal.caret_rect = if state.terminal.scrollback == 0 {
-        caret
-    } else {
-        Rect::ZERO
-    };
-    if state.terminal.scrollback == 0 {
+    session.caret_rect = if scrollback == 0 { caret } else { Rect::ZERO };
+    if scrollback == 0 {
         env.ctx.fill_rect(
             Rect::from_min_size(caret.origin, Size::new(2.0, line_h)),
             if focused { p.accent } else { p.faint },
