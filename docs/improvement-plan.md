@@ -213,6 +213,18 @@ Acceptance:
 - Arrow-left/right move over one grapheme cluster; double-click selection keeps
   combining marks with their base letter.
 
+### Task 8: grapheme-aware word movement (done)
+
+- [x] Move word left/right over grapheme clusters and treat a cluster as a word
+      when any of its code points is alphanumeric.
+- [x] Test combining marks and emoji modifiers during word movement.
+- [x] `scripts/check.sh` passes with 247 unit tests + 2 doc tests.
+
+Acceptance:
+
+- Word movement never splits a combining mark from its base letter or an emoji
+  from its modifier.
+
 ## Deferred to the next feature slice
 
 These are intentionally not part of this plan's implementation phases:
@@ -240,6 +252,7 @@ These are intentionally not part of this plan's implementation phases:
 | Session 2 | Follow-up 5 | done | Terminal vt100 scrollback with wheel navigation; 239 unit tests. |
 | Session 2 | Follow-up 6 | done | Terminal cell selection/copy; 242 unit tests. |
 | Session 2 | Follow-up 7 | done | Grapheme-aware movement/deletion/selection; 246 unit tests. |
+| Session 2 | Follow-up 8 | done | Grapheme-aware word movement; 247 unit tests. |
 
 ## Final acceptance checklist
 

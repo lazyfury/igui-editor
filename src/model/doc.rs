@@ -1404,17 +1404,15 @@ fn is_word_grapheme(grapheme: &str) -> bool {
 fn prev_word_boundary(text: &str, byte: usize) -> usize {
     let mut byte = floor_boundary(text, byte);
     while byte > 0 {
-        let previous = prev_boundary(text, byte);
-        let ch = text[previous..byte].chars().next().unwrap_or(' ');
-        if is_word_char(ch) {
+        let previous = grapheme::prev_boundary(text, byte);
+        if is_word_grapheme(&text[previous..byte]) {
             break;
         }
         byte = previous;
     }
     while byte > 0 {
-        let previous = prev_boundary(text, byte);
-        let ch = text[previous..byte].chars().next().unwrap_or(' ');
-        if !is_word_char(ch) {
+        let previous = grapheme::prev_boundary(text, byte);
+        if !is_word_grapheme(&text[previous..byte]) {
             break;
         }
         byte = previous;
@@ -1425,18 +1423,18 @@ fn prev_word_boundary(text: &str, byte: usize) -> usize {
 fn next_word_boundary(text: &str, byte: usize) -> usize {
     let mut byte = floor_boundary(text, byte);
     while byte < text.len() {
-        let ch = text[byte..].chars().next().unwrap_or(' ');
-        if is_word_char(ch) {
+        let next = grapheme::next_boundary(text, byte);
+        if is_word_grapheme(&text[byte..next]) {
             break;
         }
-        byte = next_boundary(text, byte);
+        byte = next;
     }
     while byte < text.len() {
-        let ch = text[byte..].chars().next().unwrap_or(' ');
-        if !is_word_char(ch) {
+        let next = grapheme::next_boundary(text, byte);
+        if !is_word_grapheme(&text[byte..next]) {
             break;
         }
-        byte = next_boundary(text, byte);
+        byte = next;
     }
     byte
 }
@@ -1715,6 +1713,20 @@ mod tests {
         assert_eq!(doc.caret(), 1 + "👍🏽".len());
         doc.move_left(false, false);
         assert_eq!(doc.caret(), 1);
+    }
+
+    #[test]
+    fn word_movement_keeps_graphemes_intact() {
+        let mut doc = doc("cafe\u{301} noir 👍🏽ok");
+        doc.set_caret(0);
+        doc.move_right(false, true);
+        assert_eq!(doc.caret(), "cafe\u{301}".len());
+        doc.move_right(false, true);
+        assert_eq!(doc.caret(), "cafe\u{301} noir".len());
+        doc.move_right(false, true);
+        assert_eq!(doc.caret(), doc.text().len());
+        doc.move_left(false, true);
+        assert_eq!(doc.caret(), "cafe\u{301} noir 👍🏽".len());
     }
 
     #[test]
