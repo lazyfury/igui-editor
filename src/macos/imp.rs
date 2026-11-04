@@ -15,7 +15,7 @@ use objc2::ffi::{
     class_addMethod, class_getInstanceMethod, method_getImplementation, method_setImplementation,
 };
 use objc2::rc::Retained;
-use objc2::runtime::{AnyClass, AnyObject, Imp, NSObject, NSObjectProtocol, Sel};
+use objc2::runtime::{AnyClass, AnyObject, Bool, Imp, NSObject, NSObjectProtocol, Sel};
 use objc2::{define_class, msg_send, sel, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSApplicationTerminateReply, NSDocumentController, NSEventModifierFlags, NSMenu,
@@ -50,6 +50,8 @@ thread_local! {
     /// `applicationWillTerminate:` re-enter the event handler and abort.
     static QUIT_PENDING: Cell<bool> = const { Cell::new(false) };
     static SET_DELEGATE_IMP: Cell<Option<Imp>> = const { Cell::new(None) };
+    static WINDOW_CLOSE_IMP: Cell<Option<Imp>> = const { Cell::new(None) };
+    static WINDOW_CLOSE_HOOKED: Cell<bool> = const { Cell::new(false) };
     static MENU_TARGET: RefCell<Option<ManuallyDrop<Retained<AppMenuTarget>>>> = const { RefCell::new(None) };
     static MAIN_MENU: RefCell<Option<ManuallyDrop<Retained<NSMenu>>>> = const { RefCell::new(None) };
     /// Cursor offset from the window frame origin while a custom header drag is
@@ -176,6 +178,58 @@ pub fn install_dock() {
     };
     let class = AnyObject::class(delegate.as_ref());
     add_delegate_methods(class);
+    install_window_close_guard(&app);
+}
+
+/// Hooks winit's window delegate so a dirty window is not closed before the
+/// user answers the quit guard. A clean close still follows winit's original
+/// implementation (queue `CloseRequested` and exit).
+fn install_window_close_guard(app: &NSApplication) {
+    if WINDOW_CLOSE_HOOKED.with(Cell::get) {
+        return;
+    }
+    let Some(window) = app.keyWindow() else {
+        return;
+    };
+    let Some(delegate) = window.delegate() else {
+        return;
+    };
+    let class = AnyObject::class(delegate.as_ref());
+    unsafe {
+        let method = class_getInstanceMethod(class, sel!(windowShouldClose:));
+        if method.is_null() {
+            return;
+        }
+        let Some(original) = method_getImplementation(method) else {
+            return;
+        };
+        WINDOW_CLOSE_IMP.with(|slot| slot.set(Some(original)));
+        let hook: Imp = std::mem::transmute(window_should_close_imp as *const ());
+        method_setImplementation(method, hook);
+        WINDOW_CLOSE_HOOKED.with(|slot| slot.set(true));
+    }
+}
+
+fn close_needs_confirmation(dirty: usize) -> bool {
+    dirty > 0
+}
+
+unsafe extern "C-unwind" fn window_should_close_imp(
+    this: *mut AnyObject,
+    cmd: Sel,
+    sender: *mut AnyObject,
+) -> Bool {
+    if close_needs_confirmation(DIRTY.with(Cell::get)) {
+        native::push(NativeRequest::Quit);
+        wake();
+        return Bool::NO;
+    }
+    if let Some(original) = WINDOW_CLOSE_IMP.with(Cell::get) {
+        let original: unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject) -> Bool =
+            unsafe { std::mem::transmute(original) };
+        return unsafe { original(this, cmd, sender) };
+    }
+    Bool::YES
 }
 
 pub fn set_recent(recent: &[PathBuf]) {
@@ -1037,4 +1091,16 @@ unsafe extern "C-unwind" fn should_terminate_imp(
     native::push(NativeRequest::Quit);
     wake();
     NSApplicationTerminateReply::TerminateLater.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::close_needs_confirmation;
+
+    #[test]
+    fn dirty_windows_are_guarded_before_closing() {
+        assert!(!close_needs_confirmation(0));
+        assert!(close_needs_confirmation(1));
+        assert!(close_needs_confirmation(7));
+    }
 }

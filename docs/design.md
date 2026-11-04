@@ -241,8 +241,10 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    native state; `applicationShouldTerminate:` returns `NSTerminateLater` and
    queues `Quit` when dirty. The in-app modal responds with
    `replyToApplicationShouldTerminate:` (`Discard & Quit` / `Cancel`).
-   Closing the window still follows winit's event-loop exit path; a close guard
-   and Dock reopen are follow-ups (they need a host/engine change).
+   Closing the window is guarded by replacing winit's window-delegate
+   `windowShouldClose:` implementation: dirty windows enqueue `Quit`, clean
+   windows call the original method and let winit exit. Dock reopen still needs
+   a host/engine change.
 
 34. **Git and Terminal are native services behind built-in plugins.** A
    compile-time `BuiltinPlugin` registers a `ServiceManifest` (capabilities,
@@ -409,8 +411,8 @@ IME caret, vim application cursor mode, live PTY repaint, vt100 scrollback and
 inclusive cell selection/copy. Next: multiple terminal sessions.
 
 Next candidates: terminal multiple sessions, Git
-discard/branch/network operations, native close-guard/Dock-reopen polish,
-cross-file undo and incremental preview layout for very large documents.
+discard/branch/network operations, Dock reopen, cross-file undo and incremental
+preview layout for very large documents.
 
 ## Non-goals for the editor core
 

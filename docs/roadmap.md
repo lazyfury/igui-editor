@@ -43,14 +43,12 @@ shortcuts now have one source, saves are atomic with EOL preservation, find and
 Replace All are bounded/batched, terminal clipboard commands are focus-aware,
 sidebar rows are cached and external URLs are scheme-restricted.
 
-Next candidates: window-close guard + Dock reopen, terminal multiple
-sessions, Workspace Trust UI (the opt-in local-binary guard is implemented),
-cross-file undo and incremental preview layout for very large documents.
+Next candidates: Dock reopen, terminal multiple sessions, cross-file undo and
+incremental preview layout for very large documents.
 
 Notes:
 
-- A close-window dirty guard and Dock reopen are not implemented yet; closing
-  the window still follows winit's event-loop exit.
+- Dock reopen is not implemented yet; the window close guard is in place.
 - Only macOS has been exercised manually; the Linux (XDG portal) and Windows
   dialog paths are wired but untested.
 - The macOS sheet path is asynchronous by design (no nested modal loop, no

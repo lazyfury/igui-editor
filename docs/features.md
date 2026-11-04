@@ -277,6 +277,9 @@ contents do not. Multiple sessions are a follow-up.
   Items via `NSDocumentController`.
 - **Quit guard**: `⌘Q` with dirty tabs returns `NSTerminateLater` and shows the
   in-app **Discard & Quit / Cancel** confirmation; a clean app quits directly.
+  Closing the window goes through the same guard: `windowShouldClose:` is hooked
+  on winit's window delegate, dirty windows stay open for the confirmation and
+  clean windows follow winit's normal close path. Dock reopen remains a follow-up.
 - The native bridge never replaces winit's `NSApplicationDelegate`; it adds
   `application:openURLs:`, `applicationDockMenu:` and
   `applicationShouldTerminate:` to the existing delegate class and keeps

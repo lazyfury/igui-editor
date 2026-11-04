@@ -255,11 +255,26 @@ Acceptance:
 - With trust off, repo-local `node_modules/.bin` shims are not selected; with
   trust on they are, and the env var still forces them on.
 
+### Task 11: macOS window close guard (done)
+
+- [x] Replace winit's window-delegate `windowShouldClose:` with a wrapper that
+      blocks dirty windows and enqueues the existing quit guard.
+- [x] Keep the original implementation for clean windows so winit still exits
+      through its normal `CloseRequested` path.
+- [x] Test the dirty/clean predicate.
+- [x] Document the remaining Dock-reopen gap.
+
+Acceptance:
+
+- Dirty window close shows the in-app Discard & Quit / Cancel guard and does not
+  close the window.
+- Clean window close follows winit's normal close path.
+
 ## Deferred to the next feature slice
 
 These are intentionally not part of this plan's implementation phases:
 
-- Native macOS close guard + Dock reopen.
+- Native macOS Dock reopen.
 - Terminal multiple sessions.
 - Incremental Markdown preview layout.
 
@@ -284,6 +299,7 @@ These are intentionally not part of this plan's implementation phases:
 | Session 2 | Follow-up 8 | done | Grapheme-aware word movement; 247 unit tests. |
 | Session 2 | Follow-up 9 | done | Terminal Ctrl+Shift clipboard chords; 248 unit tests. |
 | Session 2 | Follow-up 10 | done | Workspace Trust UI, session v13; 248 unit tests. |
+| Session 2 | Follow-up 11 | done | macOS dirty-window close guard; 249 unit tests. |
 
 ## Final acceptance checklist
 
