@@ -26,9 +26,18 @@ use serde_json::{json, Value};
 use super::processes;
 use crate::model::doc::Document;
 use crate::model::Workspace;
-use crate::services::{AttachTarget, LanguageServerSpec, LanguageServerTransport, ToolInstall};
+use crate::services::{
+    AttachTarget, FileChangePolicy, LanguageServerSpec, LanguageServerTransport, ToolInstall,
+};
 
 const CHANGE_DEBOUNCE: Duration = Duration::from_millis(140);
+/// Wait before re-sending open documents to a server that rescans the project
+/// itself. Godot's "rescan while unfocused" timer fires every 0.5 s.
+const RESCAN_DELAY: Duration = Duration::from_millis(800);
+/// Second pass in case the first scan was still running (large projects).
+const RESCAN_FOLLOWUP: Duration = Duration::from_millis(2_000);
+/// Godot's project scan rewrites this file when the global class list changes.
+const CLASS_CACHE_FILE: &str = "global_script_class_cache.cfg";
 const RETRY_AFTER: Duration = Duration::from_secs(5);
 const MAX_COMPLETIONS: usize = 200;
 const MAX_DIAGNOSTICS: usize = 500;
@@ -205,7 +214,8 @@ impl LspClient {
             .and_then(|name| std::env::var(name).ok())
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| spec.command.to_string());
-        let mut process = Command::new(resolve_command(&command, root, allow_workspace));
+        let resolved = resolve_command(&command, root, allow_workspace);
+        let mut process = Command::new(&resolved);
         process
             .args(&spec.args)
             .current_dir(root)
@@ -231,6 +241,16 @@ impl LspClient {
                     return Err(io::Error::other(
                         "TCP language server needs a port_arg or a fixed port",
                     ));
+                }
+                // A server that rescans the project itself needs a private
+                // profile: Godot ignores watched files and only refreshes its
+                // class registry from its own scan.
+                if spec.file_changes == FileChangePolicy::ServerRescan {
+                    if let Some(overrides) =
+                        crate::model::godot_profile::prepare(Path::new(&resolved))
+                    {
+                        process.envs(overrides);
+                    }
                 }
                 process.stdin(Stdio::null()).stdout(Stdio::null());
                 let child = process.spawn()?;
@@ -790,6 +810,9 @@ struct Session {
     native_symbols: HashMap<(String, String), NativeSymbol>,
     last_active: Instant,
     changed: bool,
+    /// Re-send every open document on the next `sync` so the server parses it
+    /// against a project scan that just changed (Godot's class registry).
+    resync: bool,
 }
 
 impl Session {
@@ -815,6 +838,7 @@ impl Session {
             native_symbols: HashMap::new(),
             last_active: Instant::now(),
             changed: false,
+            resync: false,
         }
     }
 
@@ -832,6 +856,7 @@ impl Session {
         // A restarted server registers its watchers again.
         self.watchers.clear();
         self.native_classes.clear();
+        self.resync = false;
     }
 
     fn cancel_popup_requests(&mut self) {
@@ -1031,6 +1056,10 @@ impl Session {
         }
 
         let now = Instant::now();
+        // A structural change reached a self-rescanning server: re-send every
+        // document so it parses against the refreshed project scan (Godot's
+        // global class registry) instead of a stale cached parse.
+        let force = std::mem::take(&mut self.resync);
         let mut semantic_queue = Vec::new();
         let mut symbol_queue = Vec::new();
         for path in owned {
@@ -1069,32 +1098,34 @@ impl Session {
                     symbol_queue.push(path.clone());
                 }
                 Some(open) => {
-                    if open.rev == doc.rev() {
+                    if open.rev == doc.rev() && !force {
                         open.changed_at = None;
                         continue;
                     }
-                    if open.changed_at.is_none() {
-                        open.changed_at = Some(now);
-                    }
-                    if open
-                        .changed_at
-                        .is_some_and(|at| now.duration_since(at) >= CHANGE_DEBOUNCE)
-                    {
-                        open.version += 1;
-                        open.rev = doc.rev();
-                        open.changed_at = None;
-                        if let Some(client) = self.client.as_ref() {
-                            client.notify(
-                                "textDocument/didChange",
-                                json!({
-                                    "textDocument": {"uri": uri, "version": open.version},
-                                    "contentChanges": [{"text": doc.text()}],
-                                }),
-                            );
+                    let due = force
+                        || open
+                            .changed_at
+                            .is_some_and(|at| now.duration_since(at) >= CHANGE_DEBOUNCE);
+                    if !due {
+                        if open.changed_at.is_none() {
+                            open.changed_at = Some(now);
                         }
-                        semantic_queue.push(path.clone());
-                        symbol_queue.push(path.clone());
+                        continue;
                     }
+                    open.version += 1;
+                    open.rev = doc.rev();
+                    open.changed_at = None;
+                    if let Some(client) = self.client.as_ref() {
+                        client.notify(
+                            "textDocument/didChange",
+                            json!({
+                                "textDocument": {"uri": uri, "version": open.version},
+                                "contentChanges": [{"text": doc.text()}],
+                            }),
+                        );
+                    }
+                    semantic_queue.push(path.clone());
+                    symbol_queue.push(path.clone());
                 }
             }
         }
@@ -1252,6 +1283,10 @@ pub struct LspController {
     roots: RootCache,
     last_active_path: Option<PathBuf>,
     failed: HashMap<(String, PathBuf), Instant>,
+    /// When open documents should be re-sent to a self-rescanning server.
+    resync_at: Option<Instant>,
+    /// Remaining passes for the current structural change (initial + follow-up).
+    resync_passes: u8,
     notified: HashSet<String>,
     issue: Option<LspIssue>,
     /// One-shot status line for the next frame (attached vs. spawned server).
@@ -1292,6 +1327,8 @@ impl Default for LspController {
             roots: RootCache::default(),
             last_active_path: None,
             failed: HashMap::new(),
+            resync_at: None,
+            resync_passes: 0,
             notified: HashSet::new(),
             issue: None,
             notice: None,
@@ -1393,6 +1430,8 @@ impl LspController {
         self.failed.clear();
         self.notified.clear();
         self.issue = None;
+        self.resync_at = None;
+        self.resync_passes = 0;
         self.clear_transient();
     }
 
@@ -1533,6 +1572,9 @@ impl LspController {
             }
         }
         self.poll();
+        // Re-parse open documents after a self-rescanning server (Godot) has
+        // had time to scan a structural file change.
+        self.service_resync(Instant::now());
         for index in 0..self.sessions.len() {
             if self.sessions[index].status == LspStatus::Ready {
                 self.sync_owned(index, ws);
@@ -2143,15 +2185,55 @@ impl LspController {
         out
     }
 
+    /// Project roots of servers that refresh themselves from their own scan.
+    /// The filesystem poll watches each root's `.godot` directory so a class
+    /// registry rewrite (even from an unseen subtree) still re-parses documents.
+    pub fn rescan_roots(&self) -> Vec<PathBuf> {
+        self.sessions
+            .iter()
+            .filter(|session| session.spec.file_changes == FileChangePolicy::ServerRescan)
+            .map(|session| session.root.clone())
+            .collect()
+    }
+
     /// Forwards file changes (editor-side and polled) to every ready server.
     ///
     /// Events are deduped by path (later kinds win) and filtered per session:
-    /// registered watchers decide, otherwise the spec's extensions do.
-    pub fn notify_file_events(&self, events: &[FileEvent]) {
+    /// registered watchers decide, otherwise the spec's extensions do. A
+    /// [`FileChangePolicy::ServerRescan`] server ignores notifications, so the
+    /// controller instead schedules a re-parse of the open documents once its
+    /// own project scan has run. Diagnostics for deleted files are dropped
+    /// immediately: no server will ever publish an update for them again.
+    pub fn notify_file_events(&mut self, events: &[FileEvent]) {
         if events.is_empty() {
             return;
         }
-        for session in &self.sessions {
+        for event in events {
+            if event.kind == FileEventKind::Deleted && !event.path.exists() {
+                self.forget_path(&event.path);
+            }
+        }
+        let now = Instant::now();
+        for session in &mut self.sessions {
+            let under_root = events
+                .iter()
+                .any(|event| path_under(&event.path, &session.root));
+            if !under_root {
+                continue;
+            }
+            if session.spec.file_changes == FileChangePolicy::ServerRescan {
+                // Godot's LSP has no watched-file handler. Its scan timer (and
+                // the class cache it rewrites) is the real signal; the open
+                // documents must then be parsed again.
+                if events.iter().any(|event| {
+                    path_under(&event.path, &session.root) && rescans_project(session, event)
+                }) {
+                    let at = now + RESCAN_DELAY;
+                    self.resync_at = Some(self.resync_at.map_or(at, |current| current.min(at)));
+                    self.resync_passes = self.resync_passes.max(2);
+                }
+                continue;
+            }
             let Some(client) = session.client.as_ref() else {
                 continue;
             };
@@ -2177,6 +2259,73 @@ impl LspController {
                 json!({ "changes": changes }),
             );
         }
+    }
+
+    /// Drops every cached result for `path` (deleted file or directory).
+    ///
+    /// `starts_with` is component-wise, so a deleted folder also clears the
+    /// diagnostics of open files inside it without matching `a.gd.bak`.
+    fn forget_path(&mut self, path: &Path) {
+        for session in &mut self.sessions {
+            let before = session.diagnostics.len();
+            session
+                .diagnostics
+                .retain(|cached, _| !cached.starts_with(path));
+            session
+                .semantic
+                .retain(|cached, _| !cached.starts_with(path));
+            session
+                .semantic_pending
+                .retain(|cached| !cached.starts_with(path));
+            session
+                .semantic_in_flight
+                .retain(|cached| !cached.starts_with(path));
+            session
+                .symbols
+                .retain(|cached, _| !cached.starts_with(path));
+            session
+                .symbols_pending
+                .retain(|cached| !cached.starts_with(path));
+            session
+                .symbols_in_flight
+                .retain(|cached| !cached.starts_with(path));
+            if session.diagnostics.len() != before {
+                session.changed = true;
+            }
+        }
+    }
+
+    /// Re-parses every open document of a self-rescanning server once its
+    /// project scan has picked up a structural change.
+    ///
+    /// Called from [`Self::tick`]; `next_wake` keeps the app awake until then.
+    fn service_resync(&mut self, now: Instant) {
+        let Some(at) = self.resync_at else {
+            return;
+        };
+        if now < at {
+            return;
+        }
+        self.resync_at = None;
+        for session in &mut self.sessions {
+            if session.spec.file_changes == FileChangePolicy::ServerRescan
+                && session.status == LspStatus::Ready
+            {
+                session.resync = true;
+            }
+        }
+        // A big project may still have been scanning when the first pass ran.
+        if self.resync_passes > 1 {
+            self.resync_passes -= 1;
+            self.resync_at = Some(now + RESCAN_FOLLOWUP);
+        } else {
+            self.resync_passes = 0;
+        }
+    }
+
+    /// Earliest instant at which open documents must be re-sent.
+    pub fn next_wake(&self) -> Option<Instant> {
+        self.resync_at
     }
 
     /// `textDocument/didSave` for the sessions that have `path` open.
@@ -2419,6 +2568,30 @@ fn resolve_watcher_glob(root: &Path, base: Option<&Path>, pattern: &str) -> Stri
     } else {
         format!("{prefix}/{pattern}")
     }
+}
+
+/// Whether a file event can change the server's project-wide view.
+///
+/// Content-only edits of open files are already described by their documents;
+/// reacting to them would make autosave re-parse every open tab. Godot's class
+/// cache rewrite counts because it means the global `class_name` registry
+/// changed even when the edited file is outside the polled directories.
+fn rescans_project(session: &Session, event: &FileEvent) -> bool {
+    let name = event.path.file_name().and_then(|name| name.to_str());
+    // The class cache is the engine's own "the registry changed" signal, so any
+    // kind counts: a slow first scan may create it after the file event.
+    if name == Some(CLASS_CACHE_FILE) {
+        return true;
+    }
+    matches!(event.kind, FileEventKind::Created | FileEventKind::Deleted)
+        && (session.spec.matches_path(&event.path)
+            || name.is_some_and(|name| {
+                session
+                    .spec
+                    .project_markers
+                    .iter()
+                    .any(|marker| marker == name)
+            }))
 }
 
 /// True when `path` is `root` or below it. The polled path may be the
@@ -2901,6 +3074,209 @@ mod tests {
         assert!(!path_under(Path::new("/tmp/other/a.gd"), root));
     }
 
+    fn diagnostic(message: &str) -> Diagnostic {
+        Diagnostic {
+            start_line: 0,
+            start_char: 0,
+            end_line: 0,
+            end_char: 1,
+            severity: 1,
+            message: message.into(),
+        }
+    }
+
+    #[test]
+    fn a_deleted_file_loses_its_cached_results_at_once() {
+        let spec = crate::services::godot::godot_server();
+        let root = std::env::temp_dir().join(format!("igui-lsp-deleted-{}", std::process::id()));
+        let mut lsp = LspController::default();
+        lsp.sessions.push(Session::new(spec, root.clone()));
+        let path = root.join("gone.gd");
+        lsp.sessions[0]
+            .diagnostics
+            .insert(path.clone(), vec![diagnostic("gone")]);
+        lsp.sessions[0].semantic.insert(path.clone(), Vec::new());
+        lsp.sessions[0].symbols.insert(path.clone(), Vec::new());
+
+        // A deleted folder clears everything inside it, but a name that only
+        // shares the prefix must survive.
+        let nested = root.join("scripts").join("enemy.gd");
+        let sibling = root.join("scripts.gd");
+        lsp.sessions[0]
+            .diagnostics
+            .insert(nested.clone(), vec![diagnostic("nested")]);
+        lsp.sessions[0]
+            .diagnostics
+            .insert(sibling.clone(), vec![diagnostic("sibling")]);
+
+        lsp.notify_file_events(&[
+            FileEvent {
+                path: path.clone(),
+                kind: FileEventKind::Deleted,
+            },
+            FileEvent {
+                path: root.join("scripts"),
+                kind: FileEventKind::Deleted,
+            },
+        ]);
+
+        assert!(lsp.diagnostics_for(&path).is_empty());
+        assert!(!lsp.sessions[0].semantic.contains_key(&path));
+        assert!(!lsp.sessions[0].symbols.contains_key(&path));
+        assert!(lsp.diagnostics_for(&nested).is_empty());
+        assert_eq!(lsp.diagnostics_for(&sibling).len(), 1);
+        assert!(lsp.take_changed(), "PROBLEMS must be rebuilt");
+    }
+
+    #[test]
+    fn a_self_rescanning_server_reparses_documents_instead_of_watched_notifications() {
+        let spec = crate::services::godot::godot_server();
+        let root = PathBuf::from("/tmp/igui-rescan-root");
+        let mut lsp = LspController::default();
+        lsp.sessions.push(Session::new(spec, root.clone()));
+        lsp.sessions[0].status = LspStatus::Ready;
+
+        // Content-only changes and Godot's own `.gd.uid` companion do not
+        // invalidate the class registry: react to them only through the open
+        // document itself, never by re-parsing every tab.
+        for (name, kind) in [
+            ("player.gd", FileEventKind::Changed),
+            ("player.gd.uid", FileEventKind::Created),
+        ] {
+            lsp.notify_file_events(&[FileEvent {
+                path: root.join(name),
+                kind,
+            }]);
+            assert!(lsp.next_wake().is_none(), "{name} must not force a rescan");
+        }
+
+        lsp.notify_file_events(&[FileEvent {
+            path: root.join("player.gd"),
+            kind: FileEventKind::Created,
+        }]);
+        let deadline = lsp.next_wake().expect("a rescan deadline");
+        assert!(!lsp.sessions[0].resync);
+        lsp.service_resync(deadline + Duration::from_millis(1));
+        assert!(lsp.sessions[0].resync, "open documents must be re-sent");
+        // A second pass covers projects whose first scan was still running.
+        let followup = lsp.next_wake().expect("a follow-up pass");
+        lsp.service_resync(followup + Duration::from_millis(1));
+        assert!(lsp.next_wake().is_none());
+    }
+
+    #[test]
+    fn only_structural_script_changes_trigger_a_project_rescan() {
+        let spec = crate::services::godot::godot_server();
+        let session = Session::new(spec, PathBuf::from("/root"));
+        let event = |name: &str, kind| FileEvent {
+            path: PathBuf::from("/root").join(name),
+            kind,
+        };
+        assert!(rescans_project(
+            &session,
+            &event("player.gd", FileEventKind::Created)
+        ));
+        assert!(rescans_project(
+            &session,
+            &event("player.gd", FileEventKind::Deleted)
+        ));
+        assert!(rescans_project(
+            &session,
+            &event("project.godot", FileEventKind::Created)
+        ));
+        for kind in [
+            FileEventKind::Created,
+            FileEventKind::Changed,
+            FileEventKind::Deleted,
+        ] {
+            assert!(rescans_project(
+                &session,
+                &event(".godot/global_script_class_cache.cfg", kind)
+            ));
+        }
+        assert!(!rescans_project(
+            &session,
+            &event("player.gd", FileEventKind::Changed)
+        ));
+        assert!(!rescans_project(
+            &session,
+            &event("player.gd.uid", FileEventKind::Created)
+        ));
+        assert!(!rescans_project(
+            &session,
+            &event("notes.md", FileEventKind::Created)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_resync_resends_open_documents_as_full_text_changes() {
+        use std::io::BufReader;
+
+        let root = std::env::temp_dir().join(format!("igui-lsp-resync-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let script = root.join("player.gd");
+        std::fs::write(&script, "extends Node\n\nvar speed := 1\n").unwrap();
+        let script = std::fs::canonicalize(&script).unwrap();
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let spec = LanguageServerSpec {
+            id: "fake-rescan".into(),
+            language: "gdscript".into(),
+            extensions: vec!["gd".into()],
+            project_markers: vec!["project.godot".into()],
+            workspace_markers: vec![],
+            language_ids: Default::default(),
+            loose_files: false,
+            command: "/bin/sh".into(),
+            command_env: None,
+            args: vec!["-c".into(), "sleep 30".into()],
+            transport: LanguageServerTransport::Tcp,
+            port_arg: None,
+            port: Some(port),
+            attach: Some(AttachTarget {
+                host: "127.0.0.1".into(),
+                port,
+                env: None,
+            }),
+            file_changes: FileChangePolicy::ServerRescan,
+            install: None,
+        };
+        let mut ws = Workspace::new(&root);
+        ws.open(&script).unwrap();
+        let mut session = Session::new(spec, root.clone());
+        session.client = Some(LspClient::spawn(&session.spec, &root, false).unwrap());
+        session.status = LspStatus::Ready;
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut reader = BufReader::new(stream);
+
+        session.sync(std::slice::from_ref(&script), &ws);
+        let opened = read_message(&mut reader).unwrap().expect("didOpen");
+        assert_eq!(opened["method"], "textDocument/didOpen");
+
+        session.resync = true;
+        session.sync(std::slice::from_ref(&script), &ws);
+        let mut resent = None;
+        while let Ok(Some(message)) = read_message(&mut reader) {
+            if message["method"] == "textDocument/didChange" {
+                resent = Some(message);
+                break;
+            }
+        }
+        let resent = resent.expect("the document was not re-sent");
+        assert_eq!(resent["params"]["textDocument"]["version"], 2);
+        assert_eq!(
+            resent["params"]["contentChanges"][0]["text"],
+            "extends Node\n\nvar speed := 1\n"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn disabling_drops_every_session() {
         let spec = crate::services::go::go_server();
@@ -2957,6 +3333,7 @@ mod tests {
             port_arg: None,
             port: Some(port),
             attach: None,
+            file_changes: FileChangePolicy::Notify,
             install: None,
         };
         let mut client = LspClient::spawn(&spec, Path::new("/tmp"), false).unwrap();
@@ -3033,6 +3410,7 @@ mod tests {
                 port,
                 env: None,
             }),
+            file_changes: FileChangePolicy::Notify,
             install: None,
         };
         let mut client = LspClient::spawn(&spec, Path::new("/tmp"), false).unwrap();

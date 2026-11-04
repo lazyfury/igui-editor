@@ -340,7 +340,13 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    Saves additionally send `textDocument/didSave` for open documents. This is
    what lets a server notice a script that another tool (the Godot editor,
    creating the `.uid` companion) brought into the project without the file
-   ever being opened as a tab.
+   ever being opened as a tab. Godot's LSP is the documented exception: it has
+   no watched-file handler, so `file_changes: ServerRescan` skips the
+   notification, runs a spawned headless instance with a private profile whose
+   "rescan while unfocused" timer is on, and re-parses open documents with a
+   short delayed `didChange` once the engine's scan has run. Deleted paths drop
+   their diagnostics immediately instead of waiting for an update that can
+   never arrive.
 
 39. **Godot talks to the editor you already have.** Godot's GDScript server is a
    TCP service owned by the editor process, and that editor is what imports the
@@ -354,7 +360,9 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    spawn the headless fallback, which stays registered as a native child. The
    status bar names the mode, and the docs state the catches: the editor's
    language server must be enabled, must have the same project open, and serves
-   one client at a time.
+   one client at a time. An attached editor also only refreshes its project scan
+   (new/deleted scripts, `class_name`) when its window regains focus; the
+   spawned fallback keeps itself fresh via the private rescan profile.
 
 ## Theme spec (geek / compact / no corners)
 

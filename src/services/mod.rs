@@ -114,6 +114,24 @@ pub enum LanguageServerTransport {
     Tcp,
 }
 
+/// How a server learns that files changed outside the client.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileChangePolicy {
+    /// The server handles `workspace/didChangeWatchedFiles`. The client
+    /// forwards its own create/rename/delete and the filesystem poll, filtered
+    /// by the server's registrations (or the spec's extensions).
+    #[default]
+    Notify,
+    /// The server ignores watched-file notifications and rescans the project
+    /// itself. Godot's GDScript LSP is the built-in case: it only refreshes its
+    /// global `class_name` registry when the editor rescans. The client then
+    /// re-parses open documents after a structural change, and a spawned
+    /// server runs with a private editor profile whose "rescan while
+    /// unfocused" timer is enabled (see `model::godot_profile`).
+    ServerRescan,
+}
+
 /// A language server that another process may already be serving (Godot's
 /// editor listens on loopback). It is tried before a private process is
 /// spawned, so the editor's own project scan is what the client talks to.
@@ -214,9 +232,13 @@ pub struct LanguageServerSpec {
     #[serde(default)]
     pub port: Option<u16>,
     /// A server that may already be running (Godot's editor). Tried first: it
-    /// owns the project's import/scan state, so new scripts are already known.
+    /// owns the project's import/scan state. It only sees files created or
+    /// deleted since its last scan when the editor regains focus.
     #[serde(default)]
     pub attach: Option<AttachTarget>,
+    /// How the server learns about files changed outside the client.
+    #[serde(default)]
+    pub file_changes: FileChangePolicy,
     /// Shown when the command cannot be found; never executed automatically.
     #[serde(default)]
     pub install: Option<ToolInstall>,

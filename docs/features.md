@@ -91,8 +91,12 @@ diagnostics/semantic tokens/outline. The same switch is the
   `workspace.didChangeWatchedFiles`, honours watcher registrations, forwards the
   editor's own create/rename/delete and the filesystem poll as
   create/change/delete events, and sends `textDocument/didSave` on save. Files
-  never opened as tabs (a Godot `.gd.uid`, generated code, `git checkout`) are
-  therefore visible to the server too.
+  never opened as tabs (generated code, `git checkout`) are therefore visible to
+  the server too. Godot's LSP has no watched-file handler, so a spawned headless
+  Godot instead runs with a private profile that keeps its project scan (and
+  `class_name` registry) fresh while you create and delete scripts; open files
+  are re-parsed after each structural change. Deleted files leave PROBLEMS
+  immediately.
 - Diagnostics are painted as severity-colored underlines and a full-height
   gutter severity rail. The footer chip is colored by the worst severity and
   shows the active document's `LSP 1E 2W` (or `LSP ERR` if the server cannot
@@ -189,9 +193,17 @@ attached editor is left running; a spawned headless Godot is registered as a
 native child and is killed when the editor stops the session or quits (including
 AppKit's non-unwinding terminate path). Godot's server sends diagnostics, hover,
 completion, definition and document symbols; semantic tokens are not provided by
-Godot, so the syntax palette remains in charge of token colors. File changes are
-reported to the server like any other (`workspace/didChangeWatchedFiles`), so a
-script created here reaches a server that supports the notification.
+Godot, so the syntax palette remains in charge of token colors.
+
+Godot's language server does not understand
+`workspace/didChangeWatchedFiles`, and its project scan (the source of the
+global `class_name` list) only refreshes on editor focus. The spawned fallback
+therefore gets a private Godot profile with
+`interface/editor/behavior/import_resources_when_unfocused` enabled, plus a
+short `didChange` re-parse of every open document after a script or
+`project.godot` is created or deleted. A running editor you attach to keeps its
+own settings and scans when it regains focus, so a script created here becomes
+visible after you click back into Godot.
 
 ## Header panel groups
 

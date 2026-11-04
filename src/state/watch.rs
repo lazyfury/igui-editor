@@ -44,6 +44,15 @@ impl AppState {
                 dirs.push(parent.to_path_buf());
             }
         }
+        // Godot rewrites `.godot/global_script_class_cache.cfg` when its scan
+        // changes the global class list. Watching it turns "a script was added
+        // somewhere we do not list" into a document re-parse.
+        for root in self.lsp.rescan_roots() {
+            let cache = root.join(".godot");
+            if cache.is_dir() {
+                dirs.push(cache);
+            }
+        }
         dirs.sort_unstable();
         dirs.dedup();
         dirs.truncate(MAX_WATCH_DIRS);

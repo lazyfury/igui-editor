@@ -31,7 +31,8 @@ impl AppState {
         self.lsp
             .tick(&self.ws, &self.services.language_servers, self.settings.lsp);
         // File changes collected by the editor and the filesystem poll reach the
-        // servers as `workspace/didChangeWatchedFiles`.
+        // servers as `workspace/didChangeWatchedFiles`; a self-rescanning server
+        // (Godot) instead gets a delayed re-parse of the open documents.
         let events = std::mem::take(&mut self.file_events);
         if !events.is_empty() {
             self.lsp.notify_file_events(&events);

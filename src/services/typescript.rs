@@ -85,6 +85,7 @@ pub fn typescript_server() -> LanguageServerSpec {
         port_arg: None,
         port: None,
         attach: None,
+        file_changes: super::FileChangePolicy::Notify,
         install: Some(ToolInstall {
             tool: "typescript-language-server".into(),
             language: "TypeScript / JavaScript".into(),

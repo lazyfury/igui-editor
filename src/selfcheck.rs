@@ -5373,8 +5373,9 @@ fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
 /// + `didOpen` with one diagnostic.
 #[cfg(unix)]
 const FAKE_GODOT_EDITOR_LSP: &str = r##"#!/usr/bin/env python3
-import json, socket, sys
+import json, os, socket, sys
 
+LOG = os.environ.get("IGUI_GODOT_LSP_LOG")
 ready = sys.argv[1]
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -5405,6 +5406,11 @@ def send(message):
     stream.write(body)
     stream.flush()
 
+def note(entry):
+    if LOG:
+        with open(LOG, "a") as handle:
+            handle.write(json.dumps(entry) + "\n")
+
 while True:
     message = read()
     if message is None:
@@ -5418,7 +5424,10 @@ while True:
             "serverInfo": {"name": "godot-editor-fixture"},
         }})
     elif method == "textDocument/didOpen":
-        uri = params["textDocument"]["uri"]
+        document = params["textDocument"]
+        uri = document["uri"]
+        note({"method": "textDocument/didOpen", "uri": uri})
+        stale = uri.rsplit("/", 1)[0] + "/stale.gd"
         send({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": {
             "uri": uri,
             "diagnostics": [{
@@ -5427,6 +5436,20 @@ while True:
                 "message": "attached diagnostic",
             }],
         }})
+        send({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": {
+            "uri": stale,
+            "diagnostics": [{
+                "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 5}},
+                "severity": 2,
+                "message": "deleted-file warning",
+            }],
+        }})
+    elif method == "textDocument/didChange":
+        note({"method": "textDocument/didChange",
+              "uri": params["textDocument"]["uri"],
+              "text": params["contentChanges"][0]["text"]})
+    elif method == "workspace/didChangeWatchedFiles":
+        note({"method": "workspace/didChangeWatchedFiles", "changes": params.get("changes")})
 "##;
 
 #[cfg(unix)]
@@ -5548,6 +5571,12 @@ fn check_godot_attach(dir: &Path) -> Result<(), String> {
     let script = project.join("main.gd");
     fs::write(&script, "extends Node\n\nfunc _ready():\n\tpass\n")
         .map_err(|error| format!("godot fixture: {error}"))?;
+    let stale = project.join("stale.gd");
+    fs::write(&stale, "extends Node\n").map_err(|error| format!("godot fixture: {error}"))?;
+    let log = project.join("godot-lsp.log");
+    let _ = fs::remove_file(&log);
+    std::env::set_var("IGUI_GODOT_LSP_LOG", &log);
+    let _log_guard = EnvGuard("IGUI_GODOT_LSP_LOG");
 
     let server = project.join("godot-editor-lsp.py");
     fs::write(&server, FAKE_GODOT_EDITOR_LSP).map_err(|error| format!("godot fixture: {error}"))?;
@@ -5615,6 +5644,65 @@ fn check_godot_attach(dir: &Path) -> Result<(), String> {
                 "the running editor's diagnostics did not arrive: {messages:?}"
             ));
         }
+        Ok(())
+    })
+    .and_then(|()| {
+        // A deleted file never publishes another diagnostics update: its rows
+        // must disappear from the PROBLEMS panel immediately.
+        let stale = canonical_target(stale.clone());
+        if harness.app.state().lsp.diagnostics_for(&stale).is_empty() {
+            return Err("the fixture did not publish the deleted-file diagnostic".into());
+        }
+        harness.app.state_mut().poll_filesystem();
+        fs::remove_file(&stale).map_err(|error| format!("godot fixture: {error}"))?;
+        harness.app.state_mut().poll_filesystem();
+        harness.frame()?;
+        {
+            let state = harness.app.state();
+            if !state.lsp.diagnostics_for(&stale).is_empty() {
+                return Err("deleting a file kept its cached diagnostics".into());
+            }
+            if state.problems.rows.iter().any(|row| row.path == stale) {
+                return Err("the PROBLEMS panel kept a deleted file's row".into());
+            }
+        }
+
+        // Godot ignores `workspace/didChangeWatchedFiles`; a structural change
+        // must instead re-send the open document once the scan has run.
+        wait_for_lsp(&mut harness, |_state| {
+            lsp_log_events(&log)
+                .iter()
+                .any(|event| event["method"] == "textDocument/didChange")
+        })?;
+        let events = lsp_log_events(&log);
+        if events
+            .iter()
+            .any(|event| event["method"] == "workspace/didChangeWatchedFiles")
+        {
+            return Err("Godot was sent a watched-file notification it ignores".into());
+        }
+        if !events
+            .iter()
+            .any(|event| event["method"] == "textDocument/didOpen")
+        {
+            return Err("the attached fixture never saw the document open".into());
+        }
+        let text =
+            fs::read_to_string(&script).map_err(|error| format!("godot fixture: {error}"))?;
+        let resent = events
+            .iter()
+            .find(|event| event["method"] == "textDocument/didChange")
+            .ok_or("no document re-parse was sent")?;
+        if resent["uri"].as_str() != Some(&crate::model::lsp::path_to_uri(&path)) {
+            return Err(format!(
+                "the re-parse was sent for the wrong document: {}",
+                resent["uri"]
+            ));
+        }
+        if resent["text"].as_str() != Some(text.as_str()) {
+            return Err("the re-parse did not carry the full document text".into());
+        }
+        println!("selfcheck: Godot rescan instead of watched files ok");
         Ok(())
     });
     let _ = editor.kill();

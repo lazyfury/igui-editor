@@ -75,6 +75,7 @@ pub fn clang_server() -> LanguageServerSpec {
         port_arg: None,
         port: None,
         attach: None,
+        file_changes: super::FileChangePolicy::Notify,
         install: Some(ToolInstall {
             tool: "clangd".into(),
             language: "C / C++".into(),

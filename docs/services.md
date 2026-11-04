@@ -177,12 +177,27 @@ its own language-server binary.
 - **Server requests**: `workspace/configuration`, `workspace/workspaceFolders`,
   `client/registerCapability` and progress requests are answered defensively so
   a server cannot stall the UI.
-- **File changes**: the client advertises `workspace.didChangeWatchedFiles` and
-  honours dynamic registrations (`client/registerCapability`), forwarding the
-  editor's own create/rename/delete and the filesystem poll as create/change/
-  delete events per session; saves send `textDocument/didSave`. A server
-  therefore sees files that were never opened as tabs (Godot's `.gd.uid`,
-  generated files, `git checkout`).
+- **File changes**: `LanguageServerSpec::file_changes` chooses how a server
+  learns about files created, deleted or rewritten outside the open document.
+  The default (`Notify`) advertises `workspace.didChangeWatchedFiles`, honours
+  dynamic registrations (`client/registerCapability`) and forwards the editor's
+  own create/rename/delete plus the filesystem poll as one notification per
+  session; saves send `textDocument/didSave`. A server therefore sees files that
+  were never opened as tabs (generated files, `git checkout`).
+- **Godot rescans instead** (`ServerRescan`): Godot's GDScript LSP has no
+  `didChangeWatchedFiles` handler, and its global `class_name` registry only
+  changes when the editor rescans the project. A spawned `--headless --editor`
+  never gains focus, so the client gives it a private Godot profile
+  (`model/godot_profile.rs`) whose editor settings enable
+  `interface/editor/behavior/import_resources_when_unfocused`; the user's own
+  Godot settings are untouched. After a structural change the client watches
+  `<root>/.godot/global_script_class_cache.cfg` and re-sends every open document
+  as a full-text `didChange` (initial pass plus one follow-up) so it is parsed
+  against the refreshed class list. A deleted path drops its diagnostics and
+  cached semantic tokens immediately, because no server will ever publish an
+  update for it again. When attached to a running Godot editor the class list
+  still only refreshes when that editor rescans — normally when its window
+  regains focus.
 - **UI state**: diagnostics are keyed by path and painted as underlines + a
   gutter severity rail. The footer LSP chip is severity-colored and opens the
   bottom dock's PROBLEMS tab, which snapshots every session's diagnostics

@@ -81,7 +81,11 @@ every child (`LSP OFF`, diagnostics cleared) and the settings row restarting it.
 A file created/deleted behind the editor's back (a Godot `.gd.uid`) checks the
 external watch: it appears/disappears in the Explorer with folders still
 expanded, and the scripted server receives `workspace/didChangeWatchedFiles`
-type 1/3; saving an open document sends `textDocument/didSave`.
+type 1/3; saving an open document sends `textDocument/didSave`. A scripted
+running Godot editor checks the rescan path instead: a deleted file's
+diagnostics leave PROBLEMS at once, the ignored `didChangeWatchedFiles`
+notification is never sent, and the open document is re-sent as a full-text
+`didChange` once the configured rescan delay has passed.
 
 A missing clangd executable checks the copy-only tooling prompt: install hint,
 painted title/button, COPY confirmation, RETRY re-arming the start, and `Esc`

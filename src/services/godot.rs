@@ -11,7 +11,7 @@
 //! address (`host:port`, `:port` or `port`).
 
 use super::{
-    AttachTarget, BuiltinPlugin, Capability, CommandSpec, LanguageServerSpec,
+    AttachTarget, BuiltinPlugin, Capability, CommandSpec, FileChangePolicy, LanguageServerSpec,
     LanguageServerTransport, PluginHost, ServiceManifest,
 };
 
@@ -78,6 +78,10 @@ pub fn godot_server() -> LanguageServerSpec {
             port: 6008,
             env: Some("IGUI_EDITOR_GODOT_LSP".into()),
         }),
+        // Godot's LSP has no `workspace/didChangeWatchedFiles` handler. It only
+        // rescans the project on editor focus (or with the "rescan while
+        // unfocused" timer), which is what updates its global class registry.
+        file_changes: FileChangePolicy::ServerRescan,
         install: None,
     }
 }
@@ -120,6 +124,9 @@ mod tests {
         assert_eq!(attach.host, "127.0.0.1");
         assert_eq!(attach.port, 6008);
         assert_eq!(attach.env.as_deref(), Some("IGUI_EDITOR_GODOT_LSP"));
+        // Godot ignores watched-file notifications; the client keeps it fresh
+        // with a private rescan profile and a document re-parse.
+        assert_eq!(spec.file_changes, FileChangePolicy::ServerRescan);
     }
 
     #[test]
@@ -127,6 +134,7 @@ mod tests {
         let spec = godot_server();
         let json = serde_json::to_string(&spec).unwrap();
         assert!(json.contains("\"transport\":\"tcp\""));
+        assert!(json.contains("\"file_changes\":\"server_rescan\""));
         let decoded: LanguageServerSpec = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, spec);
     }

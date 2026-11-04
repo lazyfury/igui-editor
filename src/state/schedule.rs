@@ -52,6 +52,11 @@ impl AppState {
         if let Some(at) = self.preview.rebuild_deadline() {
             add(at);
         }
+        // A self-rescanning server (Godot) re-parses open documents shortly
+        // after a structural file change.
+        if let Some(at) = self.lsp.next_wake() {
+            add(at);
+        }
         // A project or an open file can change on disk at any time, and the poll
         // is also what brings externally created files into the sidebar.
         if self.ws.folder_open || self.ws.tabs.iter().any(|doc| doc.path().is_some()) {

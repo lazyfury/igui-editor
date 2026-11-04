@@ -16,6 +16,7 @@ src/
   syntax/pack.rs      declarative JSON language packs
   model/lsp.rs        stdio/TCP JSON-RPC client, per-root sessions, diagnostics,
                       hover/completion, monorepo root selection, native Godot symbols
+  model/godot_profile.rs  private headless-Godot editor profile (unfocused rescan)
   model/bbcode.rs     Godot BBCode -> text spans + clickable references
   model/docs.rs       native symbol -> docs view text + link ranges
   services/lsp.rs     built-in Rust language-server spec (rust-analyzer)
@@ -23,7 +24,7 @@ src/
   services/typescript.rs  built-in TS/JS language-server spec
   services/clang.rs   built-in C/C++ language-server spec (clangd)
   services/python.rs  built-in Python language-server spec (pyright)
-  services/godot.rs   built-in Godot GDScript spec (attach to the running editor, else spawn headless)
+  services/godot.rs   built-in Godot GDScript spec (attach to the running editor, else spawn headless with the rescan profile)
   model/recovery.rs   crash snapshots (txt + metadata)
   model/replace.rs    replace-in-files planning/apply (conflict + open skip)
   model/fs_tree.rs    lazy sidebar tree (dirs first, hidden entries skipped)
