@@ -53,7 +53,6 @@ pub struct EditorApp {
     /// Mirrors of the native Dock/menu state, so idle frames do not clone or
     /// rebuild it.
     recent: Vec<PathBuf>,
-    dirty_count: usize,
     /// Active-document identity last pushed to the window title.
     title_key: Option<(u64, bool)>,
     title_folder: Option<PathBuf>,
@@ -197,7 +196,6 @@ impl EditorApp {
             paint_cache: igui_ui::UiPaintCache::new(),
             last_paint_reused: false,
             recent: Vec::new(),
-            dirty_count: 0,
             title_key: None,
             title_folder: None,
         }
@@ -320,17 +318,10 @@ impl EditorApp {
             crate::macos::set_recent(&recent);
             self.recent = recent;
         }
-        let dirty_count = self
-            .state
-            .borrow()
-            .ws
-            .tabs
-            .iter()
-            .filter(|doc| doc.is_dirty())
-            .count();
-        if dirty_count != self.dirty_count {
-            self.dirty_count = dirty_count;
-            crate::macos::set_dirty_count(dirty_count);
+        // The quit confirmation's "Discard & Quit" is a state flag; the shell
+        // owns the native terminate call.
+        if self.state.borrow_mut().quit_requested {
+            self.quit_now();
         }
         // A settings panel change (or a sidebar drag) may need the flex basis
         // updated without rebuilding the shell.
@@ -508,7 +499,7 @@ impl EditorApp {
                         drop(state);
                         self.header_pressed = true;
                         match hit {
-                            ui::menu::HeaderHit::Close => crate::macos::hide_window(),
+                            ui::menu::HeaderHit::Close => self.request_quit(),
                             ui::menu::HeaderHit::Minimize => crate::macos::minimize_window(),
                             ui::menu::HeaderHit::Zoom => {
                                 crate::macos::toggle_zoom();
@@ -1372,18 +1363,6 @@ impl EditorApp {
                 crate::native::NativeRequest::ClearRecent => {
                     self.state.borrow_mut().clear_recent();
                 }
-                crate::native::NativeRequest::Quit => {
-                    self.save_window_state();
-                    let dirty = self
-                        .state
-                        .borrow()
-                        .ws
-                        .tabs
-                        .iter()
-                        .filter(|doc| doc.is_dirty())
-                        .count();
-                    self.state.borrow_mut().request_quit(dirty);
-                }
                 crate::native::NativeRequest::Command(command) => {
                     self.run_native_command(command);
                 }
@@ -1522,7 +1501,31 @@ impl EditorApp {
         self.state.borrow_mut().save_session_if_dirty();
     }
 
+    /// The red close button, `⌘Q` and the Dock's Quit: confirm when a buffer is
+    /// dirty, otherwise quit immediately.
     fn request_quit(&mut self) {
+        let dirty = self
+            .state
+            .borrow()
+            .ws
+            .tabs
+            .iter()
+            .filter(|doc| doc.is_dirty())
+            .count();
+        if dirty > 0 {
+            self.state.borrow_mut().request_quit(dirty);
+            return;
+        }
+        self.quit_now();
+    }
+
+    /// Terminates the app. The dirty check already ran in the app, so no
+    /// deferred `NSTerminateLater` reply is involved: persist the window state
+    /// and ask AppKit to terminate. Native children are SIGKILLed by the
+    /// `applicationShouldTerminate:` hook, so nothing here can block the UI
+    /// thread on language-server/PTY teardown.
+    fn quit_now(&mut self) {
+        self.state.borrow_mut().quit_requested = false;
         self.save_window_state();
         crate::macos::request_quit();
     }

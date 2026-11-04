@@ -94,7 +94,6 @@ pub enum NativeRequest {
     Open(Vec<PathBuf>),
     NewFile,
     ClearRecent,
-    Quit,
     /// A command selected from the native macOS menu.
     Command(NativeCommand),
 }

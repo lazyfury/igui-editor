@@ -1641,6 +1641,32 @@ fn check(dir: &Path) -> Result<(), String> {
         return Err("Discard must close the tab".into());
     }
 
+    // -- quit guard: dirty quit asks, Discard & Quit requests termination --
+    harness.app.state_mut().request_quit(1);
+    let frame = harness.frame()?;
+    expect(&texts(&frame), "Unsaved changes", "quit modal title")?;
+    let quit = {
+        let state = harness.app.state();
+        state
+            .modal_buttons
+            .iter()
+            .find(|(button, _)| *button == ModalButton::Discard)
+            .map(|(_, rect)| rect.center())
+            .ok_or("no Discard & Quit button")?
+    };
+    harness.click(quit);
+    {
+        let mut state = harness.app.state_mut();
+        if state.modal.is_some() {
+            return Err("Discard & Quit must close the modal".into());
+        }
+        if !state.quit_requested {
+            return Err("Discard & Quit must ask the shell to terminate".into());
+        }
+        // A headless run must survive the check: consume the request here.
+        state.quit_requested = false;
+    }
+
     // -- dirty close: Save writes and closes ----------------------------
     harness.type_text("SAVED");
     harness.frame()?;

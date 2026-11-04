@@ -42,9 +42,8 @@ impl AppState {
         if let Modal::Quit { .. } = modal {
             self.modal = None;
             if button == ModalButton::Discard {
-                self.shutdown_children();
+                self.quit_requested = true;
             }
-            crate::macos::reply_quit(button == ModalButton::Discard);
             self.dirty = true;
             return;
         }

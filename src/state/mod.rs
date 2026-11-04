@@ -544,7 +544,7 @@ pub enum Modal {
     CloseTabs { keep: Option<usize>, from: usize },
     /// The file changed on disk while the buffer is dirty: Keep / Reload.
     ExternalChange { tab: usize },
-    /// macOS Cmd+Q with dirty tabs: Cancel / Discard & Quit.
+    /// Quit with dirty tabs: Cancel / Discard & Quit.
     Quit { dirty: usize },
     /// Close the project and all its open tabs: Cancel / Discard.
     CloseFolder { dirty: usize },
@@ -1305,6 +1305,8 @@ pub struct AppState {
     pub recovery_prompt: Option<Vec<RecoveryEntry>>,
     /// Planned replace-in-files job waiting for confirmation.
     pub pending_replace: Option<ReplaceJob>,
+    /// The quit confirmation was discarded: the shell terminates the app.
+    pub quit_requested: bool,
     /// Per-path language overrides (persisted) and per-document ones (untitled).
     pub language_by_path: HashMap<PathBuf, String>,
     pub language_by_id: HashMap<u64, String>,
@@ -1471,6 +1473,7 @@ impl AppState {
             recovery: RecoveryStore::new(recovery_dir),
             recovery_prompt: None,
             pending_replace: None,
+            quit_requested: false,
             language_by_path: languages,
             language_by_id: HashMap::new(),
             sync_scroll,
@@ -2109,9 +2112,20 @@ mod tests {
         state.ws.active_doc_mut().unwrap().insert_text("dirty");
         state.request_quit(1);
         assert!(matches!(state.modal, Some(Modal::Quit { dirty: 1 })));
+        assert!(!state.quit_requested);
         state.resolve_modal(ModalButton::Cancel);
         assert!(state.modal.is_none());
+        assert!(!state.quit_requested);
         assert_eq!(state.ws.tabs.len(), 1);
+    }
+
+    #[test]
+    fn discarding_the_quit_modal_asks_the_shell_to_terminate() {
+        let mut state = state();
+        state.request_quit(2);
+        state.resolve_modal(ModalButton::Discard);
+        assert!(state.modal.is_none());
+        assert!(state.quit_requested);
     }
 
     #[test]

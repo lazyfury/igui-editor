@@ -38,7 +38,7 @@ src/
   dialogs.rs          `Dialogs` trait + scripted test double
   drop.rs             shared file-drop target (winit observer -> update)
   native.rs           Finder/Dock/quit request queue (main-thread)
-  macos/              Apple Event open, Dock menu, recent + quit guard
+  macos/              Apple Event open, Dock menu, recent, quit guard, chrome
   services/           native service registry + built-in plugin descriptors
   ui/git.rs           GIT sidebar tab + diff overlay + commit prompt
   ui/lsp.rs           hover card + completion list overlays

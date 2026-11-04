@@ -255,7 +255,7 @@ Acceptance:
 - With trust off, repo-local `node_modules/.bin` shims are not selected; with
   trust on they are, and the env var still forces them on.
 
-### Task 11: macOS window close guard (superseded by Task 14)
+### Task 11: macOS window close guard (superseded, then removed)
 
 - [x] Replace winit's window-delegate `windowShouldClose:` with a wrapper that
       blocks dirty windows and enqueues the existing quit guard.
@@ -264,7 +264,12 @@ Acceptance:
 - [x] Test the dirty/clean predicate.
 - [x] Document the remaining Dock-reopen gap.
 
-Acceptance:
+Later removed together with Task 14: the red control is a quit button (no
+close-to-hide) and the dirty check runs in the app before AppKit is asked to
+terminate, so no `NSTerminateLater` reply is ever pending. See
+`docs/design.md` decision 33.
+
+Acceptance (historical):
 
 - Dirty window close shows the in-app Discard & Quit / Cancel guard and does not
   close the window.
@@ -302,7 +307,7 @@ Acceptance:
   session without corrupting the active index.
 - Closing the last session closes the panel; quitting still kills every PTY.
 
-### Task 14: close-to-hide + Dock reopen (done)
+### Task 14: close-to-hide + Dock reopen (reverted)
 
 - [x] Make `windowShouldClose:` hide the NSWindow instead of exiting the app.
 - [x] Route the simulated red traffic light through the same hide action.
@@ -312,7 +317,10 @@ Acceptance:
       termination.
 - [x] Update the macOS integration docs and roadmap.
 
-Acceptance:
+Later reverted: the close control quits again (through the in-app dirty guard)
+and only the Dock-reopen handler stayed.
+
+Acceptance (historical):
 
 - Closing the window keeps the process and buffers alive; reopening from the
   Dock shows the same window.

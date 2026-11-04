@@ -48,7 +48,9 @@ documents.
 
 Notes:
 
-- The window closes to the Dock (close-to-hide) and Dock activation reopens it.
+- The red close control is a quit button (close-to-hide was removed); dirty
+  buffers go through the in-app Discard & Quit guard, and the guard runs in the
+  app before AppKit terminates. Dock activation still reopens the window.
 - Only macOS has been exercised manually; the Linux (XDG portal) and Windows
   dialog paths are wired but untested.
 - The macOS sheet path is asynchronous by design (no nested modal loop, no

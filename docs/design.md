@@ -256,18 +256,19 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    creates `untitled.md`. Relative names only, no `..`, parents must exist,
    existing paths stay in the prompt with an error. Success reloads the sidebar
    and opens the new file as a tab.
-33. **Quit is guarded at the AppKit boundary.** The dirty count is mirrored to
-   native state; `applicationShouldTerminate:` returns `NSTerminateLater` and
-   queues `Quit` when dirty. The in-app modal responds with
-   `replyToApplicationShouldTerminate:` (`Discard & Quit` / `Cancel`).
-   Closing the window is close-to-hide: winit's window-delegate
-   `windowShouldClose:` returns NO and calls `orderOut:`, so the app, buffers,
-   LSP sessions and PTYs stay alive. The application delegate's
-   `applicationShouldHandleReopen:hasVisibleWindows:` shows the stored NSWindow
-   when the Dock icon is clicked; `⌘Q` still runs the dirty-tab quit guard.
-   Native children (LSP/PTY) live in a process registry; the quit path kills
-   them synchronously because AppKit may exit without unwinding Rust
-   destructors.
+33. **The quit guard lives in the app, not in AppKit.** The red close button,
+   `⌘Q`, the menu's Quit and the Dock's Quit all call `EditorApp::request_quit`:
+   it counts dirty buffers, shows `Modal::Quit` when there are any, and
+   otherwise terminates. Confirming sets `state.quit_requested`, which the frame
+   drains into `quit_now` (save window state, stop native children, terminate).
+   Deliberately no `NSTerminateLater`/`replyToApplicationShouldTerminate:`
+   round trip: a missed deferred reply used to leave the app stuck and unable to
+   quit again. `applicationShouldTerminate:` only kills the process registry
+   (LSP/PTY) and always returns `NSTerminateNow`; a system-initiated terminate
+   (logout/AppleScript) therefore skips the dialog. The window never hides —
+   there is no close-to-hide, and the red control is a quit button. The
+   application delegate's `applicationShouldHandleReopen:hasVisibleWindows:`
+   shows the stored NSWindow when the Dock icon is clicked.
 
 34. **Git and Terminal are native services behind built-in plugins.** A
    compile-time `BuiltinPlugin` registers a `ServiceManifest` (capabilities,
@@ -495,7 +496,7 @@ file-change polling (clean reload, dirty Keep/Reload), session v4.
 
 **M7 (done)** — macOS document-type registration, Finder/`open -a` request
 queue, Dock Recent / New File / Clear, quick file creation (`⇧⌘N`), system
-recent items, dirty quit confirmation.
+recent items.
 
 **M13 (done)** — native macOS main menu (App/File/Edit/View/Window/Help),
 borderless full-size-content window, simulated traffic lights in the custom

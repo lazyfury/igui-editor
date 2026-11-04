@@ -32,7 +32,7 @@ pub const SWITCH_PROJECT_BUTTONS: [ModalButton; 2] = [ModalButton::Cancel, Modal
 pub const DELETE_BUTTONS: [ModalButton; 2] = [ModalButton::Cancel, ModalButton::Discard];
 /// Buttons for an external-change prompt.
 pub const EXTERNAL_BUTTONS: [ModalButton; 2] = [ModalButton::Cancel, ModalButton::Reload];
-/// Buttons for the macOS quit prompt.
+/// Buttons for the quit prompt.
 pub const QUIT_BUTTONS: [ModalButton; 2] = [ModalButton::Cancel, ModalButton::Discard];
 
 fn buttons_for(modal: Modal) -> &'static [ModalButton] {

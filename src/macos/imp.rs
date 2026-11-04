@@ -1,9 +1,9 @@
-//! macOS bridge: Apple Events, the Dock menu, recent items and quit guard.
+//! macOS bridge: Apple Events, the Dock menu, recent items and termination.
 //!
 //! Native callbacks only enqueue [`NativeRequest`]s and request a redraw; the
 //! app loop drains them. We never replace winit's `NSApplicationDelegate`:
-//! the open handler is an Apple Event target, and the optional Dock/quit
-//! methods are added to the existing delegate class with `class_addMethod`.
+//! the open handler is an Apple Event target, and the optional Dock methods are
+//! added to the existing delegate class with `class_addMethod`.
 
 use std::cell::{Cell, RefCell};
 use std::mem::ManuallyDrop;
@@ -43,15 +43,7 @@ thread_local! {
     static OPEN_HANDLER: RefCell<Option<ManuallyDrop<Retained<OpenHandler>>>> = const { RefCell::new(None) };
     static RECENT_TARGET: RefCell<Option<ManuallyDrop<Retained<RecentTarget>>>> = const { RefCell::new(None) };
     static RECENT: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
-    static DIRTY: Cell<usize> = const { Cell::new(0) };
-    static ALLOW_QUIT: Cell<bool> = const { Cell::new(false) };
-    /// A terminate/reply already sits on the run loop. Calling AppKit's
-    /// terminate synchronously from a winit event callback makes
-    /// `applicationWillTerminate:` re-enter the event handler and abort.
-    static QUIT_PENDING: Cell<bool> = const { Cell::new(false) };
     static SET_DELEGATE_IMP: Cell<Option<Imp>> = const { Cell::new(None) };
-    static WINDOW_CLOSE_IMP: Cell<Option<Imp>> = const { Cell::new(None) };
-    static WINDOW_CLOSE_HOOKED: Cell<bool> = const { Cell::new(false) };
     static MENU_TARGET: RefCell<Option<ManuallyDrop<Retained<AppMenuTarget>>>> = const { RefCell::new(None) };
     static MAIN_MENU: RefCell<Option<ManuallyDrop<Retained<NSMenu>>>> = const { RefCell::new(None) };
     /// Cursor offset from the window frame origin while a custom header drag is
@@ -192,16 +184,6 @@ pub fn install_dock() {
     };
     let class = AnyObject::class(delegate.as_ref());
     add_delegate_methods(class);
-    install_window_close_guard(&app);
-}
-
-/// Close-to-hide: the window disappears but the app (and its buffers, LSP and
-/// PTYs) stays alive. Dock activation brings it back.
-///
-/// Target the stored winit window rather than `NSApp.keyWindow`: at startup the
-/// app may not be active yet, so there is no key window to remember or hide.
-pub fn hide_window() {
-    with_window(|window| window.set_visible(false));
 }
 
 pub fn show_window() {
@@ -222,79 +204,8 @@ unsafe extern "C-unwind" fn reopen_imp(
     Bool::NO
 }
 
-/// Hooks winit's window delegate so a dirty window is not closed before the
-/// user answers the quit guard. A clean close still follows winit's original
-/// implementation (queue `CloseRequested` and exit).
-fn install_window_close_guard(app: &NSApplication) {
-    if WINDOW_CLOSE_HOOKED.with(Cell::get) {
-        return;
-    }
-    let Some(window) = app.keyWindow() else {
-        return;
-    };
-    let Some(delegate) = window.delegate() else {
-        return;
-    };
-    let class = AnyObject::class(delegate.as_ref());
-    unsafe {
-        let method = class_getInstanceMethod(class, sel!(windowShouldClose:));
-        if method.is_null() {
-            return;
-        }
-        let Some(original) = method_getImplementation(method) else {
-            return;
-        };
-        WINDOW_CLOSE_IMP.with(|slot| slot.set(Some(original)));
-        let hook: Imp = std::mem::transmute(window_should_close_imp as *const ());
-        method_setImplementation(method, hook);
-        WINDOW_CLOSE_HOOKED.with(|slot| slot.set(true));
-    }
-}
-
-fn close_needs_confirmation(dirty: usize) -> bool {
-    dirty > 0
-}
-
-unsafe extern "C-unwind" fn window_should_close_imp(
-    this: *mut AnyObject,
-    cmd: Sel,
-    sender: *mut AnyObject,
-) -> Bool {
-    if close_needs_confirmation(DIRTY.with(Cell::get)) {
-        // Route through the normal quit guard so AppKit has a pending
-        // terminate/reply pair; the guard will enqueue `Quit` and keep the
-        // window open.
-        request_quit();
-        return Bool::NO;
-    }
-    if let Some(original) = WINDOW_CLOSE_IMP.with(Cell::get) {
-        let original: unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject) -> Bool =
-            unsafe { std::mem::transmute(original) };
-        return unsafe { original(this, cmd, sender) };
-    }
-    Bool::YES
-}
-
 pub fn set_recent(recent: &[PathBuf]) {
     RECENT.with(|slot| *slot.borrow_mut() = recent.to_vec());
-}
-
-pub fn set_dirty_count(dirty: usize) {
-    DIRTY.with(|slot| slot.set(dirty));
-}
-
-/// Tell AppKit that the in-app quit confirmation finished. The reply is
-/// deferred to the next run-loop turn: it can still run `applicationWillTerminate:`
-/// and must not re-enter winit's event handler.
-pub fn reply_quit(terminate: bool) {
-    if terminate {
-        crate::model::processes::kill_all();
-    }
-    ALLOW_QUIT.with(|slot| slot.set(terminate));
-    let Some(mtm) = MainThreadMarker::new() else {
-        return;
-    };
-    schedule(menu_target(mtm), sel!(replyQuit));
 }
 
 pub fn note_recent(path: &Path) {
@@ -309,18 +220,13 @@ pub fn note_recent(path: &Path) {
     NSDocumentController::sharedDocumentController(mtm).noteNewRecentDocumentURL(&url);
 }
 
-/// Simulated red traffic light / Quit command: ask AppKit to terminate; the
-/// existing `applicationShouldTerminate:` guard handles dirty buffers. AppKit's
-/// terminate notification re-enters winit's event handler, so run it after the
-/// current event callback returns.
+/// Terminate now. The dirty-buffer confirmation already ran in the app, so this
+/// only has to escape the current callback: AppKit's terminate notification
+/// re-enters winit's event handler, so run it after the event callback returns.
 pub fn request_quit() {
-    if QUIT_PENDING.with(Cell::get) {
-        return;
-    }
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
-    QUIT_PENDING.with(|slot| slot.set(true));
     schedule(menu_target(mtm), sel!(terminateApp));
 }
 
@@ -515,16 +421,6 @@ define_class!(
                 return;
             };
             NSApplication::sharedApplication(mtm).terminate(None);
-        }
-
-        #[unsafe(method(replyQuit))]
-        fn reply_quit(&self) {
-            QUIT_PENDING.with(|slot| slot.set(false));
-            let allow = ALLOW_QUIT.with(Cell::get);
-            let Some(mtm) = MainThreadMarker::new() else {
-                return;
-            };
-            NSApplication::sharedApplication(mtm).replyToApplicationShouldTerminate(allow);
         }
     }
 
@@ -1129,26 +1025,8 @@ unsafe extern "C-unwind" fn should_terminate_imp(
     _cmd: Sel,
     _sender: *mut NSApplication,
 ) -> usize {
-    let dirty = DIRTY.with(Cell::get);
-    if dirty == 0 || ALLOW_QUIT.with(Cell::get) {
-        // AppKit's exit path can bypass Rust destructors; kill registered
-        // language-server/PTY children synchronously first.
-        crate::model::processes::kill_all();
-        return NSApplicationTerminateReply::TerminateNow.0;
-    }
-    native::push(NativeRequest::Quit);
-    wake();
-    NSApplicationTerminateReply::TerminateLater.0
-}
-
-#[cfg(test)]
-mod tests {
-    use super::close_needs_confirmation;
-
-    #[test]
-    fn dirty_windows_are_guarded_before_closing() {
-        assert!(!close_needs_confirmation(0));
-        assert!(close_needs_confirmation(1));
-        assert!(close_needs_confirmation(7));
-    }
+    // AppKit's exit path can bypass Rust destructors; kill registered
+    // language-server/PTY children synchronously first.
+    crate::model::processes::kill_all();
+    NSApplicationTerminateReply::TerminateNow.0
 }

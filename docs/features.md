@@ -322,12 +322,12 @@ fresh shell.
   `Action` commands as the keyboard. The in-app header menu is hidden on macOS.
 - **Custom window chrome**: the macOS window is borderless/full-size-content
   with the native title bar and traffic lights hidden. The header paints
-  simulated red/yellow/green controls; red hides the window (close-to-hide,
-  Dock reopens it), yellow minimizes and green toggles maximize/restore.
-  Pressing anywhere else
-  on the header starts a custom window drag; double-clicking it toggles
-  maximize/restore. Quit requests are deferred one run-loop turn, because
-  AppKit's terminate notification re-enters winit's event handler.
+  simulated red/yellow/green controls; red quits through the unsaved-changes
+  guard (no close-to-hide), yellow minimizes and green toggles
+  maximize/restore. Pressing anywhere else on the header starts a custom window
+  drag; double-clicking it toggles maximize/restore. Quit requests are deferred
+  one run-loop turn, because AppKit's terminate notification re-enters winit's
+  event handler.
 - The `.app` registers text/Markdown document types (`txt`, `md`, `markdown`,
   `mdown`, `mkd`) with Editor role and `Alternate` rank. Finder double-click,
   `open -a`, “Open With” and cold launch all feed the same native request queue.
@@ -335,11 +335,11 @@ fresh shell.
   submenu built from recent projects first and then recent files, and
   `Clear Menu`. Missing paths are hidden; opening/saving also notes the item in
   the system Recent Items via `NSDocumentController`.
-- **Quit guard**: `⌘Q` with dirty tabs returns `NSTerminateLater` and shows the
-  in-app **Discard & Quit / Cancel** confirmation; a clean app quits directly.
-  Closing the window is close-to-hide (`windowShouldClose:` on winit's window
-  delegate): the app and its buffers stay alive, and clicking the Dock icon
-  reopens the window. `⌘Q` still runs the dirty-tab quit guard.
+- **Quit guard**: the red close button, `⌘Q`, the menu's Quit and the Dock's
+  Quit share one app-level quit path. When a buffer is dirty it shows the in-app
+  **Discard & Quit / Cancel** confirmation; `Discard & Quit` terminates, `Cancel`
+  keeps the window. A clean app quits directly. The window never hides: the red
+  control is a quit button, there is no close-to-hide.
 - The native bridge never replaces winit's `NSApplicationDelegate`; it adds
   `application:openURLs:`, `applicationDockMenu:`,
   `applicationShouldTerminate:` and

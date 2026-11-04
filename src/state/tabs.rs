@@ -216,7 +216,7 @@ impl AppState {
         self.status(format!("revealed {name}"));
     }
 
-    /// Called when macOS asks to quit with dirty tabs.
+    /// Opens the quit confirmation for `dirty` unsaved buffers.
     pub fn request_quit(&mut self, dirty: usize) {
         self.tab_menu = None;
         self.tab_drag = None;
