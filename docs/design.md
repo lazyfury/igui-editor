@@ -362,7 +362,11 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    language server must be enabled, must have the same project open, and serves
    one client at a time. An attached editor also only refreshes its project scan
    (new/deleted scripts, `class_name`) when its window regains focus; the
-   spawned fallback keeps itself fresh via the private rescan profile.
+   spawned fallback keeps itself fresh via the private rescan profile. The
+   opt-in **Reload LSP on Change** setting is the escape hatch: it restarts the
+   rescanning server after structural changes and explicit saves (debounced and
+   rate-limited) and deliberately ignores the attach target, because only a
+   process we start can be made to rescan on demand.
 
 ## Theme spec (geek / compact / no corners)
 

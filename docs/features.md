@@ -96,7 +96,11 @@ diagnostics/semantic tokens/outline. The same switch is the
   Godot instead runs with a private profile that keeps its project scan (and
   `class_name` registry) fresh while you create and delete scripts; open files
   are re-parsed after each structural change. Deleted files leave PROBLEMS
-  immediately.
+  immediately. The **Reload LSP on Change** settings row is the aggressive
+  fallback: it restarts Godot's server on every structural change and explicit
+  save (debounced, at most one restart per 2 s) and ignores a running editor's
+  attach target so the private headless instance — and its fresh project
+  scan — is what serves requests.
 - Diagnostics are painted as severity-colored underlines and a full-height
   gutter severity rail. The footer chip is colored by the worst severity and
   shows the active document's `LSP 1E 2W` (or `LSP ERR` if the server cannot
@@ -203,7 +207,10 @@ therefore gets a private Godot profile with
 short `didChange` re-parse of every open document after a script or
 `project.godot` is created or deleted. A running editor you attach to keeps its
 own settings and scans when it regains focus, so a script created here becomes
-visible after you click back into Godot.
+visible after you click back into Godot. For a hard guarantee enable
+**Reload LSP on Change** in Settings: the client then spawns its own headless
+Godot and restarts it after file changes and explicit saves instead of attaching
+to the editor.
 
 ## Header panel groups
 
@@ -435,6 +442,7 @@ setting is persisted in the session. Preview-only and Edit modes ignore it.
 | Sidebar Width | 180–420 px |
 | Language Intelligence | on / off (start/stop all language servers) |
 | Trust Local Servers | on / off (allow repository `node_modules/.bin` shims) |
+| Reload LSP on Change | on / off (restart Godot's server on changes/saves) |
 | Reset to Defaults | — |
 
 Changes apply immediately and are stored in the session file. `↑↓` select,

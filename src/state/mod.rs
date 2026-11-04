@@ -1418,7 +1418,11 @@ impl AppState {
                 height: terminal_height,
                 ..TerminalState::default()
             },
-            lsp: LspController::default(),
+            lsp: {
+                let mut lsp = LspController::default();
+                lsp.set_aggressive_reload(settings.lsp_reload);
+                lsp
+            },
             keymap: Keymap::for_id(settings.keymap),
             keymap_pending: Vec::new(),
             keymap_pending_at: Instant::now(),
@@ -1586,6 +1590,7 @@ fn settings_from_session(session: &Session) -> Settings {
         autosave: session.autosave,
         lsp: session.lsp,
         trust_local_servers: session.trust_local_servers,
+        lsp_reload: session.lsp_reload,
         sidebar_width: session.sidebar_width,
         keymap: KeymapId::from_session(&session.keymap),
     }

@@ -198,6 +198,17 @@ its own language-server binary.
   update for it again. When attached to a running Godot editor the class list
   still only refreshes when that editor rescans — normally when its window
   regains focus.
+- **Aggressive reload** (`Settings::lsp_reload`, settings row **Reload LSP on
+  Change**, persisted): drop and restart every `ServerRescan` session after a
+  structural change or an explicit save of one of its files. A restart is
+  debounced (300 ms) and rate-limited to one per 2 s. The class-cache write
+  that the restart itself performs is deliberately not a trigger, otherwise the
+  server would restart forever. Because a restart can
+  only refresh a project scan for a process we own, this mode also disables the
+  `attach` target: Godot runs as the private headless child (with the rescan
+  profile) even when the user's editor is listening. Diagnostics are cleared on
+  the restart and republished when the new server receives `didOpen`, so the
+  PROBLEMS panel never shows the previous project state.
 - **UI state**: diagnostics are keyed by path and painted as underlines + a
   gutter severity rail. The footer LSP chip is severity-colored and opens the
   bottom dock's PROBLEMS tab, which snapshots every session's diagnostics

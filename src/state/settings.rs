@@ -238,6 +238,7 @@ impl AppState {
             Row::Autosave => on_off(self.settings.autosave),
             Row::LanguageIntelligence => on_off(self.settings.lsp),
             Row::TrustLocalServers => on_off(self.settings.trust_local_servers),
+            Row::ReloadLsp => on_off(self.settings.lsp_reload),
             Row::SidebarWidth => format!("{} px", self.settings.sidebar_width as i32),
             Row::Keymap => self.settings.keymap.name().into(),
             Row::Reset => "DEFAULT".into(),
@@ -289,6 +290,18 @@ impl AppState {
                         "TRUSTED"
                     } else {
                         "BLOCKED"
+                    }
+                ));
+            }
+            Row::ReloadLsp => {
+                self.settings.lsp_reload = !self.settings.lsp_reload;
+                self.settings_changed();
+                self.status(format!(
+                    "aggressive LSP reload: {}",
+                    if self.settings.lsp_reload {
+                        "ON"
+                    } else {
+                        "OFF"
                     }
                 ));
             }
@@ -346,6 +359,8 @@ impl AppState {
         self.session.autosave = self.settings.autosave;
         self.session.lsp = self.settings.lsp;
         self.session.trust_local_servers = self.settings.trust_local_servers;
+        self.session.lsp_reload = self.settings.lsp_reload;
+        self.lsp.set_aggressive_reload(self.settings.lsp_reload);
         self.session.sidebar_width = self.settings.sidebar_width;
         self.session.keymap = self.settings.keymap.session_value().into();
         self.session.theme = match self.theme.mode {
