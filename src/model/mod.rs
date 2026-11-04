@@ -12,6 +12,7 @@ pub mod fs_tree;
 pub(crate) mod fsutil;
 pub mod fuzzy;
 pub mod git;
+pub(crate) mod grapheme;
 pub mod highlight;
 pub mod lsp;
 pub mod markdown;

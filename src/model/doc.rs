@@ -16,7 +16,7 @@
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
-use super::fsutil;
+use super::{fsutil, grapheme};
 
 /// Indentation inserted by Tab (and used for auto-indent on Enter).
 pub const INDENT: &str = "    ";
@@ -631,20 +631,19 @@ impl Document {
         let byte = floor_boundary(&self.text, byte);
         let mut start = byte;
         while start > 0 {
-            let previous = prev_boundary(&self.text, start);
-            let ch = self.text[previous..start].chars().next().unwrap_or(' ');
-            if !is_word_char(ch) {
+            let previous = grapheme::prev_boundary(&self.text, start);
+            if !is_word_grapheme(&self.text[previous..start]) {
                 break;
             }
             start = previous;
         }
         let mut end = byte;
         while end < self.text.len() {
-            let ch = self.text[end..].chars().next().unwrap_or(' ');
-            if !is_word_char(ch) {
+            let next = grapheme::next_boundary(&self.text, end);
+            if !is_word_grapheme(&self.text[end..next]) {
                 break;
             }
-            end = next_boundary(&self.text, end);
+            end = next;
         }
         self.anchor = start;
         self.caret = end.max(start);
@@ -950,7 +949,7 @@ impl Document {
         if self.caret == 0 {
             return;
         }
-        let start = prev_boundary(&self.text, self.caret);
+        let start = grapheme::prev_boundary(&self.text, self.caret);
         self.replace(start, self.caret, "", Kind::Backspace);
     }
 
@@ -965,7 +964,7 @@ impl Document {
         if self.caret >= self.text.len() {
             return;
         }
-        let end = next_boundary(&self.text, self.caret);
+        let end = grapheme::next_boundary(&self.text, self.caret);
         self.replace(self.caret, end, "", Kind::Delete);
     }
 
@@ -1111,7 +1110,7 @@ impl Document {
         let target = if word {
             prev_word_boundary(&self.text, self.caret)
         } else {
-            prev_boundary(&self.text, self.caret)
+            grapheme::prev_boundary(&self.text, self.caret)
         };
         self.move_to(target, select);
     }
@@ -1126,7 +1125,7 @@ impl Document {
         let target = if word {
             next_word_boundary(&self.text, self.caret)
         } else {
-            next_boundary(&self.text, self.caret)
+            grapheme::next_boundary(&self.text, self.caret)
         };
         self.move_to(target, select);
     }
@@ -1396,6 +1395,10 @@ fn next_boundary(text: &str, byte: usize) -> usize {
 
 fn is_word_char(ch: char) -> bool {
     ch.is_alphanumeric() || ch == '_'
+}
+
+fn is_word_grapheme(grapheme: &str) -> bool {
+    grapheme.chars().any(is_word_char)
 }
 
 fn prev_word_boundary(text: &str, byte: usize) -> usize {
@@ -1687,6 +1690,40 @@ mod tests {
         let mut doc = doc("hello hello");
         assert_eq!(doc.replace_ranges(&[(0, 5), (4, 9)], "bye"), 0);
         assert_eq!(doc.text(), "hello hello");
+    }
+
+    #[test]
+    fn backspace_and_delete_remove_whole_graphemes() {
+        let mut first = doc("e\u{301}x");
+        first.set_caret(first.text().len());
+        first.backspace();
+        assert_eq!(first.text(), "e\u{301}");
+        first.backspace();
+        assert_eq!(first.text(), "");
+
+        let mut other = doc("x👍🏽y");
+        other.set_caret(1);
+        other.delete_forward();
+        assert_eq!(other.text(), "xy");
+    }
+
+    #[test]
+    fn horizontal_movement_uses_grapheme_boundaries() {
+        let mut doc = doc("a👍🏽b");
+        doc.set_caret(1);
+        doc.move_right(false, false);
+        assert_eq!(doc.caret(), 1 + "👍🏽".len());
+        doc.move_left(false, false);
+        assert_eq!(doc.caret(), 1);
+    }
+
+    #[test]
+    fn double_click_selection_keeps_combining_marks() {
+        let mut doc = doc("cafe\u{301} noir");
+        doc.select_word_at(doc.text().find('n').unwrap());
+        assert_eq!(doc.selected_text(), Some("noir"));
+        doc.select_word_at(doc.text().find('c').unwrap());
+        assert_eq!(doc.selected_text(), Some("cafe\u{301}"));
     }
 
     #[test]

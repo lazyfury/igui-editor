@@ -1104,6 +1104,7 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+ "unicode-segmentation",
  "vt100",
  "winit",
 ]

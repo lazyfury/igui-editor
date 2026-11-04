@@ -51,6 +51,9 @@ igui_winit = { path = "../igui/crates/window/igui_winit" }
 igui_backend_wgpu = { path = "../igui/crates/platform/wgpu/igui_backend_wgpu" }
 # Markdown -> block model for the preview pane (M2).
 pulldown-cmark = { version = "0.13", default-features = false }
+# Grapheme boundaries for caret movement and deletion (already in the lock via
+# the engine's text stack; direct use keeps emoji/combining marks intact).
+unicode-segmentation = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 winit = "0.30"

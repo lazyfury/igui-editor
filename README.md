@@ -136,6 +136,8 @@ reproduce them.
 
 - **Editing** — tabs, multi-line undo/redo, selection/mouse selection, block
   indent, line duplicate/move/delete/comment, smart home/end, soft wrap, IME.
+  Caret movement, Backspace/Delete and double-click word selection keep
+  grapheme clusters (combining marks, emoji ZWJ/skin-tone sequences) intact.
 - **Find** — find/replace with case/whole-word, match highlighting; project
   search and replace-in-files with confirmation and conflict checks.
 - **Markdown** — edit/split/preview-only per document; headings, inline styles,

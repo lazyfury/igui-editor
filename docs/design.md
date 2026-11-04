@@ -410,8 +410,7 @@ inclusive cell selection/copy. Next: multiple terminal sessions.
 
 Next candidates: terminal multiple sessions, Git
 discard/branch/network operations, native close-guard/Dock-reopen polish,
-cross-file undo, incremental preview layout for very large documents and
-grapheme-aware editing.
+cross-file undo and incremental preview layout for very large documents.
 
 ## Non-goals for the editor core
 

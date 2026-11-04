@@ -197,6 +197,22 @@ Acceptance:
   never edits the document.
 - `Cmd/Ctrl+A` selects the visible screen; typing or scrolling clears it.
 
+### Task 7: grapheme-aware editing (done)
+
+- [x] Add `model::grapheme` using the existing locked `unicode-segmentation`
+      dependency.
+- [x] Use grapheme boundaries for left/right movement, Backspace/Delete and
+      double-click word selection.
+- [x] Tests: combining marks, emoji skin-tone clusters, deletion and selection.
+- [x] Document the behavior.
+
+Acceptance:
+
+- Backspace/Delete remove a whole visible glyph, including combining marks and
+  emoji modifiers.
+- Arrow-left/right move over one grapheme cluster; double-click selection keeps
+  combining marks with their base letter.
+
 ## Deferred to the next feature slice
 
 These are intentionally not part of this plan's implementation phases:
@@ -205,7 +221,6 @@ These are intentionally not part of this plan's implementation phases:
 - Terminal multiple sessions.
 - Workspace Trust UI (the opt-in local-binary guard is implemented).
 - Incremental Markdown preview layout.
-- Grapheme-aware caret movement.
 
 ## Progress log
 
@@ -224,6 +239,7 @@ These are intentionally not part of this plan's implementation phases:
 | Session 2 | Follow-up 4 | done | GitHub Actions gate with pinned igui v0.6.0. |
 | Session 2 | Follow-up 5 | done | Terminal vt100 scrollback with wheel navigation; 239 unit tests. |
 | Session 2 | Follow-up 6 | done | Terminal cell selection/copy; 242 unit tests. |
+| Session 2 | Follow-up 7 | done | Grapheme-aware movement/deletion/selection; 246 unit tests. |
 
 ## Final acceptance checklist
 
