@@ -26,7 +26,7 @@ use serde_json::{json, Value};
 use super::processes;
 use crate::model::doc::Document;
 use crate::model::Workspace;
-use crate::services::{LanguageServerSpec, ToolInstall};
+use crate::services::{AttachTarget, LanguageServerSpec, LanguageServerTransport, ToolInstall};
 
 const CHANGE_DEBOUNCE: Duration = Duration::from_millis(140);
 const RETRY_AFTER: Duration = Duration::from_secs(5);
@@ -189,7 +189,9 @@ enum ClientEvent {
 }
 
 struct LspClient {
-    child: Child,
+    /// `None` when attached to a server we did not start (the running Godot
+    /// editor); dropping the client must not kill the user's editor.
+    child: Option<Child>,
     outgoing: Sender<Value>,
     incoming: Receiver<ClientEvent>,
     next_id: u64,
@@ -209,8 +211,16 @@ impl LspClient {
             .current_dir(root)
             .stderr(Stdio::null());
         match spec.transport {
-            crate::services::LanguageServerTransport::Stdio => Self::spawn_stdio(process),
-            crate::services::LanguageServerTransport::Tcp => {
+            LanguageServerTransport::Stdio => Self::spawn_stdio(process),
+            LanguageServerTransport::Tcp => {
+                // A running editor may already serve this project. Prefer it:
+                // it owns the import/scan state (Godot's `.gd.uid` generation),
+                // so symbols and diagnostics match what the user sees.
+                if let Some(attach) = spec.attach.as_ref() {
+                    if let Some(stream) = connect_attach(attach) {
+                        return Self::spawn_tcp_stream(None, stream);
+                    }
+                }
                 let port = match spec.port {
                     Some(port) => port,
                     None => free_loopback_port()?,
@@ -225,7 +235,7 @@ impl LspClient {
                 process.stdin(Stdio::null()).stdout(Stdio::null());
                 let child = process.spawn()?;
                 processes::register(child.id());
-                Self::spawn_tcp(child, port)
+                Self::spawn_tcp(Some(child), port)
             }
         }
     }
@@ -263,6 +273,38 @@ impl LspClient {
             .map_err(|error| io::Error::other(format!("LSP reader thread: {error}")))?;
 
         Ok(Self {
+            child: Some(child),
+            outgoing,
+            incoming,
+            next_id: 1,
+        })
+    }
+
+    /// Connects to a spawned TCP server (retrying until it listens).
+    fn spawn_tcp(child: Option<Child>, port: u16) -> io::Result<Self> {
+        let (outgoing, out_rx) = mpsc::channel::<Value>();
+        let (events, incoming) = mpsc::channel::<ClientEvent>();
+        let connect_events = events.clone();
+        thread::Builder::new()
+            .name("igui-lsp-connect".into())
+            .spawn(
+                move || match connect_loopback(port, Duration::from_secs(8)) {
+                    Ok(stream) => {
+                        if let Err(error) = start_tcp_io(stream, out_rx, connect_events.clone()) {
+                            let _ = connect_events
+                                .send(ClientEvent::ReadError(format!("LSP TCP threads: {error}")));
+                        }
+                    }
+                    Err(error) => {
+                        let _ = connect_events.send(ClientEvent::ReadError(format!(
+                            "language server TCP {port}: {error}"
+                        )));
+                    }
+                },
+            )
+            .map_err(|error| io::Error::other(format!("LSP connect thread: {error}")))?;
+
+        Ok(Self {
             child,
             outgoing,
             incoming,
@@ -270,64 +312,11 @@ impl LspClient {
         })
     }
 
-    fn spawn_tcp(child: Child, port: u16) -> io::Result<Self> {
+    /// Uses an existing connection (a running editor's language server).
+    fn spawn_tcp_stream(child: Option<Child>, stream: TcpStream) -> io::Result<Self> {
         let (outgoing, out_rx) = mpsc::channel::<Value>();
         let (events, incoming) = mpsc::channel::<ClientEvent>();
-        let connect_events = events.clone();
-        thread::Builder::new()
-            .name("igui-lsp-connect".into())
-            .spawn(move || {
-                let stream = match connect_loopback(port, Duration::from_secs(8)) {
-                    Ok(stream) => stream,
-                    Err(error) => {
-                        let _ = connect_events.send(ClientEvent::ReadError(format!(
-                            "language server TCP {port}: {error}"
-                        )));
-                        return;
-                    }
-                };
-                let read_stream = match stream.try_clone() {
-                    Ok(stream) => stream,
-                    Err(error) => {
-                        let _ = connect_events.send(ClientEvent::ReadError(format!(
-                            "language server TCP clone: {error}"
-                        )));
-                        return;
-                    }
-                };
-                let writer_events = connect_events.clone();
-                let writer =
-                    thread::Builder::new()
-                        .name("igui-lsp-writer".into())
-                        .spawn(move || {
-                            let mut stream = stream;
-                            while let Ok(message) = out_rx.recv() {
-                                if let Err(error) = write_message(&mut stream, &message) {
-                                    let _ = writer_events.send(ClientEvent::ReadError(format!(
-                                        "language server TCP write: {error}"
-                                    )));
-                                    break;
-                                }
-                            }
-                        });
-                if let Err(error) = writer {
-                    let _ = connect_events.send(ClientEvent::ReadError(format!(
-                        "LSP writer thread: {error}"
-                    )));
-                    return;
-                }
-                let reader_events = connect_events.clone();
-                let reader = thread::Builder::new()
-                    .name("igui-lsp-reader".into())
-                    .spawn(move || read_events(read_stream, connect_events));
-                if let Err(error) = reader {
-                    let _ = reader_events.send(ClientEvent::ReadError(format!(
-                        "LSP reader thread: {error}"
-                    )));
-                }
-            })
-            .map_err(|error| io::Error::other(format!("LSP connect thread: {error}")))?;
-
+        start_tcp_io(stream, out_rx, events)?;
         Ok(Self {
             child,
             outgoing,
@@ -363,6 +352,11 @@ impl LspClient {
     fn try_recv(&self) -> Option<ClientEvent> {
         self.incoming.try_recv().ok()
     }
+
+    /// True when we connected to someone else's server (the running editor).
+    fn attached(&self) -> bool {
+        self.child.is_none()
+    }
 }
 
 fn read_events(stream: impl io::Read, events: Sender<ClientEvent>) {
@@ -386,6 +380,49 @@ fn read_events(stream: impl io::Read, events: Sender<ClientEvent>) {
             }
         }
     }
+}
+
+/// Splits one connected stream into the writer and reader threads.
+fn start_tcp_io(
+    stream: TcpStream,
+    out_rx: Receiver<Value>,
+    events: Sender<ClientEvent>,
+) -> io::Result<()> {
+    let read_stream = stream.try_clone()?;
+    let writer_events = events.clone();
+    let writer = thread::Builder::new()
+        .name("igui-lsp-writer".into())
+        .spawn(move || {
+            let mut stream = stream;
+            while let Ok(message) = out_rx.recv() {
+                if let Err(error) = write_message(&mut stream, &message) {
+                    let _ = writer_events.send(ClientEvent::ReadError(format!(
+                        "language server TCP write: {error}"
+                    )));
+                    break;
+                }
+            }
+        });
+    if let Err(error) = writer {
+        return Err(io::Error::other(format!("LSP writer thread: {error}")));
+    }
+    thread::Builder::new()
+        .name("igui-lsp-reader".into())
+        .spawn(move || read_events(read_stream, events))
+        .map_err(|error| io::Error::other(format!("LSP reader thread: {error}")))?;
+    Ok(())
+}
+
+/// Connects to a language server that is already listening (Godot's editor).
+/// A short timeout keeps a missing editor from stalling the UI thread.
+fn connect_attach(attach: &AttachTarget) -> Option<TcpStream> {
+    use std::net::ToSocketAddrs;
+
+    let (host, port) = attach.resolve();
+    let address = (host.as_str(), port).to_socket_addrs().ok()?.next()?;
+    let stream = TcpStream::connect_timeout(&address, Duration::from_millis(250)).ok()?;
+    let _ = stream.set_nodelay(true);
+    Some(stream)
 }
 
 fn free_loopback_port() -> io::Result<u16> {
@@ -417,9 +454,12 @@ fn connect_loopback(port: u16, timeout: Duration) -> io::Result<TcpStream> {
 
 impl Drop for LspClient {
     fn drop(&mut self) {
-        processes::unregister(self.child.id());
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        // An attached server belongs to someone else; only our own child is killed.
+        if let Some(child) = self.child.as_mut() {
+            processes::unregister(child.id());
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 }
 
@@ -1214,6 +1254,8 @@ pub struct LspController {
     failed: HashMap<(String, PathBuf), Instant>,
     notified: HashSet<String>,
     issue: Option<LspIssue>,
+    /// One-shot status line for the next frame (attached vs. spawned server).
+    notice: Option<String>,
     enabled: bool,
     /// Whether repository-local `node_modules/.bin` shims may be executed.
     allow_workspace_binaries: bool,
@@ -1252,6 +1294,7 @@ impl Default for LspController {
             failed: HashMap::new(),
             notified: HashSet::new(),
             issue: None,
+            notice: None,
             enabled: true,
             allow_workspace_binaries: workspace_binaries_enabled(),
             stopped: false,
@@ -1309,6 +1352,11 @@ impl LspController {
     /// A missing-tool prompt waiting for the UI.
     pub fn take_issue(&mut self) -> Option<LspIssue> {
         self.issue.take()
+    }
+
+    /// One-shot status line from the last session start (attach vs. spawn).
+    pub fn take_notice(&mut self) -> Option<String> {
+        self.notice.take()
     }
 
     /// Clears the retry back-off (tooling prompt `RETRY`).
@@ -1538,6 +1586,17 @@ impl LspController {
         }
         match LspClient::spawn(&spec, &root, self.allow_workspace_binaries) {
             Ok(mut client) => {
+                self.notice = Some(if client.attached() {
+                    format!(
+                        "{} language server: attached to the running editor",
+                        spec.language
+                    )
+                } else {
+                    format!(
+                        "{} language server: started {}",
+                        spec.language, spec.command
+                    )
+                });
                 let params = initialize_params(&root, &spec);
                 if let Some(id) = client.request("initialize", params) {
                     self.sessions[index]
@@ -2897,6 +2956,7 @@ mod tests {
             transport: crate::services::LanguageServerTransport::Tcp,
             port_arg: None,
             port: Some(port),
+            attach: None,
             install: None,
         };
         let mut client = LspClient::spawn(&spec, Path::new("/tmp"), false).unwrap();
@@ -2925,6 +2985,94 @@ mod tests {
                 None => panic!("TCP client did not deliver the response"),
             }
         }
+    }
+
+    #[test]
+    fn attach_env_overrides_the_address() {
+        let name = "IGUI_EDITOR_TEST_ATTACH_ADDRESS";
+        let attach = AttachTarget {
+            host: "127.0.0.1".into(),
+            port: 6008,
+            env: Some(name.into()),
+        };
+        std::env::remove_var(name);
+        assert_eq!(attach.resolve(), ("127.0.0.1".to_string(), 6008));
+        std::env::set_var(name, "127.0.0.2:7000");
+        assert_eq!(attach.resolve(), ("127.0.0.2".to_string(), 7000));
+        std::env::set_var(name, "7001");
+        assert_eq!(attach.resolve(), ("127.0.0.1".to_string(), 7001));
+        std::env::set_var(name, ":7002");
+        assert_eq!(attach.resolve(), ("127.0.0.1".to_string(), 7002));
+        std::env::set_var(name, "not-a-port");
+        assert_eq!(attach.resolve(), ("127.0.0.1".to_string(), 6008));
+        std::env::remove_var(name);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn attach_uses_a_running_server_without_spawning_a_child() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let spec = LanguageServerSpec {
+            id: "fake-attach".into(),
+            language: "gdscript".into(),
+            extensions: vec!["gd".into()],
+            project_markers: vec![],
+            workspace_markers: vec![],
+            language_ids: Default::default(),
+            loose_files: false,
+            // Must never be spawned: an attached server belongs to the editor.
+            command: "/bin/sh".into(),
+            command_env: None,
+            args: vec!["-c".into(), "sleep 30".into()],
+            transport: LanguageServerTransport::Tcp,
+            port_arg: None,
+            port: Some(port),
+            attach: Some(AttachTarget {
+                host: "127.0.0.1".into(),
+                port,
+                env: None,
+            }),
+            install: None,
+        };
+        let mut client = LspClient::spawn(&spec, Path::new("/tmp"), false).unwrap();
+        assert!(client.attached(), "attach must not spawn a child process");
+
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream);
+        let id = client
+            .request("initialize", json!({"rootUri": "file:///tmp"}))
+            .unwrap();
+        let request = read_message(&mut reader).unwrap().unwrap();
+        assert_eq!(request["method"], "initialize");
+        write_message(
+            &mut reader.get_mut(),
+            &json!({"jsonrpc": "2.0", "id": id, "result": {"capabilities": {}}}),
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match client.try_recv() {
+                Some(ClientEvent::Message(message)) => {
+                    assert_eq!(message["id"], id);
+                    break;
+                }
+                Some(ClientEvent::ReadError(error)) => panic!("attached client error: {error}"),
+                None if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+                None => panic!("the attached server never delivered the response"),
+            }
+        }
+    }
+
+    #[test]
+    fn attach_gives_up_when_nothing_is_listening() {
+        let port = free_loopback_port().unwrap();
+        let attach = AttachTarget {
+            host: "127.0.0.1".into(),
+            port,
+            env: None,
+        };
+        assert!(connect_attach(&attach).is_none());
     }
 
     #[test]

@@ -84,6 +84,7 @@ pub fn typescript_server() -> LanguageServerSpec {
         transport: super::LanguageServerTransport::Stdio,
         port_arg: None,
         port: None,
+        attach: None,
         install: Some(ToolInstall {
             tool: "typescript-language-server".into(),
             language: "TypeScript / JavaScript".into(),

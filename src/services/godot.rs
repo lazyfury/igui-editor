@@ -3,10 +3,16 @@
 //! Godot's editor ships its own GDScript language server. It listens on a
 //! loopback TCP port (unlike rust-analyzer's stdio), so this plugin contributes
 //! a TCP transport spec; the generic client owns process startup and JSON-RPC.
+//!
+//! A running Godot editor already serves the project — and already ran its
+//! import/scan, which is what creates `<script>.gd.uid` — so the client
+//! attaches to it first and only spawns a private `--headless --editor`
+//! instance when no editor is listening. `IGUI_EDITOR_GODOT_LSP` overrides the
+//! address (`host:port`, `:port` or `port`).
 
 use super::{
-    BuiltinPlugin, Capability, CommandSpec, LanguageServerSpec, LanguageServerTransport,
-    PluginHost, ServiceManifest,
+    AttachTarget, BuiltinPlugin, Capability, CommandSpec, LanguageServerSpec,
+    LanguageServerTransport, PluginHost, ServiceManifest,
 };
 
 pub struct GodotLspPlugin;
@@ -64,6 +70,14 @@ pub fn godot_server() -> LanguageServerSpec {
         transport: LanguageServerTransport::Tcp,
         port_arg: Some("--lsp-port".into()),
         port: None,
+        // Godot's editor language server (Editor Settings → Network → Language
+        // Server, port 6008 by default). Attaching keeps our diagnostics in step
+        // with the editor that does the importing.
+        attach: Some(AttachTarget {
+            host: "127.0.0.1".into(),
+            port: 6008,
+            env: Some("IGUI_EDITOR_GODOT_LSP".into()),
+        }),
         install: None,
     }
 }
@@ -102,6 +116,10 @@ mod tests {
         assert_eq!(spec.port_arg.as_deref(), Some("--lsp-port"));
         assert!(spec.port.is_none());
         assert!(spec.args.iter().any(|arg| arg == "--headless"));
+        let attach = spec.attach.as_ref().expect("godot attaches to the editor");
+        assert_eq!(attach.host, "127.0.0.1");
+        assert_eq!(attach.port, 6008);
+        assert_eq!(attach.env.as_deref(), Some("IGUI_EDITOR_GODOT_LSP"));
     }
 
     #[test]

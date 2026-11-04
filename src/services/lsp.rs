@@ -55,6 +55,7 @@ pub fn rust_server() -> LanguageServerSpec {
         transport: super::LanguageServerTransport::Stdio,
         port_arg: None,
         port: None,
+        attach: None,
         install: Some(ToolInstall {
             tool: "rust-analyzer".into(),
             language: "Rust".into(),

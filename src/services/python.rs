@@ -59,6 +59,7 @@ pub fn python_server() -> LanguageServerSpec {
         transport: super::LanguageServerTransport::Stdio,
         port_arg: None,
         port: None,
+        attach: None,
         install: Some(ToolInstall {
             tool: "pyright-langserver".into(),
             language: "Python".into(),

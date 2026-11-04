@@ -37,6 +37,9 @@ impl AppState {
             self.lsp.notify_file_events(&events);
         }
         self.tooling.tick();
+        if let Some(notice) = self.lsp.take_notice() {
+            self.status(notice);
+        }
         if let Some(issue) = self.lsp.take_issue() {
             self.show_tool_prompt(issue);
         }

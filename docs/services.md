@@ -118,10 +118,17 @@ PluginHost
  └─ language_server(LanguageServerSpec)
        id, language, extensions, language_ids,
        project_markers, workspace_markers, loose_files,
-       command / command_env, args, transport, port_arg, install
+       command / command_env, args, transport, port_arg, port,
+       attach (host/port/env), install
 ```
 
 ### Built-in servers
+
+An `attach` target is tried before anything is spawned: `LspClient::spawn`
+connects with a 250 ms timeout and, on success, never starts a child, so the
+running editor keeps owning the project. Only when nothing listens does the
+declared `command` start. A session reports which mode it used in the status
+bar (`… language server: attached to the running editor` / `started …`).
 
 Repository-local `node_modules/.bin` shims are only considered when
 `IGUI_EDITOR_TRUST_WORKSPACE=1`; the default is PATH plus the user/global
@@ -135,7 +142,7 @@ its own language-server binary.
 | `typescript` | `typescript-language-server --stdio` (`…_TS_SERVER`) | stdio | `package.json`, `tsconfig.json`, `jsconfig.json` | `pnpm-workspace.yaml`, `lerna.json`, `nx.json`, `turbo.json`, `rush.json`, `tsconfig.base.json` |
 | `clangd` | `clangd` (`…_CLANGD`) | stdio | `compile_commands.json`, `CMakeLists.txt`, `.clangd`, `.git` | `.clangd`, `.git` |
 | `python` | `pyright-langserver --stdio` (`…_PYRIGHT`) | stdio | `pyproject.toml`, `setup.py`, `setup.cfg`, `requirements.txt`, `.git` | `pyrightconfig.json` |
-| `gdscript` | Godot editor (`…_GODOT`) | TCP | `project.godot` | — |
+| `gdscript` | Godot editor (`…_GODOT`) | TCP (attach `…_GODOT_LSP`, else spawn) | `project.godot` | — |
 
 - `language_ids` maps extensions to LSP `languageId`: `.tsx → typescriptreact`,
   `.jsx → javascriptreact`, `.h → c`, `.hpp → cpp`, everything else falls back

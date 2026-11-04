@@ -114,6 +114,61 @@ pub enum LanguageServerTransport {
     Tcp,
 }
 
+/// A language server that another process may already be serving (Godot's
+/// editor listens on loopback). It is tried before a private process is
+/// spawned, so the editor's own project scan is what the client talks to.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct AttachTarget {
+    /// Host the editor listens on.
+    #[serde(default = "loopback_host")]
+    pub host: String,
+    /// Port the editor listens on (Godot's default is 6008).
+    #[serde(default)]
+    pub port: u16,
+    /// Environment variable that overrides `host:port` (accepts `host:port`,
+    /// `:port` or a bare `port`).
+    #[serde(default)]
+    pub env: Option<String>,
+}
+
+fn loopback_host() -> String {
+    "127.0.0.1".into()
+}
+
+impl AttachTarget {
+    /// The address to try, after the environment override.
+    pub fn resolve(&self) -> (String, u16) {
+        let Some(value) = self
+            .env
+            .as_deref()
+            .and_then(|name| std::env::var(name).ok())
+        else {
+            return (self.host.clone(), self.port);
+        };
+        let value = value.trim();
+        if value.is_empty() {
+            return (self.host.clone(), self.port);
+        }
+        match value.rsplit_once(':') {
+            Some((host, port)) => match port.parse::<u16>() {
+                Ok(port) => (
+                    if host.is_empty() {
+                        self.host.clone()
+                    } else {
+                        host.to_string()
+                    },
+                    port,
+                ),
+                Err(_) => (self.host.clone(), self.port),
+            },
+            None => match value.parse::<u16>() {
+                Ok(port) => (self.host.clone(), port),
+                Err(_) => (self.host.clone(), self.port),
+            },
+        }
+    }
+}
+
 /// Declarative language-server contribution. The command is resolved from
 /// `PATH`, or from `command_env` when that variable is set. `project_markers`
 /// keeps a server idle until a real project root exists (e.g. `Cargo.toml`).
@@ -158,6 +213,10 @@ pub struct LanguageServerSpec {
     /// loopback port per launch instead.
     #[serde(default)]
     pub port: Option<u16>,
+    /// A server that may already be running (Godot's editor). Tried first: it
+    /// owns the project's import/scan state, so new scripts are already known.
+    #[serde(default)]
+    pub attach: Option<AttachTarget>,
     /// Shown when the command cannot be found; never executed automatically.
     #[serde(default)]
     pub install: Option<ToolInstall>,

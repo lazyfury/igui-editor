@@ -351,6 +351,7 @@ These are intentionally not part of this plan's implementation phases:
 | Session 2 | Follow-up 12 | done | Native child cleanup on quit; 251 unit tests + packaged Godot test. |
 | Session 2 | Follow-up 13 | done | Multiple terminal sessions; 252 unit tests + selfcheck tabs. |
 | Session 2 | Follow-up 14 | done | Close-to-hide + Dock reopen; 252 unit tests. |
+| Session 3 | Godot LSP attach | done | Talk to the running Godot editor's language server (attach target `127.0.0.1:6008`, `IGUI_EDITOR_GODOT_LSP`), spawn the headless fallback only when nothing listens; attach unit + selfcheck coverage. |
 | Session 3 | External file watch | done | Directory snapshots + `FsTree::refresh` keep the Explorer live; `workspace/didChangeWatchedFiles` + `didSave` push changes to language servers; 277 unit tests + selfcheck watch/didSave checks. |
 | Session 3 | Dock panels | done | `DockId`/`Panel` tab model + shared `ui::dock` header; bottom dock hosts Terminal and workspace-wide PROBLEMS (replacing the status-bar popup), closing keeps shells, session v15; 263 unit tests + selfcheck dock/tab checks. |
 

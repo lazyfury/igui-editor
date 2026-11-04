@@ -49,14 +49,22 @@ bridge. Six built-in servers are registered:
 - **Python** — `pyright-langserver --stdio`, rooted at `pyrightconfig.json`, a
   Python project marker or the file's folder (loose files work).
 - **Godot GDScript** — the Godot editor's GDScript server over loopback TCP.
-  On macOS the default executable is
-  `/Applications/Godot.app/Contents/MacOS/Godot`; set `IGUI_EDITOR_GODOT` to
-  use a different install. Godot runs headless (`--headless --editor --path .`)
-  and is stopped when the editor releases the project.
+  A **running** Godot editor already serves the project, so the client attaches
+  to it first (`127.0.0.1:6008`, Editor Settings → Network → Language Server;
+  `IGUI_EDITOR_GODOT_LSP` overrides `host:port`, `:port` or `port`). This is the
+  same instance that imports the project — the one that writes `<script>.gd.uid`
+  — so diagnostics, symbols and the sidebar agree, and no second Godot is
+  started. When nothing is listening, the app falls back to a private headless
+  Godot (`--headless --editor --path .`, macOS default executable
+  `/Applications/Godot.app/Contents/MacOS/Godot`, `IGUI_EDITOR_GODOT` overrides
+  it) that is registered as a native child and killed when the session stops.
+  The status bar says which mode was used. The editor's language server must be
+  enabled and must have the same project open; Godot serves one client at a
+  time.
 
 Each spec declares `IGUI_EDITOR_*` overrides (`IGUI_EDITOR_GOPLS`,
 `IGUI_EDITOR_TS_SERVER`, `IGUI_EDITOR_CLANGD`, `IGUI_EDITOR_PYRIGHT`,
-`IGUI_EDITOR_RUST_ANALYZER`, `IGUI_EDITOR_GODOT`). Repository-local
+`IGUI_EDITOR_RUST_ANALYZER`, `IGUI_EDITOR_GODOT`, `IGUI_EDITOR_GODOT_LSP`). Repository-local
 `node_modules/.bin` shims are **not** executed by default; set
 `IGUI_EDITOR_TRUST_WORKSPACE=1` only for projects you trust. PATH and the
 user/global toolchains remain available either way. Servers are installed
@@ -175,13 +183,15 @@ server for the nearest `project.godot`. For example:
 cargo run --release -- "/path/to/godot_project/new_script.gd"
 ```
 
-`IGUI_EDITOR_GODOT` can point at another Godot executable. The headless Godot
-process is registered as a native child and is killed when the editor stops the
-session or quits (including AppKit's non-unwinding terminate path). Godot's
-server sends diagnostics, hover, completion, definition and document symbols;
-semantic
-tokens are not provided by Godot, so the syntax palette remains in charge of
-token colors.
+`IGUI_EDITOR_GODOT` can point at another Godot executable, and
+`IGUI_EDITOR_GODOT_LSP` at the running editor's language-server address. An
+attached editor is left running; a spawned headless Godot is registered as a
+native child and is killed when the editor stops the session or quits (including
+AppKit's non-unwinding terminate path). Godot's server sends diagnostics, hover,
+completion, definition and document symbols; semantic tokens are not provided by
+Godot, so the syntax palette remains in charge of token colors. File changes are
+reported to the server like any other (`workspace/didChangeWatchedFiles`), so a
+script created here reaches a server that supports the notification.
 
 ## Header panel groups
 

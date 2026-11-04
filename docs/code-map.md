@@ -23,7 +23,7 @@ src/
   services/typescript.rs  built-in TS/JS language-server spec
   services/clang.rs   built-in C/C++ language-server spec (clangd)
   services/python.rs  built-in Python language-server spec (pyright)
-  services/godot.rs   built-in Godot GDScript language-server spec (TCP)
+  services/godot.rs   built-in Godot GDScript spec (attach to the running editor, else spawn headless)
   model/recovery.rs   crash snapshots (txt + metadata)
   model/replace.rs    replace-in-files planning/apply (conflict + open skip)
   model/fs_tree.rs    lazy sidebar tree (dirs first, hidden entries skipped)

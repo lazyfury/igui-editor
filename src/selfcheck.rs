@@ -4755,6 +4755,7 @@ while True:
     std::env::set_var("IGUI_EDITOR_RUST_ANALYZER", &server);
     let result = check_lsp_flow(dir, &main)
         .and_then(|()| check_lsp_monorepo(dir))
+        .and_then(|()| check_godot_attach(dir))
         .and_then(|()| check_tooling_prompt(dir));
     match previous {
         Some(value) => std::env::set_var("IGUI_EDITOR_RUST_ANALYZER", value),
@@ -5367,6 +5368,67 @@ fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
     Err("LSP definition did not move the caret".into())
 }
 
+/// A stand-in for a *running* Godot editor's language server: listens on a
+/// free loopback port, reports that port through a file, and answers `initialize`
+/// + `didOpen` with one diagnostic.
+#[cfg(unix)]
+const FAKE_GODOT_EDITOR_LSP: &str = r##"#!/usr/bin/env python3
+import json, socket, sys
+
+ready = sys.argv[1]
+server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+server.bind(("127.0.0.1", 0))
+server.listen(1)
+with open(ready, "w") as handle:
+    handle.write(str(server.getsockname()[1]))
+conn, _ = server.accept()
+stream = conn.makefile("rwb")
+
+def read():
+    length = None
+    while True:
+        line = stream.readline()
+        if not line:
+            return None
+        line = line.strip()
+        if not line:
+            break
+        key, value = line.split(b":", 1)
+        if key.strip().lower() == b"content-length":
+            length = int(value)
+    return json.loads(stream.read(length))
+
+def send(message):
+    body = json.dumps(message).encode()
+    stream.write(("Content-Length: %d\r\n\r\n" % len(body)).encode())
+    stream.write(body)
+    stream.flush()
+
+while True:
+    message = read()
+    if message is None:
+        break
+    method = message.get("method")
+    request_id = message.get("id")
+    params = message.get("params", {})
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": request_id, "result": {
+            "capabilities": {"textDocumentSync": 1},
+            "serverInfo": {"name": "godot-editor-fixture"},
+        }})
+    elif method == "textDocument/didOpen":
+        uri = params["textDocument"]["uri"]
+        send({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": {
+            "uri": uri,
+            "diagnostics": [{
+                "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 5}},
+                "severity": 1,
+                "message": "attached diagnostic",
+            }],
+        }})
+"##;
+
 #[cfg(unix)]
 const FAKE_LOG_LSP: &str = r#"#!/usr/bin/env python3
 import json, os, sys
@@ -5472,6 +5534,94 @@ fn wait_for_lsp(
 
 /// A monorepo must run one server for the whole workspace (`go.work`), keep
 /// both modules' diagnostics alive, and restart only when re-enabled.
+/// A running Godot editor already serves the project: the client must attach to
+/// it instead of spawning a private headless instance (the fixture deliberately
+/// points `IGUI_EDITOR_GODOT` at a path that does not exist).
+#[cfg(unix)]
+fn check_godot_attach(dir: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let project = dir.join("godot-project");
+    fs::create_dir_all(&project).map_err(|error| format!("godot fixture: {error}"))?;
+    fs::write(project.join("project.godot"), "config_version=5\n")
+        .map_err(|error| format!("godot fixture: {error}"))?;
+    let script = project.join("main.gd");
+    fs::write(&script, "extends Node\n\nfunc _ready():\n\tpass\n")
+        .map_err(|error| format!("godot fixture: {error}"))?;
+
+    let server = project.join("godot-editor-lsp.py");
+    fs::write(&server, FAKE_GODOT_EDITOR_LSP).map_err(|error| format!("godot fixture: {error}"))?;
+    let mut permissions = fs::metadata(&server)
+        .map_err(|error| format!("godot fixture: {error}"))?
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&server, permissions).map_err(|error| format!("godot fixture: {error}"))?;
+
+    let ready = project.join("godot-lsp.port");
+    let _ = fs::remove_file(&ready);
+    let mut editor = std::process::Command::new(&server)
+        .arg(&ready)
+        .spawn()
+        .map_err(|error| format!("godot fixture: {error}"))?;
+    let port = (|| {
+        for _ in 0..300 {
+            if let Ok(text) = fs::read_to_string(&ready) {
+                if let Ok(port) = text.trim().parse::<u16>() {
+                    return Some(port);
+                }
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        None
+    })()
+    .ok_or("the scripted Godot editor never listened")?;
+    // A spawn attempt would fail with NotFound and surface the install prompt.
+    std::env::set_var(
+        "IGUI_EDITOR_GODOT",
+        "/nonexistent/igui-godot-must-not-spawn",
+    );
+    std::env::set_var("IGUI_EDITOR_GODOT_LSP", format!("127.0.0.1:{port}"));
+    let _godot_guard = EnvGuard("IGUI_EDITOR_GODOT");
+    let _lsp_guard = EnvGuard("IGUI_EDITOR_GODOT_LSP");
+
+    let mut harness = Harness::new(
+        Some(script.clone()),
+        project.join("godot-attach-session.conf"),
+        ScriptedDialogs::new(vec![]),
+    );
+    let path = canonical_target(script.clone());
+    let result = wait_for_lsp(&mut harness, |state| {
+        !state.lsp.diagnostics_for(&path).is_empty()
+    })
+    .and_then(|()| {
+        let state = harness.app.state();
+        if state.tooling.prompt.is_some() {
+            return Err("attaching must not need a Godot executable".into());
+        }
+        if *state.lsp.status() != crate::model::lsp::LspStatus::Ready {
+            return Err(format!(
+                "attached session is not ready: {:?}",
+                state.lsp.status()
+            ));
+        }
+        let messages: Vec<&str> = state
+            .lsp
+            .diagnostics_for(&path)
+            .iter()
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect();
+        if messages != ["attached diagnostic"] {
+            return Err(format!(
+                "the running editor's diagnostics did not arrive: {messages:?}"
+            ));
+        }
+        Ok(())
+    });
+    let _ = editor.kill();
+    let _ = editor.wait();
+    result
+}
+
 #[cfg(unix)]
 fn check_lsp_monorepo(dir: &Path) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;

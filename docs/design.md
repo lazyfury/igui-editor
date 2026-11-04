@@ -342,6 +342,20 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    creating the `.uid` companion) brought into the project without the file
    ever being opened as a tab.
 
+39. **Godot talks to the editor you already have.** Godot's GDScript server is a
+   TCP service owned by the editor process, and that editor is what imports the
+   project and writes `<script>.gd.uid`. Spawning a second, headless editor gave
+   the client a *stale* project scan (it never sees scripts created later) and
+   made two editors compete over the same import state. `LanguageServerSpec`
+   therefore carries an `attach` target (`127.0.0.1:6008`, overridable with
+   `IGUI_EDITOR_GODOT_LSP`): the client tries it with a 250 ms timeout and, on
+   success, speaks JSON-RPC to the user's editor without owning a child process
+   (dropping the session must not kill it). Only when nothing listens does it
+   spawn the headless fallback, which stays registered as a native child. The
+   status bar names the mode, and the docs state the catches: the editor's
+   language server must be enabled, must have the same project open, and serves
+   one client at a time.
+
 ## Theme spec (geek / compact / no corners)
 
 Rules:
