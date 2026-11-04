@@ -42,7 +42,7 @@ impl AppState {
         match self.focus {
             Focus::Find => Some(&mut self.find.query),
             Focus::Replace => Some(&mut self.find.replace),
-            Focus::Editor | Focus::Terminal => None,
+            Focus::Editor | Focus::Explorer | Focus::Terminal => None,
         }
     }
 

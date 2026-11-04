@@ -55,6 +55,7 @@ mod new_file;
 mod panels;
 mod quick_open;
 mod reliability;
+mod rename;
 mod search;
 mod services;
 mod settings;
@@ -446,6 +447,7 @@ pub fn items(menu: Menu, state: &AppState) -> Vec<Option<Action>> {
 pub enum Focus {
     #[default]
     Editor,
+    Explorer,
     Find,
     Replace,
     Terminal,
@@ -533,6 +535,8 @@ pub enum Modal {
     CloseFolder { dirty: usize },
     /// Replace the open project after discarding dirty tabs.
     SwitchProject { dirty: usize },
+    /// Permanently delete a file or folder from the explorer.
+    DeletePath { is_dir: bool },
     /// Replace every match in the scanned files: Cancel / Replace all.
     ReplaceInFiles { files: usize, occurrences: usize },
 }
@@ -978,23 +982,22 @@ pub struct TabMenuUi {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TreeMenuAction {
     Open,
+    Rename,
     NewFile,
+    NewFolder,
+    Delete,
     CopyPath,
     Reveal,
 }
 
 impl TreeMenuAction {
-    pub const ALL: [TreeMenuAction; 4] = [
-        TreeMenuAction::Open,
-        TreeMenuAction::NewFile,
-        TreeMenuAction::CopyPath,
-        TreeMenuAction::Reveal,
-    ];
-
     pub const fn label(self) -> &'static str {
         match self {
             TreeMenuAction::Open => "Open",
+            TreeMenuAction::Rename => "Rename…",
             TreeMenuAction::NewFile => "New File…",
+            TreeMenuAction::NewFolder => "New Folder…",
+            TreeMenuAction::Delete => "Delete",
             TreeMenuAction::CopyPath => "Copy Path",
             TreeMenuAction::Reveal => "Reveal in Finder",
         }
@@ -1007,6 +1010,8 @@ pub struct TreeMenuUi {
     pub path: PathBuf,
     pub name: String,
     pub is_dir: bool,
+    /// Right-click on empty Explorer space rather than a row.
+    pub blank: bool,
     pub at: Vec2,
     pub rect: Rect,
     pub hits: Vec<(TreeMenuAction, Rect)>,
@@ -1033,11 +1038,32 @@ pub struct QuickOpenState {
     pub preedit: Option<String>,
 }
 
-/// Quick-create-file prompt (`⇧⌘N`).
+/// What the inline create prompt will create.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NewFileKind {
+    File,
+    Folder,
+    Rename,
+}
+
+impl NewFileKind {
+    pub const fn title(self) -> &'static str {
+        match self {
+            NewFileKind::File => "New File",
+            NewFileKind::Folder => "New Folder",
+            NewFileKind::Rename => "Rename",
+        }
+    }
+}
+
+/// Quick-create prompt (`⇧⌘N`, tree context menu).
 pub struct NewFileState {
     pub open: bool,
+    pub kind: NewFileKind,
     pub dir: PathBuf,
     pub name: TextEdit,
+    /// Existing path for a rename; `None` for create modes.
+    pub target: Option<PathBuf>,
     pub error: Option<String>,
     pub preedit: Option<String>,
 }
@@ -1046,8 +1072,10 @@ impl Default for NewFileState {
     fn default() -> Self {
         Self {
             open: false,
+            kind: NewFileKind::File,
             dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             name: TextEdit::new("untitled.md"),
+            target: None,
             error: None,
             preedit: None,
         }
@@ -1186,6 +1214,8 @@ pub struct AppState {
     pub pending_dialog: Option<DialogRequest>,
     /// Project root waiting for the switch confirmation.
     pub pending_project: Option<PathBuf>,
+    /// Path waiting for the delete confirmation.
+    pub pending_delete: Option<PathBuf>,
     /// Per-document UI state (keyed by `Document::id`).
     pub doc_views: HashMap<u64, DocUi>,
     pub session: Session,
@@ -1347,6 +1377,7 @@ impl AppState {
             modal_buttons: Vec::new(),
             pending_dialog: None,
             pending_project: None,
+            pending_delete: None,
             doc_views: HashMap::new(),
             session,
             config_path,
@@ -1894,6 +1925,93 @@ mod tests {
         assert_eq!(state.ws.root, std::fs::canonicalize(&second).unwrap());
         assert!(state.ws.tabs.is_empty());
         assert!(state.pending_project.is_none());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn rename_updates_open_tabs_and_recent_files() {
+        let base =
+            std::env::temp_dir().join(format!("igui-editor-rename-file-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let old = base.join("old.rs");
+        std::fs::write(&old, "fn old() {}\n").unwrap();
+        let mut state = AppState::new(
+            Theme::dark(),
+            Workspace::new(&base),
+            Session::default(),
+            base.join("session.conf"),
+        );
+        state.open_path(old.clone());
+        let old = state
+            .ws
+            .active_doc()
+            .and_then(|doc| doc.path())
+            .map(Path::to_path_buf)
+            .unwrap();
+        state.open_rename(old.clone());
+        state.new_file.name.set_text("new.rs");
+        state.submit_new_file();
+        let new = std::fs::canonicalize(base.join("new.rs")).unwrap();
+        assert!(!old.exists());
+        assert!(new.exists());
+        assert_eq!(
+            state.ws.active_doc().and_then(|doc| doc.path()),
+            Some(new.as_path())
+        );
+        assert_eq!(state.sidebar.selected.as_deref(), Some(new.as_path()));
+        assert!(state.session.recent_files.iter().any(|path| path == &new));
+        assert!(state.session.recent_files.iter().all(|path| path != &old));
+        assert!(state.session.tabs.iter().any(|path| path == &new));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn new_folder_prompt_creates_a_directory() {
+        let base =
+            std::env::temp_dir().join(format!("igui-editor-new-folder-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let mut state = AppState::new(
+            Theme::dark(),
+            Workspace::new(&base),
+            Session::default(),
+            base.join("session.conf"),
+        );
+        state.open_new_folder_in(base.clone());
+        state.new_file.name.set_text("new-dir");
+        state.submit_new_file();
+        assert!(!state.new_file.open);
+        assert!(base.join("new-dir").is_dir());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn deleting_an_open_file_closes_its_tab() {
+        let base =
+            std::env::temp_dir().join(format!("igui-editor-delete-file-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let file = base.join("gone.rs");
+        std::fs::write(&file, "fn gone() {}\n").unwrap();
+        let file = std::fs::canonicalize(&file).unwrap();
+        let mut state = AppState::new(
+            Theme::dark(),
+            Workspace::new(&base),
+            Session::default(),
+            base.join("session.conf"),
+        );
+        state.open_path(file.clone());
+        state.request_delete(file.clone());
+        assert!(matches!(
+            state.modal,
+            Some(Modal::DeletePath { is_dir: false })
+        ));
+        state.resolve_modal(ModalButton::Discard);
+        assert!(!file.exists());
+        assert!(state.modal.is_none());
+        assert!(state.ws.tabs.is_empty());
+        assert!(state.session.recent_files.iter().all(|path| path != &file));
         let _ = std::fs::remove_dir_all(&base);
     }
 

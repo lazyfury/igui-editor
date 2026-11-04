@@ -80,7 +80,9 @@ A missing clangd executable checks the copy-only tooling prompt: install hint,
 painted title/button, COPY confirmation, RETRY re-arming the start, and `Esc`
 dismissal.
 
-M6 checks: tab drag-reorder and the right-click Close menu, soft-wrap layout
+M6 checks: tab drag-reorder and the right-click Close menu, Explorer context
+menu actions for files/folders/blank space (new file, new folder, rename,
+delete), Enter-to-rename in the focused Explorer, soft-wrap layout
 (long-line split, wrapped click / Up / Down, `⌥Z`), clean/dirty external reload
 with the Keep/Reload modal, and the session soft-wrap setting persisted.
 

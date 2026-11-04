@@ -426,6 +426,13 @@ clickable.
   each one in the separate **recent files** list. Dropping a project and files
   together opens the project first, then the files. While a drag hovers the
   window, a themed “Drop to open” overlay covers the viewport.
+- **Explorer context menu**: right-click a file row for Open / Rename / Delete /
+  Copy Path / Reveal in Finder; folder rows also offer New File… and New
+  Folder…, and right-clicking empty Explorer space creates at the project root.
+  Rename uses the inline name prompt, updates open tabs and recent paths, and
+  `Enter` in the focused Explorer renames the selected file or folder. Delete
+  asks for confirmation, removes the path, closes affected tabs and drops it
+  from both recent lists.
 - The File menu lists **recent projects** and **recent files** separately;
   **Clear Recent** empties both. Project mode bumps the session format to 14:
   pre-v14 mixed `recent.*` entries are dropped and the two lists are rebuilt.

@@ -138,6 +138,7 @@ pub fn modal_key(state: &mut AppState, key: Key) -> EventResult {
                 Some(Modal::ReplaceInFiles { .. }) => ModalButton::Apply,
                 Some(Modal::CloseFolder { .. }) => ModalButton::Discard,
                 Some(Modal::SwitchProject { .. }) => ModalButton::Discard,
+                Some(Modal::DeletePath { .. }) => ModalButton::Cancel,
                 Some(Modal::CloseTabs { .. }) => ModalButton::Discard,
                 Some(Modal::ExternalChange { .. }) => ModalButton::Reload,
                 Some(Modal::Quit { .. }) => ModalButton::Cancel,
@@ -192,7 +193,7 @@ fn field_copy(state: &AppState) {
     let field = match state.focus {
         Focus::Find => Some(&state.find.query),
         Focus::Replace => Some(&state.find.replace),
-        Focus::Editor | Focus::Terminal => None,
+        Focus::Editor | Focus::Explorer | Focus::Terminal => None,
     };
     let text = field.and_then(|field| field.selected_text().map(str::to_string));
     if let Some(text) = text {

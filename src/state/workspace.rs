@@ -224,6 +224,76 @@ impl AppState {
         self.status("project closed");
     }
 
+    /// Asks before permanently deleting a file or folder from the Explorer.
+    pub fn request_delete(&mut self, path: PathBuf) {
+        if !path.exists() {
+            self.error(format!("does not exist: {}", path.display()));
+            return;
+        }
+        if self.ws.folder() == Some(path.as_path()) {
+            self.error("use Close Project to close the project root");
+            return;
+        }
+        self.pending_delete = Some(path.clone());
+        self.modal = Some(Modal::DeletePath {
+            is_dir: path.is_dir(),
+        });
+        self.menu_open = None;
+        self.menu_hover = None;
+        self.tree_menu = None;
+        self.dirty = true;
+    }
+
+    pub(crate) fn delete_path_now(&mut self, path: PathBuf) {
+        let is_dir = path.is_dir();
+        let removed = if is_dir {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        };
+        if let Err(error) = removed {
+            self.error(format!("delete {} failed: {error}", path.display()));
+            self.dirty = true;
+            return;
+        }
+        let mut tabs: Vec<usize> = self
+            .ws
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|(_, doc)| {
+                doc.path().is_some_and(|candidate| {
+                    candidate == path || (is_dir && candidate.starts_with(&path))
+                })
+            })
+            .map(|(index, _)| index)
+            .collect();
+        tabs.sort_unstable_by(|a, b| b.cmp(a));
+        for index in tabs {
+            self.close_tab_now(index);
+        }
+        // A deleted path must not linger in either recent list.
+        self.session
+            .recent_files
+            .retain(|candidate| candidate != &path && !(is_dir && candidate.starts_with(&path)));
+        self.session
+            .recent_projects
+            .retain(|candidate| candidate != &path && !(is_dir && candidate.starts_with(&path)));
+        self.config_dirty = true;
+        if self.ws.folder_open {
+            self.ws.tree.reload();
+            if let Some(parent) = path.parent() {
+                self.ws.tree.expand_to(parent);
+            }
+        }
+        let name = project_name(&path);
+        self.status(format!(
+            "deleted {} {name}",
+            if is_dir { "folder" } else { "file" }
+        ));
+        self.dirty = true;
+    }
+
     /// Opens dropped paths: a folder becomes the project, files become tabs.
     /// Files are also recorded in the separate recent-file list.
     pub fn open_dropped(&mut self, paths: Vec<PathBuf>) {

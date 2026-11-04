@@ -739,6 +739,19 @@ impl EditorApp {
                         return EventResult::Handled;
                     }
                 }
+                if state.show_sidebar
+                    && state.sidebar_tab == "explorer"
+                    && state.ws.folder_open
+                    && state.sidebar.rect.contains(*position)
+                {
+                    state.tab_drag = None;
+                    state.tab_menu = None;
+                    state.tree_menu = None;
+                    state.menu_open = None;
+                    state.menu_hover = None;
+                    ui::tree_menu::open_blank(&mut state, *position);
+                    return EventResult::Handled;
+                }
                 let tab = ui::tabs::hover_at(&state, *position);
                 state.tab_drag = None;
                 state.tab_menu = None;
@@ -1061,6 +1074,24 @@ impl EditorApp {
                 if state.find.open && input::find_key(&mut state, *key, modifiers).is_handled() {
                     return EventResult::Handled;
                 }
+                if state.focus == Focus::Explorer
+                    && !modifiers.meta
+                    && !modifiers.ctrl
+                    && !modifiers.alt
+                {
+                    match key {
+                        Key::Enter => {
+                            state.rename_selected();
+                            return EventResult::Handled;
+                        }
+                        Key::Escape => {
+                            state.focus = Focus::Editor;
+                            state.dirty = true;
+                            return EventResult::Handled;
+                        }
+                        _ => state.focus = Focus::Editor,
+                    }
+                }
                 let alt_z = modifiers.alt
                     && !modifiers.meta
                     && !modifiers.ctrl
@@ -1145,6 +1176,9 @@ impl EditorApp {
                 if state.find.open && matches!(state.focus, Focus::Find | Focus::Replace) {
                     input::find_text(&mut state, text);
                     return EventResult::Handled;
+                }
+                if state.focus == Focus::Explorer {
+                    state.focus = Focus::Editor;
                 }
                 state.schedule_auto_completion(text);
                 drop(state);
@@ -1234,6 +1268,9 @@ impl EditorApp {
                 if state.find.open && matches!(state.focus, Focus::Find | Focus::Replace) {
                     input::find_ime(&mut state, ime);
                     return EventResult::Handled;
+                }
+                if state.focus == Focus::Explorer {
+                    state.focus = Focus::Editor;
                 }
                 drop(state);
                 igui_ui::route_input(&mut self.tree, event)

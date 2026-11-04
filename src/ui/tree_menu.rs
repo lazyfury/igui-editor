@@ -1,7 +1,8 @@
-//! Right-click menu for a file-tree row.
+//! Right-click menu for a file-tree row or the Explorer's empty area.
 //!
-//! Same overlay pattern as the tab menu: one geometry function for paint and
-//! hit testing; outside clicks / `Esc` dismiss it.
+//! Rows expose file/folder actions; blank space exposes project-root create
+//! actions. Same overlay pattern as the tab menu: one geometry function for
+//! paint and hit testing; outside clicks / `Esc` dismiss it.
 
 use igui_core::{Rect, Size, Vec2};
 use igui_render::PaintContext;
@@ -19,6 +20,7 @@ pub fn open(state: &mut AppState, path: std::path::PathBuf, name: String, is_dir
         path: path.clone(),
         name,
         is_dir,
+        blank: false,
         at,
         rect: Rect::ZERO,
         hits: Vec::new(),
@@ -28,20 +30,83 @@ pub fn open(state: &mut AppState, path: std::path::PathBuf, name: String, is_dir
     state.menu_open = None;
     state.menu_hover = None;
     state.sidebar.selected = Some(path);
+    state.focus = crate::state::Focus::Explorer;
     state.dirty = true;
+}
+
+/// Opens the Explorer's empty-area menu rooted at the current project.
+pub fn open_blank(state: &mut AppState, at: Vec2) {
+    let Some(root) = state.ws.folder().map(std::path::Path::to_path_buf) else {
+        return;
+    };
+    let name = root
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| root.display().to_string());
+    state.tree_menu = Some(TreeMenuUi {
+        path: root,
+        name,
+        is_dir: true,
+        blank: true,
+        at,
+        rect: Rect::ZERO,
+        hits: Vec::new(),
+        hover: None,
+    });
+    state.tab_menu = None;
+    state.menu_open = None;
+    state.menu_hover = None;
+    state.focus = crate::state::Focus::Explorer;
+    state.dirty = true;
+}
+
+const FILE_ACTIONS: [TreeMenuAction; 5] = [
+    TreeMenuAction::Open,
+    TreeMenuAction::Rename,
+    TreeMenuAction::Delete,
+    TreeMenuAction::CopyPath,
+    TreeMenuAction::Reveal,
+];
+const FOLDER_ACTIONS: [TreeMenuAction; 7] = [
+    TreeMenuAction::Open,
+    TreeMenuAction::Rename,
+    TreeMenuAction::NewFile,
+    TreeMenuAction::NewFolder,
+    TreeMenuAction::Delete,
+    TreeMenuAction::CopyPath,
+    TreeMenuAction::Reveal,
+];
+const BLANK_ACTIONS: [TreeMenuAction; 4] = [
+    TreeMenuAction::NewFile,
+    TreeMenuAction::NewFolder,
+    TreeMenuAction::CopyPath,
+    TreeMenuAction::Reveal,
+];
+
+fn actions_for(menu: &TreeMenuUi) -> &'static [TreeMenuAction] {
+    if menu.blank {
+        &BLANK_ACTIONS
+    } else if menu.is_dir {
+        &FOLDER_ACTIONS
+    } else {
+        &FILE_ACTIONS
+    }
+}
+
+fn create_dir(menu: &TreeMenuUi) -> &std::path::Path {
+    if menu.blank || menu.is_dir {
+        menu.path.as_path()
+    } else {
+        menu.path.parent().unwrap_or(menu.path.as_path())
+    }
 }
 
 fn enabled(menu: &TreeMenuUi, action: TreeMenuAction) -> bool {
     match action {
-        TreeMenuAction::Open => menu.is_dir || menu.path.is_file(),
-        TreeMenuAction::NewFile => {
-            let dir = if menu.is_dir {
-                menu.path.as_path()
-            } else {
-                menu.path.parent().unwrap_or(menu.path.as_path())
-            };
-            dir.is_dir()
-        }
+        TreeMenuAction::Open => !menu.blank && (menu.is_dir || menu.path.is_file()),
+        TreeMenuAction::Rename => !menu.blank && menu.path.exists(),
+        TreeMenuAction::NewFile | TreeMenuAction::NewFolder => create_dir(menu).is_dir(),
+        TreeMenuAction::Delete => !menu.blank && menu.path.exists(),
         TreeMenuAction::CopyPath => true,
         TreeMenuAction::Reveal => menu.path.exists(),
     }
@@ -52,8 +117,9 @@ pub fn layout(state: &AppState) -> (Rect, Vec<(TreeMenuAction, Rect, bool)>) {
     let Some(menu) = &state.tree_menu else {
         return (Rect::ZERO, Vec::new());
     };
+    let actions = actions_for(menu);
     let viewport = state.viewport.logical_rect();
-    let height = ITEM_H * TreeMenuAction::ALL.len() as f32 + PAD * 2.0;
+    let height = ITEM_H * actions.len() as f32 + PAD * 2.0;
     let x = if menu.at.x + WIDTH + 4.0 > viewport.right() {
         menu.at.x - WIDTH
     } else {
@@ -77,8 +143,8 @@ pub fn layout(state: &AppState) -> (Rect, Vec<(TreeMenuAction, Rect, bool)>) {
         ),
         Size::new(WIDTH, height),
     );
-    let mut hits = Vec::with_capacity(TreeMenuAction::ALL.len());
-    for (index, action) in TreeMenuAction::ALL.iter().enumerate() {
+    let mut hits = Vec::with_capacity(actions.len());
+    for (index, action) in actions.iter().enumerate() {
         let item = Rect::from_min_size(
             Vec2::new(rect.left(), rect.top() + PAD + index as f32 * ITEM_H),
             Size::new(WIDTH, ITEM_H),

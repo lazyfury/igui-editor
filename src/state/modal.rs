@@ -79,6 +79,18 @@ impl AppState {
             self.dirty = true;
             return;
         }
+        if let Modal::DeletePath { .. } = modal {
+            self.modal = None;
+            if button == ModalButton::Discard {
+                if let Some(path) = self.pending_delete.take() {
+                    self.delete_path_now(path);
+                }
+            } else {
+                self.pending_delete = None;
+            }
+            self.dirty = true;
+            return;
+        }
         if let Modal::CloseTabs { keep, from } = modal {
             self.modal = None;
             if button == ModalButton::Discard {

@@ -37,7 +37,7 @@ impl AppState {
         let scope = match self.focus {
             Focus::Terminal => Scope::Terminal,
             Focus::Editor => Scope::Editor,
-            Focus::Find | Focus::Replace => Scope::Global,
+            Focus::Explorer | Focus::Find | Focus::Replace => Scope::Global,
         };
         if !self.keymap_pending.is_empty()
             && self.keymap_pending_at.elapsed() >= Duration::from_millis(900)

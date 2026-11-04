@@ -80,7 +80,7 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
     );
     kit::text(
         ctx,
-        "New File",
+        state.new_file.kind.title(),
         layout.title.left(),
         kit::baseline(measurer, layout.title, m.font_ui),
         m.font_ui,
@@ -145,9 +145,14 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
             p.error,
         );
     } else {
+        let hint = if state.new_file.kind == crate::state::NewFileKind::Rename {
+            "single name · never overwrites"
+        } else {
+            "relative name · parents must exist · never overwrites"
+        };
         kit::text(
             ctx,
-            "relative name · parents must exist · never overwrites",
+            hint,
             layout.error.left(),
             kit::baseline(measurer, layout.error, m.font_small),
             m.font_small,
@@ -156,7 +161,11 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
     }
     kit::text(
         ctx,
-        "Enter create · Esc cancel",
+        if state.new_file.kind == crate::state::NewFileKind::Rename {
+            "Enter rename · Esc cancel"
+        } else {
+            "Enter create · Esc cancel"
+        },
         layout.footer.left(),
         kit::baseline(measurer, layout.footer, m.font_small),
         m.font_small,

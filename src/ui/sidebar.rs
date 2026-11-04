@@ -91,6 +91,9 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
         move |tree, _id, phase, _rect, pos| {
             if phase == PointerPhase::Down {
                 let mut state = state.borrow_mut();
+                // The Explorer owns the keyboard after a row click, so Enter /
+                // typing can act on the selection (rename, delete, …).
+                state.focus = crate::state::Focus::Explorer;
                 click(&mut state, pos);
             }
             igui_ui::request_paint(tree);
@@ -395,6 +398,7 @@ fn click(state: &mut AppState, pos: Vec2) {
     let Some(row) = state.ws.tree.rows().get(index).cloned() else {
         return;
     };
+    state.sidebar.selected = Some(row.path.clone());
     if row.is_dir {
         state.ws.tree.toggle(&row.path);
         state.status(if row.expanded {
@@ -405,6 +409,7 @@ fn click(state: &mut AppState, pos: Vec2) {
     } else {
         let path = row.path.clone();
         state.open_path(path);
+        state.focus = crate::state::Focus::Explorer;
     }
     state.dirty = true;
 }

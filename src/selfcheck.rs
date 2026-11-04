@@ -583,6 +583,190 @@ fn check(dir: &Path) -> Result<(), String> {
     if harness.app.state().tree_menu.is_some() {
         return Err("tree context menu did not close after Copy Path".into());
     }
+    harness.right_click(tree_pos);
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        let (_, hits) = crate::ui::tree_menu::layout(&state);
+        if hits.iter().any(|(action, _, _)| {
+            matches!(
+                action,
+                crate::state::TreeMenuAction::NewFile | crate::state::TreeMenuAction::NewFolder
+            )
+        }) {
+            return Err("a file row must not offer child-create actions".into());
+        }
+        if !hits
+            .iter()
+            .any(|(action, _, _)| *action == crate::state::TreeMenuAction::Delete)
+        {
+            return Err("a file row must offer Delete".into());
+        }
+    }
+
+    // Folder rows add New File / New Folder; blank Explorer space creates at
+    // the project root and has no Delete/Open row actions.
+    let folder_pos = sidebar_click_position(&harness.app, "src")?;
+    harness.right_click(folder_pos);
+    harness.frame()?;
+    let new_folder_item = {
+        let state = harness.app.state();
+        let (_, hits) = crate::ui::tree_menu::layout(&state);
+        if !hits.iter().any(|(action, _, _)| {
+            matches!(
+                action,
+                crate::state::TreeMenuAction::NewFile | crate::state::TreeMenuAction::NewFolder
+            )
+        }) {
+            return Err("a folder row must offer New File / New Folder".into());
+        }
+        hits.iter()
+            .find(|(action, _, _)| *action == crate::state::TreeMenuAction::NewFolder)
+            .map(|(_, rect, _)| rect.center())
+            .ok_or("folder context menu has no New Folder item")?
+    };
+    harness.click(new_folder_item);
+    harness.frame()?;
+    if !harness.app.state().new_file.open
+        || harness.app.state().new_file.kind != crate::state::NewFileKind::Folder
+    {
+        return Err("New Folder did not open the folder-create prompt".into());
+    }
+    harness.type_text("new-dir");
+    harness.key(Key::Enter);
+    harness.frame()?;
+    if !dir.join("src").join("new-dir").is_dir() {
+        return Err("New Folder did not create the directory".into());
+    }
+
+    // Rename from the folder context menu, then Enter on the focused Explorer.
+    let created_dir_pos = sidebar_click_position(&harness.app, "new-dir")?;
+    harness.right_click(created_dir_pos);
+    harness.frame()?;
+    let rename_item = {
+        let state = harness.app.state();
+        let (_, hits) = crate::ui::tree_menu::layout(&state);
+        hits.iter()
+            .find(|(action, _, _)| *action == crate::state::TreeMenuAction::Rename)
+            .map(|(_, rect, _)| rect.center())
+            .ok_or("folder context menu has no Rename item")?
+    };
+    harness.click(rename_item);
+    harness.frame()?;
+    if !harness.app.state().new_file.open
+        || harness.app.state().new_file.kind != crate::state::NewFileKind::Rename
+    {
+        return Err("Rename did not open the rename prompt".into());
+    }
+    harness.type_text("renamed-dir");
+    harness.key(Key::Enter);
+    harness.frame()?;
+    let renamed_dir = dir.join("src").join("renamed-dir");
+    if dir.join("src").join("new-dir").exists() || !renamed_dir.is_dir() {
+        return Err("Rename did not move the folder".into());
+    }
+    harness.key(Key::Enter);
+    harness.frame()?;
+    if harness.app.state().new_file.kind != crate::state::NewFileKind::Rename {
+        return Err("Enter in the focused Explorer did not start a rename".into());
+    }
+    harness.type_text("renamed-again");
+    harness.key(Key::Enter);
+    harness.frame()?;
+    if renamed_dir.exists() || !dir.join("src").join("renamed-again").is_dir() {
+        return Err("the Enter rename did not move the selected folder".into());
+    }
+
+    let blank = {
+        let state = harness.app.state();
+        Vec2::new(
+            state.sidebar.rect.left() + 60.0,
+            state.sidebar.rect.bottom() - 20.0,
+        )
+    };
+    harness.right_click(blank);
+    harness.frame()?;
+    let new_blank_file = {
+        let state = harness.app.state();
+        let (_, hits) = crate::ui::tree_menu::layout(&state);
+        if hits.iter().any(|(action, _, _)| {
+            matches!(
+                action,
+                crate::state::TreeMenuAction::Open | crate::state::TreeMenuAction::Delete
+            )
+        }) {
+            return Err("the blank Explorer menu must not offer Open/Delete".into());
+        }
+        hits.iter()
+            .find(|(action, _, _)| *action == crate::state::TreeMenuAction::NewFile)
+            .map(|(_, rect, _)| rect.center())
+            .ok_or("blank Explorer menu has no New File item")?
+    };
+    harness.click(new_blank_file);
+    harness.frame()?;
+    harness.type_text("blank-created.txt");
+    harness.key(Key::Enter);
+    harness.frame()?;
+    let blank_path = canonical_target(dir.join("blank-created.txt"));
+    if !blank_path.is_file() {
+        return Err("New File from blank Explorer space did not create the file".into());
+    }
+    if harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .and_then(|doc| doc.path())
+        != Some(blank_path.as_path())
+    {
+        return Err("the blank-area New File was not opened".into());
+    }
+
+    let blank_pos = sidebar_click_position(&harness.app, "blank-created.txt")?;
+    harness.click(blank_pos);
+    harness.frame()?;
+    harness.key(Key::Enter);
+    harness.frame()?;
+    if !harness.app.state().new_file.open
+        || harness.app.state().new_file.kind != crate::state::NewFileKind::Rename
+    {
+        return Err("Enter after selecting a file did not start a rename".into());
+    }
+    harness.type_text("blank-renamed.txt");
+    harness.key(Key::Enter);
+    harness.frame()?;
+    let blank_path = canonical_target(dir.join("blank-renamed.txt"));
+    if !blank_path.is_file() || dir.join("blank-created.txt").exists() {
+        return Err("the quick rename did not move the file".into());
+    }
+
+    let blank_pos = sidebar_click_position(&harness.app, "blank-renamed.txt")?;
+    harness.right_click(blank_pos);
+    harness.frame()?;
+    let delete_item = {
+        let state = harness.app.state();
+        let (_, hits) = crate::ui::tree_menu::layout(&state);
+        hits.iter()
+            .find(|(action, _, _)| *action == crate::state::TreeMenuAction::Delete)
+            .map(|(_, rect, _)| rect.center())
+            .ok_or("file context menu has no Delete item")?
+    };
+    harness.click(delete_item);
+    harness.frame()?;
+    if !matches!(
+        harness.app.state().modal,
+        Some(crate::state::Modal::DeletePath { is_dir: false })
+    ) {
+        return Err("Delete did not open the delete confirmation".into());
+    }
+    harness
+        .app
+        .state_mut()
+        .resolve_modal(crate::state::ModalButton::Discard);
+    harness.frame()?;
+    if blank_path.exists() {
+        return Err("confirming Delete did not remove the file".into());
+    }
 
     // -- double-click selects the word under the pointer, without snapping
     // the selection back to the clicked caret.

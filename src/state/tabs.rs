@@ -85,6 +85,7 @@ impl AppState {
                     self.open_path(path);
                 }
             }
+            TreeMenuAction::Rename => self.open_rename(path),
             TreeMenuAction::NewFile => {
                 let dir = if is_dir {
                     path
@@ -95,6 +96,17 @@ impl AppState {
                 };
                 self.open_new_file_in(dir);
             }
+            TreeMenuAction::NewFolder => {
+                let dir = if is_dir {
+                    path
+                } else {
+                    path.parent()
+                        .map(Path::to_path_buf)
+                        .unwrap_or_else(|| self.ws.root.clone())
+                };
+                self.open_new_folder_in(dir);
+            }
+            TreeMenuAction::Delete => self.request_delete(path),
             TreeMenuAction::CopyPath => {
                 let text = path.display().to_string();
                 self.set_clipboard(&text);

@@ -28,6 +28,8 @@ pub const CLOSE_TABS_BUTTONS: [ModalButton; 2] = [ModalButton::Cancel, ModalButt
 pub const CLOSE_FOLDER_BUTTONS: [ModalButton; 2] = [ModalButton::Cancel, ModalButton::Discard];
 /// Buttons for switching projects after discarding dirty tabs.
 pub const SWITCH_PROJECT_BUTTONS: [ModalButton; 2] = [ModalButton::Cancel, ModalButton::Discard];
+/// Buttons for deleting a file or folder.
+pub const DELETE_BUTTONS: [ModalButton; 2] = [ModalButton::Cancel, ModalButton::Discard];
 /// Buttons for an external-change prompt.
 pub const EXTERNAL_BUTTONS: [ModalButton; 2] = [ModalButton::Cancel, ModalButton::Reload];
 /// Buttons for the macOS quit prompt.
@@ -39,6 +41,7 @@ fn buttons_for(modal: Modal) -> &'static [ModalButton] {
         Modal::CloseTabs { .. } => &CLOSE_TABS_BUTTONS,
         Modal::CloseFolder { .. } => &CLOSE_FOLDER_BUTTONS,
         Modal::SwitchProject { .. } => &SWITCH_PROJECT_BUTTONS,
+        Modal::DeletePath { .. } => &DELETE_BUTTONS,
         Modal::ExternalChange { .. } => &EXTERNAL_BUTTONS,
         Modal::Quit { .. } => &QUIT_BUTTONS,
         Modal::ReplaceInFiles { .. } => &REPLACE_BUTTONS,
@@ -132,6 +135,25 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
                 ),
             )
         }
+        Modal::DeletePath { is_dir } => {
+            let name = state
+                .pending_delete
+                .as_ref()
+                .and_then(|path| path.file_name())
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "this path".into());
+            (
+                if is_dir {
+                    "Delete folder".to_string()
+                } else {
+                    "Delete file".to_string()
+                },
+                format!(
+                    "Permanently delete {} {name}? This cannot be undone.",
+                    if is_dir { "folder" } else { "file" }
+                ),
+            )
+        }
         Modal::Quit { dirty } => (
             "Unsaved changes".to_string(),
             format!(
@@ -210,6 +232,7 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
             ModalButton::Discard if matches!(modal, Modal::SwitchProject { .. }) => {
                 "Discard & Switch"
             }
+            ModalButton::Discard if matches!(modal, Modal::DeletePath { .. }) => "Delete",
             ModalButton::Cancel => "Cancel",
             ModalButton::Discard => "Discard",
             ModalButton::Save => "Save",
