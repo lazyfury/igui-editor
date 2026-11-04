@@ -43,6 +43,9 @@ pub struct EditorApp {
     pending: Option<PendingDialog>,
     /// Drop the committed text that follows the Alt+Z soft-wrap shortcut.
     suppress_text: bool,
+    /// A native header drag is in flight; ignore pointer moves/up so they
+    /// cannot leak into editor selection.
+    window_dragging: bool,
 }
 
 /// A dialog that has been started but not answered yet. The future is polled
@@ -148,6 +151,7 @@ impl EditorApp {
             window: None,
             pending: None,
             suppress_text: false,
+            window_dragging: false,
             analysis_behind: false,
             drop: None,
             window_restored: false,
@@ -303,6 +307,7 @@ impl EditorApp {
                 position,
                 button: PointerButton::Left,
             } => {
+                self.window_dragging = false;
                 let mut state = self.state.borrow_mut();
                 if state.recovery_prompt.is_some() {
                     ui::recovery::click(&mut state, *position);
@@ -322,7 +327,7 @@ impl EditorApp {
                     return EventResult::Handled;
                 }
                 #[cfg(target_os = "macos")]
-                if state.header_rect.contains(*position) {
+                if position.y >= 0.0 && position.y < state.theme.m.menubar_h {
                     if state.header_close.contains(*position) {
                         crate::macos::request_quit();
                     } else if state.header_minimize.contains(*position) {
@@ -330,6 +335,7 @@ impl EditorApp {
                     } else if state.header_zoom.contains(*position) {
                         crate::macos::toggle_zoom();
                     } else {
+                        self.window_dragging = true;
                         crate::macos::begin_window_drag();
                     }
                     return EventResult::Handled;
@@ -537,6 +543,9 @@ impl EditorApp {
                 EventResult::Handled
             }
             InputEvent::PointerMove { position } => {
+                if self.window_dragging {
+                    return EventResult::Handled;
+                }
                 let mut state = self.state.borrow_mut();
                 let menubar = state
                     .menubar_hits

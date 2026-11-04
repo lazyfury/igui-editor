@@ -49,7 +49,6 @@ fn paint_bar(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     let baseline = kit::baseline(measurer, rect, m.font_small);
     state.menubar_hits.clear();
     state.menubar_hover = None;
-    state.header_rect = rect;
 
     if cfg!(target_os = "macos") {
         if state.menu_open != Some(Menu::Language) {

@@ -995,7 +995,6 @@ pub struct AppState {
     pub menubar_hover: Option<Menu>,
     pub menubar_hits: Vec<(Menu, Rect)>,
     /// Native-style window chrome painted by the header.
-    pub header_rect: Rect,
     pub header_close: Rect,
     pub header_minimize: Rect,
     pub header_zoom: Rect,
@@ -1153,7 +1152,6 @@ impl AppState {
             menu_open: None,
             menubar_hover: None,
             menubar_hits: Vec::new(),
-            header_rect: Rect::ZERO,
             header_close: Rect::ZERO,
             header_minimize: Rect::ZERO,
             header_zoom: Rect::ZERO,
