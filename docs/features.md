@@ -211,8 +211,11 @@ double-click resets). It starts a **login** `$SHELL` (`-l`), so
 supports ANSI/256-color cells, cursor, resize, plain text, arrows, Ctrl letters,
 Alt prefixes, application cursor mode (vim/less) and IME candidate placement at
 the terminal cursor. The wheel scrolls the vt100 scrollback (up to 4,000 rows);
-typing or clicking the live screen returns to the prompt. The terminal requests
-frames while a PTY is alive, so full-screen programs repaint without extra input.
+typing or clicking the live screen returns to the prompt. Drag across cells to
+select text, `⌘C` / `Ctrl+C` copies the selection and `⌘A` / `Ctrl+A` selects the
+visible screen; typing, wheel scrolling or switching tabs clears the selection.
+The terminal requests frames while a PTY is alive, so full-screen programs repaint
+without extra input.
 
 A macOS app launched from Finder inherits no `LANG`/`LC_*`. The PTY child would
 then run in the `C` locale, where zsh prints multibyte prompt text as

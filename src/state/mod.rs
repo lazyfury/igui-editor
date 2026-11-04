@@ -654,6 +654,40 @@ pub enum GitMode {
 }
 
 /// Built-in terminal panel/session.
+/// Inclusive cell range selected in the terminal grid.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TerminalSelection {
+    pub anchor: (u16, u16),
+    pub caret: (u16, u16),
+}
+
+impl TerminalSelection {
+    pub fn ordered(self) -> ((u16, u16), (u16, u16)) {
+        if self.anchor <= self.caret {
+            (self.anchor, self.caret)
+        } else {
+            (self.caret, self.anchor)
+        }
+    }
+
+    pub fn contains(self, row: u16, col: u16) -> bool {
+        let (start, end) = self.ordered();
+        if row < start.0 || row > end.0 {
+            return false;
+        }
+        if start.0 == end.0 {
+            return col >= start.1 && col <= end.1;
+        }
+        if row == start.0 {
+            return col >= start.1;
+        }
+        if row == end.0 {
+            return col <= end.1;
+        }
+        true
+    }
+}
+
 pub struct TerminalState {
     pub open: bool,
     pub focused: bool,
@@ -675,6 +709,10 @@ pub struct TerminalState {
     pub caret_rect: Rect,
     /// Offset from the live screen into the vt100 scrollback (0 = live).
     pub scrollback: usize,
+    /// Cached body height of one terminal row (paint geometry).
+    pub line_h: f32,
+    pub selection: Option<TerminalSelection>,
+    pub selecting: bool,
     pub height: f32,
     pub node: Option<NodeId>,
     pub drag: Option<(f32, f32)>,
@@ -697,6 +735,9 @@ impl Default for TerminalState {
             cwd: PathBuf::from("."),
             caret_rect: Rect::ZERO,
             scrollback: 0,
+            line_h: 0.0,
+            selection: None,
+            selecting: false,
             height: 220.0,
             node: None,
             drag: None,
@@ -1503,6 +1544,36 @@ mod tests {
         state.run(Action::SelectAll);
         assert_eq!(state.ws.active_doc().unwrap().text(), "editor");
         assert!(!state.ws.active_doc().unwrap().has_selection());
+    }
+
+    #[test]
+    fn terminal_copy_reads_the_selected_cells() {
+        let mut state = state_with_tabs(1);
+        state.ws.active_doc_mut().unwrap().insert_text("editor");
+        state.clipboard = Some(std::rc::Rc::new(std::cell::RefCell::new(
+            igui_ui::MemoryClipboard::default(),
+        )));
+        let mut parser = vt100::Parser::new(
+            std::num::NonZeroU16::new(2).unwrap(),
+            std::num::NonZeroU16::new(20).unwrap(),
+            0,
+        );
+        parser.process(b"hello world");
+        state.terminal.parser = Some(parser);
+        state.terminal.rows = 2;
+        state.terminal.cols = 20;
+        state.terminal.selection = Some(TerminalSelection {
+            anchor: (0, 0),
+            caret: (0, 4),
+        });
+        state.focus = Focus::Terminal;
+
+        state.run(Action::Copy);
+        assert_eq!(state.get_clipboard().as_deref(), Some("hello"));
+        assert_eq!(state.ws.active_doc().unwrap().text(), "editor");
+        assert!(state
+            .message()
+            .is_some_and(|(text, _)| text.contains("terminal selection")));
     }
 
     #[test]

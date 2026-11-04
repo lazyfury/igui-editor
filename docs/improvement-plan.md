@@ -182,12 +182,27 @@ Acceptance:
   leave the valid range.
 - Typing while scrolled returns to the prompt.
 
+### Task 6: terminal selection/copy (done)
+
+- [x] Add an inclusive terminal cell selection with pointer drag and Select All.
+- [x] Paint selection cells and hide the caret while viewing scrollback.
+- [x] Copy through `vt100::Screen::contents_between`; paste still writes to the
+      PTY and typing/scrollback clear the selection.
+- [x] Tests: ordered/inclusive selection, vt100 copy, document isolation.
+- [x] Cut remains explicitly unsupported.
+
+Acceptance:
+
+- Dragging selects cells, `Cmd/Ctrl+C` copies only the terminal selection and
+  never edits the document.
+- `Cmd/Ctrl+A` selects the visible screen; typing or scrolling clears it.
+
 ## Deferred to the next feature slice
 
 These are intentionally not part of this plan's implementation phases:
 
 - Native macOS close guard + Dock reopen.
-- Terminal multiple sessions and selection/copy (scrollback is implemented).
+- Terminal multiple sessions.
 - Workspace Trust UI (the opt-in local-binary guard is implemented).
 - Incremental Markdown preview layout.
 - Grapheme-aware caret movement.
@@ -208,6 +223,7 @@ These are intentionally not part of this plan's implementation phases:
 | Session 2 | Follow-up 3 | done | Repo-local LSP shims require explicit trust; 238 unit tests. |
 | Session 2 | Follow-up 4 | done | GitHub Actions gate with pinned igui v0.6.0. |
 | Session 2 | Follow-up 5 | done | Terminal vt100 scrollback with wheel navigation; 239 unit tests. |
+| Session 2 | Follow-up 6 | done | Terminal cell selection/copy; 242 unit tests. |
 
 ## Final acceptance checklist
 

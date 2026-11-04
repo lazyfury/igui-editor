@@ -11,7 +11,7 @@
 | `⌘1` … `⌘8` / `⌘9` | select tab by position / select the last tab |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | next / previous tab (`Ctrl+Tab` on macOS; `Ctrl` is literal there) |
 | `⌘Z` / `⇧⌘Z` | undo / redo (typing runs coalesce) |
-| `⌘X` / `⌘C` / `⌘V` | cut / copy / paste (empty selection: cut/copy the current line) |
+| `⌘X` / `⌘C` / `⌘V` | cut / copy / paste (empty selection: cut/copy the current line); in the terminal, copy/select-all use the cell selection and paste writes to the PTY |
 | `⌘⇧K` (VS Code) | delete the current line |
 | `⌘/` | toggle line comment (when the language has a marker) |
 | `⌘D` / `⌘⌫` (JetBrains) | duplicate / delete the current line |

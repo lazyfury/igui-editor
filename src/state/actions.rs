@@ -23,8 +23,24 @@ impl AppState {
                     }
                     return;
                 }
-                Action::Cut | Action::Copy | Action::SelectAll => {
-                    self.status("terminal selection is not implemented");
+                Action::Copy => {
+                    match self.terminal_selection_text() {
+                        Some(text) if !text.is_empty() => {
+                            self.set_clipboard(&text);
+                            self.status("copied terminal selection");
+                        }
+                        Some(_) => self.status("terminal selection is empty"),
+                        None => self.status("no terminal selection"),
+                    }
+                    return;
+                }
+                Action::SelectAll => {
+                    self.terminal_select_all();
+                    self.status("selected the terminal screen");
+                    return;
+                }
+                Action::Cut => {
+                    self.status("terminal cut is not implemented");
                     return;
                 }
                 Action::Undo | Action::Redo => {

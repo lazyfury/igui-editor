@@ -92,12 +92,24 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
     });
     kit::on_pointer(tree, id, {
         let state = state.clone();
-        move |tree, _id, phase, _rect, _pos| {
-            if phase == PointerPhase::Down {
-                let mut state = state.borrow_mut();
-                state.focus = Focus::Terminal;
-                state.terminal.focused = true;
-                state.dirty = true;
+        move |tree, _id, phase, _rect, pos| {
+            let mut state = state.borrow_mut();
+            match phase {
+                PointerPhase::Down => {
+                    state.focus = Focus::Terminal;
+                    state.terminal.focused = true;
+                    if let Some(cell) = state.terminal_cell_at(pos) {
+                        state.terminal_begin_selection(cell);
+                    }
+                    state.dirty = true;
+                }
+                PointerPhase::Move => {
+                    if let Some(cell) = state.terminal_cell_at(pos) {
+                        state.terminal_update_selection(cell);
+                    }
+                }
+                PointerPhase::Up => state.terminal_finish_selection(),
+                PointerPhase::DoubleClick => {}
             }
             igui_ui::request_paint(tree);
         }
@@ -239,6 +251,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     let editor = state.editor_metrics();
     let font = editor.font;
     let line_h = editor.line_h.max(font + 4.0);
+    state.terminal.line_h = line_h;
     // The terminal is the one part of the UI that paints a cell grid, so it
     // asks for a fixed-pitch family (see `crate::fonts`) instead of the
     // editor's UI face. Probing needs the backend measurer, which only exists
@@ -290,6 +303,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         .screen_mut()
         .set_scrollback(state.terminal.scrollback);
     let screen = parser.screen();
+    let selection = state.terminal.selection;
     let rows = rows.min(screen.size().0.get());
     let cols = cols.min(screen.size().1.get());
     env.ctx.save();
@@ -310,7 +324,10 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             let rect = cell_rect(body, cell_w, line_h, row, col, cell.is_wide());
             let fg = ansi_color(cell.fgcolor(), p.text);
             let bg = ansi_color(cell.bgcolor(), p.bg);
-            if bg != p.bg {
+            let selected = selection.is_some_and(|selection| selection.contains(row, col));
+            if selected {
+                env.ctx.fill_rect(rect, p.selection);
+            } else if bg != p.bg {
                 env.ctx.fill_rect(rect, bg);
             }
             let text = cell.contents();
