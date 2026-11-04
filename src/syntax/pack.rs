@@ -169,8 +169,40 @@ impl LanguagePack {
         if server.extensions.is_empty() || server.extensions.len() > 16 {
             return Err("lsp extensions must contain 1..16 entries".into());
         }
-        if server.project_markers.len() > 8 {
-            return Err("too many lsp project markers".into());
+        if server.project_markers.len() > 8 || server.workspace_markers.len() > 8 {
+            return Err("too many lsp project/workspace markers".into());
+        }
+        for marker in server
+            .project_markers
+            .iter()
+            .chain(server.workspace_markers.iter())
+        {
+            if marker.is_empty() || marker.len() > 128 || marker.contains(['/', '\\']) {
+                return Err(format!("invalid lsp marker {marker:?}"));
+            }
+        }
+        if server.language_ids.len() > 16 {
+            return Err("too many lsp language ids".into());
+        }
+        for (extension, language) in &server.language_ids {
+            if extension.is_empty()
+                || extension.len() > 12
+                || extension.starts_with('.')
+                || extension.contains('/')
+                || language.is_empty()
+                || language.len() > 64
+                || language.contains('\n')
+            {
+                return Err("invalid lsp language id".into());
+            }
+        }
+        if let Some(install) = &server.install {
+            if install.command.len() > 512 || install.command.contains('\n') {
+                return Err("invalid lsp install command".into());
+            }
+            if install.tool.len() > 128 || install.language.len() > 64 {
+                return Err("invalid lsp install hint".into());
+            }
         }
         if server.args.len() > 32 || server.args.iter().any(|arg| arg.len() > 512) {
             return Err("invalid lsp args".into());
@@ -371,6 +403,54 @@ mod tests {
         let server = pack.lsp.expect("server spec");
         assert_eq!(server.id, "lua-ls");
         assert_eq!(server.args, ["--stdio"]);
+    }
+
+    #[test]
+    fn lsp_server_fields_are_validated() {
+        let mut server: crate::services::LanguageServerSpec = serde_json::from_str(
+            r#"{"id":"lua-ls","language":"lua","extensions":["lua"],
+                "project_markers":["stylua.toml"],"command":"lua-language-server"}"#,
+        )
+        .expect("server spec");
+        assert!(LanguagePack::validate_server(&server).is_ok());
+
+        server.project_markers = vec!["../up".into()];
+        assert!(LanguagePack::validate_server(&server).is_err());
+        server.project_markers.clear();
+
+        server.language_ids.insert("lua".into(), String::new());
+        assert!(LanguagePack::validate_server(&server).is_err());
+        server.language_ids.clear();
+
+        server.install = Some(crate::services::ToolInstall {
+            tool: "lua-language-server".into(),
+            language: "Lua".into(),
+            command: "one\ntwo".into(),
+            note: None,
+        });
+        assert!(LanguagePack::validate_server(&server).is_err());
+        server.install.as_mut().unwrap().command = "brew install lua-language-server".into();
+        assert!(LanguagePack::validate_server(&server).is_ok());
+    }
+
+    #[test]
+    fn lsp_server_decodes_new_optional_fields() {
+        let json = r#"{"name":"x","extensions":["x"],"lsp":{
+            "id":"x","language":"x","extensions":["x"],"command":"x",
+            "workspace_markers":["go.work"],
+            "language_ids":{"tsx":"typescriptreact"},
+            "loose_files":true,
+            "install":{"tool":"x","language":"X","command":"install x"}
+        }}"#;
+        let pack = LanguagePack::parse(json).expect("valid pack");
+        let server = pack.lsp.expect("lsp spec");
+        assert_eq!(server.workspace_markers, vec!["go.work"]);
+        assert_eq!(
+            server.language_id(std::path::Path::new("a.tsx")),
+            "typescriptreact"
+        );
+        assert!(server.loose_files);
+        assert!(server.install.is_some());
     }
 
     #[test]

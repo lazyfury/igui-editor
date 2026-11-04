@@ -33,6 +33,8 @@ pub struct Settings {
     pub syntax: bool,
     /// Autosave dirty files (with a path) after the idle delay.
     pub autosave: bool,
+    /// Run language servers (start on demand, stop all when disabled).
+    pub lsp: bool,
     /// Sidebar width in logical pixels.
     pub sidebar_width: f32,
     /// Selectable keyboard profile.
@@ -48,6 +50,7 @@ impl Default for Settings {
             indent_guides: true,
             syntax: true,
             autosave: true,
+            lsp: true,
             sidebar_width: 232.0,
             keymap: KeymapId::VsCode,
         }
@@ -64,6 +67,7 @@ impl Settings {
             indent_guides: self.indent_guides,
             syntax: self.syntax,
             autosave: self.autosave,
+            lsp: self.lsp,
             sidebar_width: clamp_sidebar(self.sidebar_width),
             keymap: self.keymap,
         }
@@ -143,12 +147,13 @@ pub enum Row {
     IndentGuides,
     Syntax,
     Autosave,
+    LanguageIntelligence,
     SidebarWidth,
     Keymap,
     Reset,
 }
 
-pub const ROWS: [Row; 10] = [
+pub const ROWS: [Row; 11] = [
     Row::Theme,
     Row::FontSize,
     Row::TabWidth,
@@ -158,6 +163,7 @@ pub const ROWS: [Row; 10] = [
     Row::Autosave,
     Row::SidebarWidth,
     Row::Keymap,
+    Row::LanguageIntelligence,
     Row::Reset,
 ];
 
@@ -171,6 +177,7 @@ impl Row {
             Row::IndentGuides => "Indent Guides",
             Row::Syntax => "Syntax Highlight",
             Row::Autosave => "Autosave",
+            Row::LanguageIntelligence => "Language Intelligence",
             Row::SidebarWidth => "Sidebar Width",
             Row::Keymap => "Keymap",
             Row::Reset => "Reset to Defaults",
@@ -179,7 +186,10 @@ impl Row {
 
     /// Whether the row is a boolean toggle (Enter/Space toggles it).
     pub const fn is_toggle(self) -> bool {
-        matches!(self, Row::LineNumbers | Row::IndentGuides | Row::Syntax)
+        matches!(
+            self,
+            Row::LineNumbers | Row::IndentGuides | Row::Syntax | Row::LanguageIntelligence
+        )
     }
 }
 
@@ -194,6 +204,16 @@ mod tests {
         assert_eq!(metrics.font, 13.0);
         assert_eq!(metrics.line_h, 19.0);
         assert_eq!(metrics.tab_columns(), 4);
+    }
+
+    #[test]
+    fn language_intelligence_is_on_by_default_and_toggleable() {
+        let settings = Settings::default();
+        assert!(settings.lsp);
+        assert!(settings.normalized().lsp);
+        assert!(ROWS.contains(&Row::LanguageIntelligence));
+        assert!(Row::LanguageIntelligence.is_toggle());
+        assert!(ROWS.contains(&Row::Reset));
     }
 
     #[test]

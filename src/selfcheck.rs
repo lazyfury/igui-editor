@@ -4046,7 +4046,9 @@ while True:
 
     let previous = std::env::var_os("IGUI_EDITOR_RUST_ANALYZER");
     std::env::set_var("IGUI_EDITOR_RUST_ANALYZER", &server);
-    let result = check_lsp_flow(dir, &main);
+    let result = check_lsp_flow(dir, &main)
+        .and_then(|()| check_lsp_monorepo(dir))
+        .and_then(|()| check_tooling_prompt(dir));
     match previous {
         Some(value) => std::env::set_var("IGUI_EDITOR_RUST_ANALYZER", value),
         None => std::env::remove_var("IGUI_EDITOR_RUST_ANALYZER"),
@@ -4506,6 +4508,324 @@ fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
         std::thread::sleep(Duration::from_millis(20));
     }
     Err("LSP definition did not move the caret".into())
+}
+
+#[cfg(unix)]
+const FAKE_LOG_LSP: &str = r#"#!/usr/bin/env python3
+import json, os, sys
+
+LOG = os.environ.get("IGUI_FAKE_LSP_LOG")
+
+def read():
+    headers = {}
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line:
+            return None
+        line = line.decode("ascii", "replace").strip()
+        if not line:
+            break
+        key, value = line.split(":", 1)
+        headers[key.strip().lower()] = value.strip()
+    return json.loads(sys.stdin.buffer.read(int(headers["content-length"])))
+
+def send(message):
+    body = json.dumps(message).encode()
+    sys.stdout.buffer.write(("Content-Length: %d\r\n\r\n" % len(body)).encode())
+    sys.stdout.buffer.write(body)
+    sys.stdout.buffer.flush()
+
+def note(entry):
+    if LOG:
+        with open(LOG, "a") as handle:
+            handle.write(json.dumps(entry) + "\n")
+
+while True:
+    message = read()
+    if message is None:
+        break
+    method = message.get("method")
+    request_id = message.get("id")
+    params = message.get("params", {})
+    if method == "initialize":
+        note({"event": "initialize", "root": params.get("rootUri")})
+        send({"jsonrpc": "2.0", "id": request_id, "result": {"capabilities": {}}})
+    elif method == "textDocument/didOpen":
+        document = params["textDocument"]
+        note({"event": "didOpen", "uri": document["uri"], "languageId": document["languageId"]})
+        send({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": {
+            "uri": document["uri"],
+            "diagnostics": [{
+                "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 3}},
+                "severity": 2,
+                "message": "fake go warning",
+            }],
+        }})
+    elif method == "textDocument/semanticTokens/full":
+        send({"jsonrpc": "2.0", "id": request_id, "result": {"data": []}})
+    elif method == "textDocument/documentSymbol":
+        send({"jsonrpc": "2.0", "id": request_id, "result": []})
+    elif request_id is not None:
+        send({"jsonrpc": "2.0", "id": request_id, "result": None})
+"#;
+
+fn lsp_log_events(path: &Path) -> Vec<serde_json::Value> {
+    fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect()
+}
+
+#[cfg(unix)]
+fn wait_for_lsp(
+    harness: &mut Harness,
+    mut ready: impl FnMut(&crate::state::AppState) -> bool,
+) -> Result<(), String> {
+    for _ in 0..250 {
+        harness.frame()?;
+        if ready(&harness.app.state()) {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    Err("LSP condition timed out".into())
+}
+
+/// A monorepo must run one server for the whole workspace (`go.work`), keep
+/// both modules' diagnostics alive, and restart only when re-enabled.
+#[cfg(unix)]
+fn check_lsp_monorepo(dir: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let project = dir.join("lsp-monorepo");
+    for package in ["a", "b"] {
+        fs::create_dir_all(project.join(package))
+            .map_err(|error| format!("monorepo fixture: {error}"))?;
+        fs::write(
+            project.join(package).join("go.mod"),
+            format!("module example.com/{package}\n"),
+        )
+        .map_err(|error| format!("monorepo fixture: {error}"))?;
+        fs::write(
+            project.join(package).join("main.go"),
+            format!("package main\n\nfunc {package}() {{}}\n"),
+        )
+        .map_err(|error| format!("monorepo fixture: {error}"))?;
+    }
+    fs::write(
+        project.join("go.work"),
+        "go 1.22\n\nuse (\n\t./a\n\t./b\n)\n",
+    )
+    .map_err(|error| format!("monorepo fixture: {error}"))?;
+
+    let server = dir.join("fake-lsp-log.py");
+    fs::write(&server, FAKE_LOG_LSP).map_err(|error| format!("lsp fixture: {error}"))?;
+    let mut permissions = fs::metadata(&server)
+        .map_err(|error| format!("lsp fixture: {error}"))?
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&server, permissions).map_err(|error| format!("lsp fixture: {error}"))?;
+
+    let log = dir.join("lsp-monorepo.log");
+    let _ = fs::remove_file(&log);
+    let previous_server = std::env::var_os("IGUI_EDITOR_GOPLS");
+    let previous_log = std::env::var_os("IGUI_FAKE_LSP_LOG");
+    std::env::set_var("IGUI_EDITOR_GOPLS", &server);
+    std::env::set_var("IGUI_FAKE_LSP_LOG", &log);
+    let result = lsp_monorepo_flow(dir, &project, &log);
+    match previous_server {
+        Some(value) => std::env::set_var("IGUI_EDITOR_GOPLS", value),
+        None => std::env::remove_var("IGUI_EDITOR_GOPLS"),
+    }
+    match previous_log {
+        Some(value) => std::env::set_var("IGUI_FAKE_LSP_LOG", value),
+        None => std::env::remove_var("IGUI_FAKE_LSP_LOG"),
+    }
+    result
+}
+
+#[cfg(unix)]
+fn lsp_monorepo_flow(dir: &Path, project: &Path, log: &Path) -> Result<(), String> {
+    let a = canonical_target(project.join("a/main.go"));
+    let b = canonical_target(project.join("b/main.go"));
+    let config = dir.join("lsp-monorepo.conf");
+    let mut harness = Harness::new(Some(a.clone()), config, ScriptedDialogs::new(vec![]));
+    wait_for_lsp(&mut harness, |state| {
+        !state.lsp.diagnostics_for(&a).is_empty()
+    })?;
+    harness.app.state_mut().open_path(b.clone());
+    wait_for_lsp(&mut harness, |state| {
+        !state.lsp.diagnostics_for(&b).is_empty()
+    })?;
+    {
+        let state = harness.app.state();
+        if state.lsp.diagnostics_for(&a).is_empty() {
+            return Err("monorepo: opening module B dropped module A diagnostics".into());
+        }
+        if state.lsp.summary(Some(&b)).as_deref() != Some("LSP 0E 1W") {
+            return Err(format!(
+                "monorepo: footer summary is {:?}",
+                state.lsp.summary(Some(&b))
+            ));
+        }
+    }
+
+    let events = lsp_log_events(log);
+    let initializes = events
+        .iter()
+        .filter(|event| event["event"] == "initialize")
+        .count();
+    if initializes != 1 {
+        return Err(format!(
+            "monorepo started {initializes} language servers, expected one"
+        ));
+    }
+    let opens: Vec<&serde_json::Value> = events
+        .iter()
+        .filter(|event| event["event"] == "didOpen")
+        .collect();
+    if opens.len() < 2 {
+        return Err(format!("monorepo opened {} documents", opens.len()));
+    }
+    if opens.iter().any(|event| event["languageId"] != "go") {
+        return Err("monorepo didOpen did not use the `go` language id".into());
+    }
+
+    // Footer dot stops every server; the chip reports LSP OFF.
+    harness.frame()?;
+    let toggle = harness.app.state().lsp_toggle_hit;
+    if toggle == Rect::ZERO {
+        return Err("footer LSP on/off dot has no hit target".into());
+    }
+    harness.click(toggle.center());
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        if state.settings.lsp {
+            return Err("footer dot did not disable language servers".into());
+        }
+        if state.lsp.enabled() {
+            return Err("LSP controller is still enabled after the footer toggle".into());
+        }
+        if !state.lsp.diagnostics_for(&a).is_empty() {
+            return Err("disabling LSP did not clear diagnostics".into());
+        }
+        if state.lsp.summary(Some(&a)).as_deref() != Some("LSP OFF") {
+            return Err("footer chip does not report LSP OFF".into());
+        }
+    }
+
+    // The settings row is the second entry point and re-enables the same state.
+    harness
+        .app
+        .state_mut()
+        .activate_setting(Row::LanguageIntelligence);
+    wait_for_lsp(&mut harness, |state| {
+        state.settings.lsp && !state.lsp.diagnostics_for(&a).is_empty()
+    })?;
+    let events = lsp_log_events(log);
+    let initializes = events
+        .iter()
+        .filter(|event| event["event"] == "initialize")
+        .count();
+    if initializes != 2 {
+        return Err(format!(
+            "re-enabling LSP started {initializes} servers, expected a restart"
+        ));
+    }
+    println!("selfcheck: monorepo language server ok");
+    Ok(())
+}
+
+/// A missing server executable opens the copy-only tooling prompt; the editor
+/// never installs anything itself.
+#[cfg(unix)]
+fn check_tooling_prompt(dir: &Path) -> Result<(), String> {
+    let project = dir.join("missing-tool");
+    fs::create_dir_all(&project).map_err(|error| format!("tooling fixture: {error}"))?;
+    let main = project.join("main.c");
+    fs::write(&main, "int main(void) { return 0; }\n")
+        .map_err(|error| format!("tooling fixture: {error}"))?;
+    let missing = project.join("missing-clangd-binary");
+    let previous = std::env::var_os("IGUI_EDITOR_CLANGD");
+    std::env::set_var("IGUI_EDITOR_CLANGD", &missing);
+    let result = tooling_flow(dir, &canonical_target(main));
+    match previous {
+        Some(value) => std::env::set_var("IGUI_EDITOR_CLANGD", value),
+        None => std::env::remove_var("IGUI_EDITOR_CLANGD"),
+    }
+    result
+}
+
+#[cfg(unix)]
+fn tooling_flow(dir: &Path, main: &Path) -> Result<(), String> {
+    let config = dir.join("tooling.conf");
+    let mut harness = Harness::new(
+        Some(main.to_path_buf()),
+        config,
+        ScriptedDialogs::new(vec![]),
+    );
+    wait_for_lsp(&mut harness, |state| state.tooling.prompt.is_some())?;
+    {
+        let state = harness.app.state();
+        let prompt = state
+            .tooling
+            .prompt
+            .as_ref()
+            .ok_or("tooling prompt is missing")?;
+        if prompt.tool != "clangd" || !prompt.command.contains("brew install llvm") {
+            return Err(format!(
+                "tooling prompt has the wrong install hint: {} / {}",
+                prompt.tool, prompt.command
+            ));
+        }
+        if prompt.command.contains('\n') {
+            return Err("install command must stay on one line".into());
+        }
+        if state.lsp.summary(Some(main)).as_deref() != Some("LSP ERR") {
+            return Err("missing tool did not surface in the footer chip".into());
+        }
+    }
+    let frame = harness.frame()?;
+    let painted = texts(&frame);
+    if !painted.iter().any(|text| text == "CLANGD NOT FOUND") {
+        return Err("tooling prompt title was not painted".into());
+    }
+    if !painted.iter().any(|text| text == "COPY COMMAND") {
+        return Err("tooling prompt has no COPY COMMAND button".into());
+    }
+
+    let layout = crate::ui::tooling::layout(&harness.app.state());
+    let copy = layout.copy.ok_or("tooling COPY button has no rect")?;
+    harness.click(copy.center());
+    if !harness
+        .app
+        .state()
+        .tooling
+        .prompt
+        .as_ref()
+        .is_some_and(|prompt| prompt.copied)
+    {
+        return Err("COPY COMMAND did not confirm the copy".into());
+    }
+
+    // RETRY clears the prompt and re-arms the start attempt.
+    let layout = crate::ui::tooling::layout(&harness.app.state());
+    harness.click(layout.retry.center());
+    if harness.app.state().tooling.prompt.is_some() {
+        return Err("RETRY did not close the tooling prompt".into());
+    }
+    wait_for_lsp(&mut harness, |state| state.tooling.prompt.is_some())?;
+
+    // Esc dismisses the prompt without touching the editor.
+    harness.key(Key::Escape);
+    harness.frame()?;
+    if harness.app.state().tooling.prompt.is_some() {
+        return Err("Esc did not close the tooling prompt".into());
+    }
+    println!("selfcheck: tooling install prompt ok");
+    Ok(())
 }
 
 #[cfg(not(unix))]

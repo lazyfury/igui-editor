@@ -20,7 +20,7 @@ const MAX_RECENT: usize = 8;
 /// Persisted application state. Missing/corrupt files fall back to defaults.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Session {
-    /// Format version (currently `11`); unknown keys are ignored so
+    /// Format version (currently `12`); unknown keys are ignored so
     /// older/newer files keep loading.
     pub version: u32,
     /// `"dark"` or `"light"`.
@@ -51,6 +51,8 @@ pub struct Session {
     pub split: f32,
     /// Autosave enabled.
     pub autosave: bool,
+    /// Language servers enabled.
+    pub lsp: bool,
     /// Per-path language overrides (provider name).
     pub languages: Vec<(PathBuf, String)>,
     /// Keep the editor and Markdown preview scroll positions in sync.
@@ -79,7 +81,7 @@ pub struct WindowGeometry {
 impl Default for Session {
     fn default() -> Self {
         Self {
-            version: 11,
+            version: 12,
             theme: "dark".into(),
             sidebar: true,
             outline: true,
@@ -96,6 +98,7 @@ impl Default for Session {
             sidebar_width: 232.0,
             split: 0.5,
             autosave: true,
+            lsp: true,
             languages: Vec::new(),
             sync_scroll: true,
             soft_wrap: false,
@@ -157,6 +160,7 @@ impl Session {
                 }
                 "split" => session.split = value.parse().unwrap_or(session.split),
                 "autosave" => session.autosave = value == "1",
+                "lsp" => session.lsp = value == "1",
                 "sync_scroll" => session.sync_scroll = value == "1",
                 "soft_wrap" => session.soft_wrap = value == "1",
                 "sidebar_tab" => session.sidebar_tab = value,
@@ -219,7 +223,7 @@ impl Session {
     pub fn render(&self) -> String {
         let mut out = String::new();
         // Always write the current format; parsing older files still works.
-        out.push_str("version=11\n");
+        out.push_str("version=12\n");
         out.push_str(&format!("theme={}\n", self.theme));
         out.push_str(&format!("sidebar={}\n", u8::from(self.sidebar)));
         out.push_str(&format!("outline={}\n", u8::from(self.outline)));
@@ -238,6 +242,7 @@ impl Session {
         out.push_str(&format!("sidebar_width={}\n", self.sidebar_width));
         out.push_str(&format!("split={}\n", self.split));
         out.push_str(&format!("autosave={}\n", u8::from(self.autosave)));
+        out.push_str(&format!("lsp={}\n", u8::from(self.lsp)));
         out.push_str(&format!("sync_scroll={}\n", u8::from(self.sync_scroll)));
         out.push_str(&format!("soft_wrap={}\n", u8::from(self.soft_wrap)));
         out.push_str(&format!("sidebar_tab={}\n", escape(&self.sidebar_tab)));
@@ -400,6 +405,7 @@ mod tests {
             sidebar_width: 260.0,
             split: 0.6,
             autosave: false,
+            lsp: false,
             languages: vec![(PathBuf::from("/tmp/x.lua"), "lua".into())],
             sync_scroll: false,
             soft_wrap: true,
@@ -456,6 +462,16 @@ mod tests {
         session.set_tabs(vec![PathBuf::from("/tmp/a.rs"), PathBuf::from("/tmp/b.rs")]);
         session.set_active_tab(Some(PathBuf::from("/tmp/b.rs")));
         assert_eq!(session.active_tab, Some(PathBuf::from("/tmp/b.rs")));
+    }
+
+    #[test]
+    fn old_sessions_default_language_servers_to_on() {
+        let path = temp_path("lsp-default");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "version=11\ntheme=dark\n").unwrap();
+        let session = Session::load(&path);
+        assert!(session.lsp);
+        let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]

@@ -30,6 +30,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     kit::fill(env.ctx, rect, p.panel);
     kit::hline(env.ctx, rect.left(), rect.right(), rect.top(), p.border);
     state.lsp_hit = Rect::ZERO;
+    state.lsp_toggle_hit = Rect::ZERO;
 
     let baseline = kit::baseline(measurer, rect, m.font_small);
 
@@ -198,17 +199,62 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             p.faint
         };
         if is_lsp {
+            // Two hit targets: the label opens PROBLEMS, the dot starts/stops
+            // every language server. When disabled the whole chip re-enables.
+            let enabled = state.settings.lsp;
+            let toggle_w = if enabled { 18.0 } else { 0.0 };
             let hit = Rect::from_min_size(
-                Vec2::new(right - width - 4.0, rect.top()),
-                Size::new(width + 8.0, rect.height()),
+                Vec2::new(right - width - 4.0 - toggle_w, rect.top()),
+                Size::new(width + 8.0 + toggle_w, rect.height()),
             );
-            state.lsp_hit = hit;
-            if state.lsp_hover {
-                kit::fill(env.ctx, hit, p.hover);
+            if enabled {
+                state.lsp_hit =
+                    Rect::from_min_size(hit.origin, Size::new(width + 8.0, rect.height()));
+                state.lsp_toggle_hit = Rect::from_min_size(
+                    Vec2::new(hit.right() - 18.0, rect.top()),
+                    Size::new(18.0, rect.height()),
+                );
+                if state.lsp_hover {
+                    kit::fill(env.ctx, state.lsp_hit, p.hover);
+                }
+                if state.problems.open {
+                    kit::hline(
+                        env.ctx,
+                        state.lsp_hit.left(),
+                        state.lsp_hit.right(),
+                        hit.bottom() - 2.0,
+                        color,
+                    );
+                }
+                if state.lsp_toggle_hover {
+                    kit::fill(env.ctx, state.lsp_toggle_hit, p.hover);
+                }
+                env.ctx.fill_circle(
+                    Vec2::new(state.lsp_toggle_hit.center().x, rect.center().y),
+                    3.0,
+                    if state.lsp_toggle_hover {
+                        p.accent
+                    } else {
+                        p.dim
+                    },
+                );
+            } else {
+                state.lsp_hit = Rect::ZERO;
+                state.lsp_toggle_hit = hit;
+                if state.lsp_toggle_hover {
+                    kit::fill(env.ctx, hit, p.hover);
+                }
             }
-            if state.problems.open {
-                kit::hline(env.ctx, hit.left(), hit.right(), hit.bottom() - 2.0, color);
-            }
+            kit::text(
+                env.ctx,
+                fact,
+                hit.left() + 8.0,
+                baseline,
+                m.font_small,
+                color,
+            );
+            right -= width + 8.0 + toggle_w + 16.0;
+            continue;
         }
         kit::text(env.ctx, fact, right - width, baseline, m.font_small, color);
         right -= width + 16.0;

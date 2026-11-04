@@ -36,6 +36,7 @@ use crate::settings::{EditorMetrics, Row, Settings};
 use crate::syntax::{SyntaxProvider, SyntaxRegistry, TokenKind};
 use crate::theme::{Mode, Theme};
 use crate::ui::preview::PreviewUi;
+use tooling::ToolingUi;
 
 /// Deadline scheduling: the shared timing constants and the next wakeup.
 pub(crate) mod schedule;
@@ -58,6 +59,7 @@ mod services;
 mod settings;
 mod tabs;
 mod terminal;
+mod tooling;
 mod view;
 mod workspace;
 
@@ -992,6 +994,7 @@ pub struct AppState {
     pub sidebar: SidebarUi,
     pub outline: OutlineUi,
     pub problems: ProblemsUi,
+    pub tooling: ToolingUi,
     pub docs: DocsUi,
     pub docs_view: DocsViewUi,
     pub outline_node: Option<NodeId>,
@@ -1077,6 +1080,9 @@ pub struct AppState {
     /// Status-bar LSP summary chip; clicking it opens the problems popup.
     pub lsp_hit: Rect,
     pub lsp_hover: bool,
+    /// Status-bar LSP on/off dot next to the summary chip.
+    pub lsp_toggle_hit: Rect,
+    pub lsp_toggle_hover: bool,
     /// Set when a settings change needs the sidebar's flex basis updated.
     pub pending_sidebar_sync: bool,
     /// A file drag is hovering the window (paints the drop overlay).
@@ -1148,6 +1154,7 @@ impl AppState {
             sidebar: SidebarUi::default(),
             outline: OutlineUi::default(),
             problems: ProblemsUi::default(),
+            tooling: ToolingUi::default(),
             docs: DocsUi::default(),
             docs_view: DocsViewUi::default(),
             outline_node: None,
@@ -1228,6 +1235,8 @@ impl AppState {
             language_hover: false,
             lsp_hit: Rect::ZERO,
             lsp_hover: false,
+            lsp_toggle_hit: Rect::ZERO,
+            lsp_toggle_hover: false,
             pending_sidebar_sync: false,
             drop_hover: false,
             quick_open: QuickOpenState::default(),
@@ -1359,6 +1368,7 @@ fn settings_from_session(session: &Session) -> Settings {
         indent_guides: session.indent_guides,
         syntax: session.syntax,
         autosave: session.autosave,
+        lsp: session.lsp,
         sidebar_width: session.sidebar_width,
         keymap: KeymapId::from_session(&session.keymap),
     }

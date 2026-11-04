@@ -50,6 +50,9 @@ pub fn godot_server() -> LanguageServerSpec {
         language: "gdscript".into(),
         extensions: vec!["gd".into()],
         project_markers: vec!["project.godot".into()],
+        workspace_markers: Vec::new(),
+        language_ids: Default::default(),
+        loose_files: false,
         command: command.into(),
         command_env: Some("IGUI_EDITOR_GODOT".into()),
         args: vec![
@@ -61,6 +64,7 @@ pub fn godot_server() -> LanguageServerSpec {
         transport: LanguageServerTransport::Tcp,
         port_arg: Some("--lsp-port".into()),
         port: None,
+        install: None,
     }
 }
 

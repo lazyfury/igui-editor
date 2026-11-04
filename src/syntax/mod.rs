@@ -53,7 +53,7 @@ mod cstyle;
 mod markdown;
 mod pack;
 
-pub use cstyle::{Cpp, GdScript, Go, JavaScript, Json, Rust, Toml, TypeScript, C};
+pub use cstyle::{Cpp, GdScript, Go, JavaScript, Json, Python, Rust, Toml, TypeScript, C};
 pub use markdown::Markdown;
 pub use pack::{load_language_packs, LanguagePack, PackString};
 
@@ -134,7 +134,7 @@ impl SyntaxRegistry {
     }
 
     /// Every built-in provider: Rust, C, C++, JavaScript, TypeScript, Go,
-    /// GDScript, JSON, TOML and Markdown.
+    /// GDScript, Python, JSON, TOML and Markdown.
     pub fn with_builtins() -> Self {
         let mut registry = Self::new();
         registry.register(Arc::new(Rust));
@@ -144,6 +144,7 @@ impl SyntaxRegistry {
         registry.register(Arc::new(TypeScript));
         registry.register(Arc::new(Go));
         registry.register(Arc::new(GdScript));
+        registry.register(Arc::new(Python));
         registry.register(Arc::new(Json));
         registry.register(Arc::new(Toml));
         registry.register(Arc::new(Markdown));
@@ -373,6 +374,27 @@ mod tests {
         let (tokens, state) = Cpp.highlight_line("more)\" + \";\"", state);
         assert_eq!(state, 0);
         assert_eq!(tokens[0].kind, TokenKind::String);
+    }
+
+    #[test]
+    fn python_colors_keywords_comments_and_triple_strings() {
+        let def = kinds("def greet(name):", &Python);
+        assert!(def.contains(&("def".into(), TokenKind::Keyword)));
+        assert!(def.contains(&("greet".into(), TokenKind::Function)));
+        assert_eq!(
+            kinds("# note", &Python),
+            vec![("# note".into(), TokenKind::Comment)]
+        );
+        assert_eq!(
+            kinds("@dataclass", &Python),
+            vec![("@dataclass".into(), TokenKind::Macro)]
+        );
+        let (tokens, state) = Python.highlight_line("text = \"\"\"demo", 0);
+        assert!(tokens.iter().any(|token| token.kind == TokenKind::String));
+        let (tokens, _) = Python.highlight_line("still docstring", state);
+        assert!(tokens.iter().all(|token| token.kind == TokenKind::String));
+        assert_eq!(Python.line_comment(), Some("#"));
+        assert_eq!(Python.extensions(), &["py", "pyi"]);
     }
 
     #[test]

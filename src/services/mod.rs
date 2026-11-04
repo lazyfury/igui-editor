@@ -6,10 +6,14 @@
 //! host can map the same commands over JSON-RPC without redesigning Git or the
 //! terminal.
 
+pub mod clang;
 pub mod git;
+pub mod go;
 pub mod godot;
 pub mod lsp;
+pub mod python;
 pub mod terminal;
+pub mod typescript;
 
 use std::collections::BTreeMap;
 
@@ -77,6 +81,25 @@ pub struct SidebarContribution {
     pub label: &'static str,
 }
 
+/// Copy-paste installation hint shown when a language server executable is
+/// missing. The editor never installs tools itself; the prompt only offers the
+/// command so the user can run it in the terminal.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct ToolInstall {
+    /// Executable name, e.g. `gopls`.
+    #[serde(default)]
+    pub tool: String,
+    /// Human language name, e.g. `Go`.
+    #[serde(default)]
+    pub language: String,
+    /// Shell command that installs the tool.
+    #[serde(default)]
+    pub command: String,
+    /// Optional extra context (server alternatives, caveats).
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
 /// How the client reaches a language server.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -105,6 +128,17 @@ pub struct LanguageServerSpec {
     pub extensions: Vec<String>,
     #[serde(default)]
     pub project_markers: Vec<String>,
+    /// Workspace-level markers (`go.work`, `pnpm-workspace.yaml`, …). When one
+    /// is found inside the open folder, the *outermost* match is the root, so a
+    /// monorepo starts one server instead of one per package.
+    #[serde(default)]
+    pub workspace_markers: Vec<String>,
+    /// Extension → LSP `languageId` overrides (`.tsx` → `typescriptreact`).
+    #[serde(default)]
+    pub language_ids: std::collections::BTreeMap<String, String>,
+    /// Start even when no marker exists (the file's folder becomes the root).
+    #[serde(default)]
+    pub loose_files: bool,
     #[serde(default)]
     pub command: String,
     #[serde(default)]
@@ -121,9 +155,26 @@ pub struct LanguageServerSpec {
     /// loopback port per launch instead.
     #[serde(default)]
     pub port: Option<u16>,
+    /// Shown when the command cannot be found; never executed automatically.
+    #[serde(default)]
+    pub install: Option<ToolInstall>,
 }
 
 impl LanguageServerSpec {
+    /// LSP `languageId` for a file: an explicit extension mapping wins, then
+    /// the spec's single language.
+    pub fn language_id(&self, path: &std::path::Path) -> &str {
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .and_then(|ext| {
+                self.language_ids
+                    .iter()
+                    .find(|(candidate, _)| candidate.eq_ignore_ascii_case(ext))
+                    .map(|(_, language)| language.as_str())
+            })
+            .unwrap_or(&self.language)
+    }
+
     pub fn matches_path(&self, path: &std::path::Path) -> bool {
         path.extension()
             .and_then(|ext| ext.to_str())
@@ -198,10 +249,22 @@ pub fn install_builtins() -> ServiceRegistry {
     let terminal = terminal::TerminalPlugin;
     let rust_lsp = lsp::RustLspPlugin;
     let godot_lsp = godot::GodotLspPlugin;
-    registry.plugins.push(plugin.id());
-    registry.plugins.push(terminal.id());
-    registry.plugins.push(rust_lsp.id());
-    registry.plugins.push(godot_lsp.id());
+    let go_lsp = go::GoLspPlugin;
+    let ts_lsp = typescript::TypeScriptLspPlugin;
+    let clang_lsp = clang::ClangLspPlugin;
+    let python_lsp = python::PythonLspPlugin;
+    for id in [
+        plugin.id(),
+        terminal.id(),
+        rust_lsp.id(),
+        godot_lsp.id(),
+        go_lsp.id(),
+        ts_lsp.id(),
+        clang_lsp.id(),
+        python_lsp.id(),
+    ] {
+        registry.plugins.push(id);
+    }
     let mut host = PluginHost {
         registry: &mut registry,
     };
@@ -209,5 +272,9 @@ pub fn install_builtins() -> ServiceRegistry {
     terminal.register(&mut host);
     rust_lsp.register(&mut host);
     godot_lsp.register(&mut host);
+    go_lsp.register(&mut host);
+    ts_lsp.register(&mut host);
+    clang_lsp.register(&mut host);
+    python_lsp.register(&mut host);
     registry
 }

@@ -5,7 +5,12 @@ use super::*;
 impl AppState {
     /// Pumps the language server and applies a pending go-to-definition.
     pub fn tick_lsp(&mut self) {
-        self.lsp.tick(&self.ws, &self.services.language_servers);
+        self.lsp
+            .tick(&self.ws, &self.services.language_servers, self.settings.lsp);
+        self.tooling.tick();
+        if let Some(issue) = self.lsp.take_issue() {
+            self.show_tool_prompt(issue);
+        }
         if self.lsp.take_changed() {
             self.dirty = true;
         }
@@ -398,6 +403,9 @@ impl AppState {
     }
 
     pub(crate) fn lsp_unavailable(&self) -> String {
+        if !self.lsp.enabled() {
+            return "language servers are off (Settings → Language Intelligence)".into();
+        }
         match self.lsp.status() {
             model_lsp::LspStatus::Error(error) => format!("LSP: {error}"),
             model_lsp::LspStatus::Starting => "LSP starting…".into(),

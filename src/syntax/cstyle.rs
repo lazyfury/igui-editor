@@ -1262,6 +1262,84 @@ pub(crate) static JSON_SPEC: LangSpec = LangSpec {
     constants: JSON_CONSTANTS,
 };
 
+const PYTHON_KEYWORDS: &[&str] = &[
+    "and", "as", "assert", "async", "await", "break", "case", "class", "continue", "def", "del",
+    "elif", "else", "except", "finally", "for", "from", "global", "if", "import", "in", "is",
+    "lambda", "match", "nonlocal", "not", "or", "pass", "raise", "return", "try", "while", "with",
+    "yield",
+];
+
+const PYTHON_TYPES: &[&str] = &[
+    "Any",
+    "BaseException",
+    "Callable",
+    "Dict",
+    "Exception",
+    "IOError",
+    "ImportError",
+    "IndexError",
+    "KeyError",
+    "List",
+    "Mapping",
+    "MemoryView",
+    "NotImplementedError",
+    "Optional",
+    "OSError",
+    "RuntimeError",
+    "Sequence",
+    "Set",
+    "StopIteration",
+    "Tuple",
+    "TypeError",
+    "Union",
+    "ValueError",
+    "AttributeError",
+    "Iterable",
+    "Iterator",
+    "bytearray",
+    "bytes",
+    "classmethod",
+    "complex",
+    "dict",
+    "float",
+    "frozenset",
+    "int",
+    "list",
+    "memoryview",
+    "object",
+    "property",
+    "range",
+    "set",
+    "staticmethod",
+    "str",
+    "super",
+    "tuple",
+    "type",
+];
+
+const PYTHON_CONSTANTS: &[&str] = &["True", "False", "None", "NotImplemented", "Ellipsis"];
+
+pub(crate) static PYTHON_SPEC: LangSpec = LangSpec {
+    name: "python",
+    extensions: &["py", "pyi"],
+    line_comment: &["#"],
+    block_comment: None,
+    nested_block: false,
+    strings: STR_DQ_SQ,
+    triple: true,
+    rust: false,
+    cpp_raw: false,
+    template: false,
+    template_escapes: false,
+    preprocessor: false,
+    annotations: true,
+    toml_tables: false,
+    case_types: false,
+    keywords: PYTHON_KEYWORDS,
+    types: PYTHON_TYPES,
+    constants: PYTHON_CONSTANTS,
+};
+
 pub(crate) static TOML_SPEC: LangSpec = LangSpec {
     name: "toml",
     extensions: &["toml"],
@@ -1389,5 +1467,6 @@ provider!(JavaScript, JS_SPEC);
 provider!(TypeScript, TS_SPEC);
 provider!(Go, GO_SPEC);
 provider!(GdScript, GDSCRIPT_SPEC);
+provider!(Python, PYTHON_SPEC);
 provider!(Json, JSON_SPEC);
 provider!(Toml, TOML_SPEC);

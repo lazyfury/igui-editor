@@ -236,6 +236,7 @@ impl AppState {
             Row::IndentGuides => on_off(self.settings.indent_guides),
             Row::Syntax => on_off(self.settings.syntax),
             Row::Autosave => on_off(self.settings.autosave),
+            Row::LanguageIntelligence => on_off(self.settings.lsp),
             Row::SidebarWidth => format!("{} px", self.settings.sidebar_width as i32),
             Row::Keymap => self.settings.keymap.name().into(),
             Row::Reset => "DEFAULT".into(),
@@ -274,6 +275,9 @@ impl AppState {
             Row::Autosave => {
                 self.settings.autosave = !self.settings.autosave;
                 self.settings_changed();
+            }
+            Row::LanguageIntelligence => {
+                self.set_lsp_enabled(!self.settings.lsp);
             }
             Row::SidebarWidth => {
                 self.settings.step_sidebar(delta as f32 * 8.0);
@@ -327,6 +331,7 @@ impl AppState {
         self.session.indent_guides = self.settings.indent_guides;
         self.session.syntax = self.settings.syntax;
         self.session.autosave = self.settings.autosave;
+        self.session.lsp = self.settings.lsp;
         self.session.sidebar_width = self.settings.sidebar_width;
         self.session.keymap = self.settings.keymap.session_value().into();
         self.session.theme = match self.theme.mode {

@@ -438,6 +438,7 @@ impl EditorApp {
         ui::project_search::paint(&mut state, measurer.as_ref(), ctx);
         ui::lsp::paint(&mut state, measurer.as_ref(), ctx);
         ui::problems::paint(&mut state, measurer.as_ref(), ctx);
+        ui::tooling::paint(&mut state, measurer.as_ref(), ctx);
         ui::drop::paint(&state, measurer.as_ref(), ctx);
         ui::modal::paint(&mut state, measurer.as_ref(), ctx);
         ui::recovery::paint(&state, measurer.as_ref(), ctx);
@@ -496,6 +497,10 @@ impl EditorApp {
                             self.window_drag_pending = Some(*position);
                         }
                     }
+                    return EventResult::Handled;
+                }
+                if state.tooling.prompt.is_some() {
+                    ui::tooling::click(&mut state, *position);
                     return EventResult::Handled;
                 }
                 if state.problems.open {
@@ -597,6 +602,15 @@ impl EditorApp {
                             return EventResult::Handled;
                         }
                     }
+                }
+                // Footer LSP dot: start/stop every language server.
+                if state.lsp_toggle_hit.contains(*position) {
+                    let enabled = !state.settings.lsp;
+                    state.set_lsp_enabled(enabled);
+                    state.menu_open = None;
+                    state.menu_hover = None;
+                    state.dirty = true;
+                    return EventResult::Handled;
                 }
                 // Footer LSP chip: open the diagnostic message list.
                 if state.lsp_hit.contains(*position) {
@@ -734,6 +748,7 @@ impl EditorApp {
                     state.ws.active_doc().is_some() && state.language_hit.contains(*position);
                 let problems = ui::problems::hover_at(&state, *position);
                 let lsp_hover = state.lsp_hit.contains(*position);
+                let lsp_toggle_hover = state.lsp_toggle_hit.contains(*position);
                 let header_hover = ui::menu::header_button_at(&state, *position);
                 let git_hover = ui::git::hover_rect(&state, *position);
                 if state.git.hover != git_hover {
@@ -764,6 +779,7 @@ impl EditorApp {
                     || state.sidebar.hover != sidebar
                     || state.language_hover != language
                     || state.lsp_hover != lsp_hover
+                    || state.lsp_toggle_hover != lsp_toggle_hover
                     || state.problems.hover != problems
                     || state.header_hover != header_hover
                 {
@@ -773,6 +789,7 @@ impl EditorApp {
                     state.sidebar.hover = sidebar;
                     state.language_hover = language;
                     state.lsp_hover = lsp_hover;
+                    state.lsp_toggle_hover = lsp_toggle_hover;
                     state.problems.hover = problems;
                     state.header_hover = header_hover;
                     state.dirty = true;
@@ -851,6 +868,9 @@ impl EditorApp {
                 position, delta, ..
             } => {
                 let mut state = self.state.borrow_mut();
+                if state.tooling.prompt.is_some() {
+                    return EventResult::Handled;
+                }
                 if state.problems.open && state.problems.rect.contains(*position) {
                     ui::problems::wheel(&mut state, delta.y);
                     return EventResult::Handled;
@@ -881,6 +901,12 @@ impl EditorApp {
                 }
                 if state.modal.is_some() {
                     return input::modal_key(&mut state, *key);
+                }
+                if state.tooling.prompt.is_some() {
+                    if *key == Key::Escape {
+                        state.close_tool_prompt();
+                    }
+                    return EventResult::Handled;
                 }
                 if state.settings_open && ui::settings::on_key(&mut state, *key, modifiers) {
                     return EventResult::Handled;
@@ -1018,6 +1044,7 @@ impl EditorApp {
                 if state.settings_open
                     || state.recovery_prompt.is_some()
                     || state.menu_open.is_some()
+                    || state.tooling.prompt.is_some()
                 {
                     return EventResult::Handled;
                 }
@@ -1079,6 +1106,8 @@ impl EditorApp {
                     state.sidebar.hover = None;
                     state.language_hover = false;
                     state.lsp_hover = false;
+                    state.lsp_toggle_hover = false;
+                    state.lsp_toggle_hover = false;
                     state.problems.hover = None;
                     state.git.hover = None;
                     state.outline.hover = None;
@@ -1099,7 +1128,10 @@ impl EditorApp {
             }
             InputEvent::Ime(ime) => {
                 let mut state = self.state.borrow_mut();
-                if state.settings_open || state.recovery_prompt.is_some() {
+                if state.settings_open
+                    || state.recovery_prompt.is_some()
+                    || state.tooling.prompt.is_some()
+                {
                     return EventResult::Handled;
                 }
                 if state.lsp.hover.is_some() || state.lsp.completion.is_some() {

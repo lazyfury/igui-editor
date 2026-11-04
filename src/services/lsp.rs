@@ -7,6 +7,7 @@
 
 use super::{
     BuiltinPlugin, Capability, CommandSpec, LanguageServerSpec, PluginHost, ServiceManifest,
+    ToolInstall,
 };
 
 pub struct RustLspPlugin;
@@ -45,12 +46,21 @@ pub fn rust_server() -> LanguageServerSpec {
         language: "rust".into(),
         extensions: vec!["rs".into()],
         project_markers: vec!["Cargo.toml".into()],
+        workspace_markers: vec!["Cargo.lock".into(), "rust-toolchain.toml".into()],
+        language_ids: Default::default(),
+        loose_files: false,
         command: "rust-analyzer".into(),
         command_env: Some("IGUI_EDITOR_RUST_ANALYZER".into()),
         args: Vec::new(),
         transport: super::LanguageServerTransport::Stdio,
         port_arg: None,
         port: None,
+        install: Some(ToolInstall {
+            tool: "rust-analyzer".into(),
+            language: "Rust".into(),
+            command: "rustup component add rust-analyzer".into(),
+            note: Some("or install the `rust-analyzer` Homebrew formula".into()),
+        }),
     }
 }
 

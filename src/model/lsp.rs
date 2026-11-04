@@ -3,9 +3,12 @@
 //!
 //! This is a generic JSON-RPC client: a [`LanguageServerSpec`] decides which
 //! executable to launch, which files it owns, and whether to use stdio or
-//! loopback TCP. Rust (`rust-analyzer`) and Godot GDScript are built in; the
-//! spec is declarative so a future external plugin host can contribute another
-//! one without changing the editor.
+//! loopback TCP. Rust, Go, TypeScript/JavaScript, C/C++, Python and Godot
+//! GDScript are built in; the spec is declarative so a future external plugin
+//! host can contribute another one without changing the editor.
+//!
+//! One session (child process) exists per `(spec, project root)`, so a monorepo
+//! runs one server per language root and tab switches reuse it.
 
 use std::collections::{HashMap, HashSet};
 use std::io::{self, BufRead, BufReader, Write};
@@ -20,7 +23,7 @@ use serde_json::{json, Value};
 
 use crate::model::doc::Document;
 use crate::model::Workspace;
-use crate::services::LanguageServerSpec;
+use crate::services::{LanguageServerSpec, ToolInstall};
 
 const CHANGE_DEBOUNCE: Duration = Duration::from_millis(140);
 const RETRY_AFTER: Duration = Duration::from_secs(5);
@@ -197,7 +200,7 @@ impl LspClient {
             .and_then(|name| std::env::var(name).ok())
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| spec.command.to_string());
-        let mut process = Command::new(resolve_command(&command));
+        let mut process = Command::new(resolve_command(&command, root));
         process
             .args(&spec.args)
             .current_dir(root)
@@ -543,20 +546,32 @@ pub fn byte_for_position(doc: &Document, line: u32, character: u32) -> usize {
 /// GUI-launched apps often have a minimal `PATH`; look in the usual toolchain
 /// locations before giving up. Absolute/relative paths and commands with a
 /// slash are left untouched.
-fn resolve_command(command: &str) -> std::ffi::OsString {
+fn resolve_command(command: &str, root: &Path) -> std::ffi::OsString {
     if command.contains('/') {
         return command.into();
     }
-    let mut directories: Vec<PathBuf> =
-        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect();
+    let mut directories: Vec<PathBuf> = vec![root.join("node_modules").join(".bin")];
+    directories.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
     if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
         directories.push(home.join(".cargo/bin"));
         directories.push(home.join(".local/bin"));
+        directories.push(home.join("go/bin"));
+        directories.push(home.join(".local/share/pnpm"));
+        directories.push(home.join("Library/pnpm"));
+        directories.push(home.join(".npm-global/bin"));
+        directories.push(home.join(".bun/bin"));
     }
     directories.push(PathBuf::from("/opt/homebrew/bin"));
     directories.push(PathBuf::from("/opt/homebrew/opt/rustup/bin"));
+    directories.push(PathBuf::from("/opt/homebrew/opt/llvm/bin"));
     directories.push(PathBuf::from("/usr/local/bin"));
     directories.push(PathBuf::from("/usr/local/opt/rustup/bin"));
+    directories.push(PathBuf::from(
+        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin",
+    ));
+    directories.push(PathBuf::from("/Library/Developer/CommandLineTools/usr/bin"));
     if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
         let toolchains = home.join(".rustup/toolchains");
         if let Ok(entries) = std::fs::read_dir(&toolchains) {
@@ -577,20 +592,46 @@ fn resolve_command(command: &str) -> std::ffi::OsString {
     command.into()
 }
 
-fn project_root(path: &Path, spec: &LanguageServerSpec) -> Option<PathBuf> {
+/// Root for a language server.
+///
+/// 1. the outermost workspace marker (`go.work`, `pnpm-workspace.yaml`,
+///    `Cargo.lock`, …); markers are searched above the open folder too, so a
+///    single file opened from a monorepo still finds its workspace root,
+/// 2. otherwise the nearest project marker (`go.mod`, `Cargo.toml`, …),
+/// 3. otherwise, for loose-file servers, the open folder or the file's parent.
+fn project_root(path: &Path, spec: &LanguageServerSpec, bound: Option<&Path>) -> Option<PathBuf> {
     let start = if path.is_dir() { path } else { path.parent()? };
+    let start = std::fs::canonicalize(start).unwrap_or_else(|_| start.to_path_buf());
+    let inside_bound = bound.is_some_and(|bound| start.starts_with(bound));
+    let mut nearest = None;
+    let mut workspace = None;
     for ancestor in start.ancestors() {
+        if nearest.is_none()
+            && spec
+                .project_markers
+                .iter()
+                .any(|marker| ancestor.join(marker).exists())
+        {
+            nearest = Some(ancestor.to_path_buf());
+        }
         if spec
-            .project_markers
+            .workspace_markers
             .iter()
             .any(|marker| ancestor.join(marker).exists())
         {
-            return Some(
-                std::fs::canonicalize(ancestor).unwrap_or_else(|_| ancestor.to_path_buf()),
-            );
+            workspace = Some(ancestor.to_path_buf());
         }
     }
-    None
+    let root = workspace.or(nearest).or_else(|| {
+        if !spec.loose_files {
+            return None;
+        }
+        Some(match (inside_bound, bound) {
+            (true, Some(bound)) => bound.to_path_buf(),
+            _ => start.clone(),
+        })
+    })?;
+    Some(std::fs::canonicalize(&root).unwrap_or(root))
 }
 
 fn severity_color(severity: u32, p: &crate::theme::Palette) -> igui_core::Color {
@@ -602,12 +643,44 @@ fn severity_color(severity: u32, p: &crate::theme::Palette) -> igui_core::Color 
     }
 }
 
-/// The application-side LSP state: one server per project root, open-document
-/// synchronization, diagnostics and the latest hover/completion popup.
-pub struct LspController {
+/// A missing language-server executable reported to the UI.
+///
+/// The editor never installs tools; the prompt only offers a copyable command.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LspIssue {
+    /// Executable name, e.g. `gopls`.
+    pub tool: String,
+    /// Human language name, e.g. `Go`.
+    pub language: String,
+    /// Copy-only install command; empty when the spec has no hint.
+    pub command: String,
+    pub note: Option<String>,
+    /// Command the editor tried to start.
+    pub source: String,
+    /// Project root the server was needed for.
+    pub root: PathBuf,
+}
+
+impl LspIssue {
+    /// Body line for the tooling prompt.
+    pub fn detail(&self) -> String {
+        format!(
+            "{} language features need `{}`. Searched PATH, node_modules/.bin and the usual toolchain folders while starting in {}.",
+            self.language,
+            self.source,
+            self.root.display()
+        )
+    }
+}
+
+/// One language-server process for a `(spec, project root)` pair.
+///
+/// A monorepo keeps one session per language root; switching tabs reuses the
+/// session instead of restarting the server.
+struct Session {
+    spec: LanguageServerSpec,
+    root: PathBuf,
     client: Option<LspClient>,
-    root: Option<PathBuf>,
-    spec: Option<LanguageServerSpec>,
     status: LspStatus,
     open_docs: HashMap<PathBuf, OpenDoc>,
     diagnostics: HashMap<PathBuf, Vec<Diagnostic>>,
@@ -620,31 +693,18 @@ pub struct LspController {
     symbols_pending: HashSet<PathBuf>,
     symbols_in_flight: HashSet<PathBuf>,
     pending: HashMap<u64, (PendingKind, Instant)>,
-    failed: Option<(PathBuf, Instant)>,
-    pub hover: Option<HoverUi>,
-    pub hover_anchor: Option<igui_core::Vec2>,
-    /// Last painted hover card, used to keep it alive while the pointer enters it.
-    pub hover_rect: igui_core::Rect,
-    /// Hit rectangle for the hover card's "Open Docs" action.
-    pub hover_doc_hit: igui_core::Rect,
-    /// Hit rectangle for the completion preview's docs action.
-    pub completion_doc_hit: igui_core::Rect,
-    pub completion: Option<CompletionUi>,
-    completion_prefix: String,
     native_classes: HashSet<String>,
     native_symbols: HashMap<(String, String), NativeSymbol>,
-    native_result: Option<(String, String, NativeSymbol)>,
-    native_docs_target: Option<NativeTarget>,
-    location: Option<Location>,
+    last_active: Instant,
     changed: bool,
 }
 
-impl Default for LspController {
-    fn default() -> Self {
+impl Session {
+    fn new(spec: LanguageServerSpec, root: PathBuf) -> Self {
         Self {
+            spec,
+            root,
             client: None,
-            root: None,
-            spec: None,
             status: LspStatus::Off,
             open_docs: HashMap::new(),
             diagnostics: HashMap::new(),
@@ -657,163 +717,15 @@ impl Default for LspController {
             symbols_pending: HashSet::new(),
             symbols_in_flight: HashSet::new(),
             pending: HashMap::new(),
-            failed: None,
-            hover: None,
-            hover_anchor: None,
-            hover_rect: igui_core::Rect::ZERO,
-            hover_doc_hit: igui_core::Rect::ZERO,
-            completion_doc_hit: igui_core::Rect::ZERO,
-            completion: None,
-            completion_prefix: String::new(),
             native_classes: HashSet::new(),
             native_symbols: HashMap::new(),
-            native_result: None,
-            native_docs_target: None,
-            location: None,
+            last_active: Instant::now(),
             changed: false,
         }
     }
-}
 
-impl LspController {
-    pub fn status(&self) -> &LspStatus {
-        &self.status
-    }
-
-    /// Whether a popup/diagnostic/status changed since the last frame.
-    pub fn take_changed(&mut self) -> bool {
-        std::mem::take(&mut self.changed)
-    }
-
-    pub fn supports(&self, path: &Path) -> bool {
-        self.spec
-            .as_ref()
-            .is_some_and(|spec| spec.matches_path(path))
-    }
-
-    pub fn is_busy(&self) -> bool {
-        matches!(self.status, LspStatus::Starting)
-            || self.open_docs.values().any(|doc| doc.changed_at.is_some())
-            || !self.pending.is_empty()
-    }
-
-    /// Starts or reuses the server for the active project and synchronizes the
-    /// open Rust buffers. Safe to call every frame.
-    pub fn tick(&mut self, ws: &Workspace, servers: &[LanguageServerSpec]) {
-        let active_path = ws.active_doc().and_then(|doc| doc.path());
-        let active_spec = active_path.and_then(|path| {
-            servers
-                .iter()
-                .find(|spec| spec.matches_path(path) && project_root(path, spec).is_some())
-                .cloned()
-        });
-        let spec = active_spec.or_else(|| self.spec.clone());
-        let Some(spec) = spec else {
-            if self.client.is_some() {
-                self.stop();
-            }
-            return;
-        };
-        let root = active_path
-            .and_then(|path| project_root(path, &spec))
-            .or_else(|| {
-                ws.tabs
-                    .iter()
-                    .filter_map(|doc| doc.path())
-                    .find_map(|path| project_root(path, &spec))
-            })
-            .or_else(|| self.root.clone());
-        let Some(root) = root else {
-            return;
-        };
-
-        if self.root.as_ref() != Some(&root)
-            || self.spec.as_ref().map(|s| s.id.as_str()) != Some(spec.id.as_str())
-        {
-            self.stop();
-            self.root = Some(root.clone());
-            self.spec = Some(spec.clone());
-        }
-
-        if self.client.is_none() {
-            let retry_blocked = self.failed.as_ref().is_some_and(|(failed_root, at)| {
-                failed_root == &root && at.elapsed() < RETRY_AFTER
-            });
-            if retry_blocked {
-                return;
-            }
-            match LspClient::spawn(&spec, &root) {
-                Ok(client) => {
-                    let mut client = client;
-                    let params = initialize_params(&root, &spec);
-                    if let Some(id) = client.request("initialize", params) {
-                        self.pending
-                            .insert(id, (PendingKind::Initialize, Instant::now()));
-                    }
-                    self.client = Some(client);
-                    self.status = LspStatus::Starting;
-                    self.failed = None;
-                }
-                Err(error) => {
-                    self.status = LspStatus::Error(format!("{}: {error}", spec.command));
-                    self.failed = Some((root, Instant::now()));
-                    return;
-                }
-            }
-        }
-
-        let expired: Vec<u64> = self
-            .pending
-            .iter()
-            .filter(|(_, (_, sent))| sent.elapsed() >= Duration::from_secs(15))
-            .map(|(id, _)| *id)
-            .collect();
-        for id in expired {
-            match self.pending.remove(&id).map(|(kind, _)| kind) {
-                Some(PendingKind::Semantic(path)) => {
-                    self.semantic_in_flight.remove(&path);
-                }
-                Some(PendingKind::Symbols(path)) => {
-                    self.symbols_in_flight.remove(&path);
-                }
-                Some(PendingKind::CompletionResolve { index }) => {
-                    if let Some(completion) = self.completion.as_mut() {
-                        if completion.selected == index {
-                            completion.preview_pending = false;
-                            completion.preview = Some("Documentation request timed out.".into());
-                        }
-                    }
-                }
-                Some(PendingKind::NativeSymbol { class, symbol }) => {
-                    self.native_result = Some((
-                        class.clone(),
-                        symbol.clone(),
-                        NativeSymbol {
-                            name: symbol,
-                            native_class: class,
-                            detail: "Documentation unavailable".into(),
-                            documentation:
-                                "Godot LSP did not return documentation for this symbol.".into(),
-                            kind: 0,
-                            children: Vec::new(),
-                        },
-                    ));
-                }
-                Some(_) | None => {}
-            }
-        }
-
-        self.poll();
-        if self.status == LspStatus::Ready {
-            self.sync(ws);
-        }
-    }
-
-    fn stop(&mut self) {
-        self.client = None;
-        self.status = LspStatus::Off;
+    fn reset_protocol(&mut self) {
         self.open_docs.clear();
-        self.diagnostics.clear();
         self.semantic_legend.clear();
         self.semantic_supported = false;
         self.semantic.clear();
@@ -823,167 +735,21 @@ impl LspController {
         self.symbols_pending.clear();
         self.symbols_in_flight.clear();
         self.pending.clear();
-        self.hover = None;
-        self.hover_anchor = None;
-        self.hover_rect = igui_core::Rect::ZERO;
-        self.hover_doc_hit = igui_core::Rect::ZERO;
-        self.completion_doc_hit = igui_core::Rect::ZERO;
-        self.completion = None;
-        self.completion_prefix.clear();
         self.native_classes.clear();
-        self.native_symbols.clear();
-        self.native_result = None;
-        self.native_docs_target = None;
-        self.location = None;
     }
 
-    fn poll(&mut self) {
-        let mut events = Vec::new();
-        if let Some(client) = self.client.as_ref() {
-            while let Some(event) = client.try_recv() {
-                events.push(event);
-            }
-        }
-        for event in events {
-            match event {
-                ClientEvent::Message(message) => self.handle_message(message),
-                ClientEvent::ReadError(error) => {
-                    if let Some(root) = self.root.clone() {
-                        self.failed = Some((root, Instant::now()));
-                    }
-                    self.status = LspStatus::Error(error);
-                    self.client = None;
-                    self.open_docs.clear();
-                    self.semantic_pending.clear();
-                    self.semantic_in_flight.clear();
-                    self.symbols_pending.clear();
-                    self.symbols_in_flight.clear();
-                    self.pending.clear();
-                    self.changed = true;
-                }
-            }
-        }
+    fn cancel_popup_requests(&mut self) {
+        self.pending.retain(|_, (kind, _)| {
+            !matches!(
+                kind,
+                PendingKind::Hover
+                    | PendingKind::Completion
+                    | PendingKind::CompletionResolve { .. }
+            )
+        });
     }
 
-    fn handle_message(&mut self, message: Value) {
-        let method = message
-            .get("method")
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        if let Some(method) = method {
-            if let Some(id) = message.get("id").cloned() {
-                self.respond_to_server(id, &method, &message["params"]);
-            } else if method == "textDocument/publishDiagnostics" {
-                self.publish_diagnostics(&message["params"]);
-            } else if method == "gdscript/capabilities" {
-                self.cache_native_classes(&message["params"]);
-            }
-            return;
-        }
-        let Some(id) = message.get("id").and_then(Value::as_u64) else {
-            return;
-        };
-        let Some((kind, _)) = self.pending.remove(&id) else {
-            return;
-        };
-        let result = &message["result"];
-        match kind {
-            PendingKind::Initialize => {
-                if let Some(error) = message.get("error") {
-                    self.status = LspStatus::Error(format!("initialize: {error}"));
-                    if let Some(root) = self.root.clone() {
-                        self.failed = Some((root, Instant::now()));
-                    }
-                    self.client = None;
-                } else {
-                    self.status = LspStatus::Ready;
-                    let (supported, legend) = semantic_capability(result);
-                    self.semantic_supported = supported;
-                    self.semantic_legend = legend;
-                    if let Some(client) = self.client.as_ref() {
-                        client.notify("initialized", json!({}));
-                    }
-                }
-                self.changed = true;
-            }
-            PendingKind::Hover => {
-                self.hover = hover_ui(result);
-                self.changed = true;
-            }
-            PendingKind::HoverDocs => {
-                self.native_docs_target = hover_ui(result).and_then(|hover| hover.native);
-                self.changed = true;
-            }
-            PendingKind::Completion => {
-                let items = parse_completions(result, &self.completion_prefix);
-                self.completion = (!items.is_empty()).then_some(CompletionUi {
-                    items,
-                    selected: 0,
-                    preview: None,
-                    preview_pending: false,
-                    native: None,
-                });
-                if self.completion.is_some() {
-                    self.request_completion_resolve(0);
-                }
-                self.changed = true;
-            }
-            PendingKind::CompletionResolve { index } => {
-                if let Some(completion) = self.completion.as_mut() {
-                    if completion.selected == index {
-                        let text = completion_documentation(result).or_else(|| {
-                            completion.items.get(index).map(|item| item.detail.clone())
-                        });
-                        completion.preview = text;
-                        completion.preview_pending = false;
-                        completion.native = completion
-                            .preview
-                            .as_deref()
-                            .and_then(native_target_from_hover);
-                        self.changed = true;
-                    }
-                }
-            }
-            PendingKind::Definition => {
-                self.location = parse_location(result);
-                self.changed = true;
-            }
-            PendingKind::NativeSymbol { class, symbol } => {
-                if let Some(parsed) = parse_native_symbol(result) {
-                    self.native_symbols
-                        .insert((class.clone(), symbol.clone()), parsed.clone());
-                    self.native_result = Some((class, symbol, parsed));
-                }
-                self.changed = true;
-            }
-            PendingKind::Semantic(path) => {
-                self.semantic_in_flight.remove(&path);
-                if self.open_docs.contains_key(&path) {
-                    let tokens = parse_semantic_tokens(result, &self.semantic_legend);
-                    if tokens.is_empty() {
-                        self.semantic.remove(&path);
-                    } else {
-                        self.semantic.insert(path, tokens);
-                    }
-                    self.changed = true;
-                }
-            }
-            PendingKind::Symbols(path) => {
-                self.symbols_in_flight.remove(&path);
-                if self.open_docs.contains_key(&path) {
-                    let symbols = parse_document_symbols(result);
-                    if symbols.is_empty() {
-                        self.symbols.remove(&path);
-                    } else {
-                        self.symbols.insert(path, symbols);
-                    }
-                    self.changed = true;
-                }
-            }
-        }
-    }
-
-    fn respond_to_server(&mut self, id: Value, method: &str, params: &Value) {
+    fn respond_to_server(&self, id: Value, method: &str, params: &Value) {
         let Some(client) = self.client.as_ref() else {
             return;
         };
@@ -992,16 +758,14 @@ impl LspController {
                 let count = params["items"].as_array().map_or(0, Vec::len);
                 Value::Array(vec![Value::Null; count])
             }
-            "workspace/workspaceFolders" => self
-                .root
-                .as_ref()
-                .map(|root| {
-                    json!([{
-                        "uri": path_to_uri(root),
-                        "name": root.file_name().and_then(|name| name.to_str()).unwrap_or("workspace"),
-                    }])
-                })
-                .unwrap_or(Value::Null),
+            "workspace/workspaceFolders" => json!([{
+                "uri": path_to_uri(&self.root),
+                "name": self
+                    .root
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("workspace"),
+            }]),
             "window/showMessageRequest" => Value::Null,
             _ => Value::Null,
         };
@@ -1046,16 +810,43 @@ impl LspController {
         self.changed = true;
     }
 
-    fn sync(&mut self, ws: &Workspace) {
-        let live: HashSet<PathBuf> = ws
-            .tabs
-            .iter()
-            .filter_map(|doc| doc.path().map(Path::to_path_buf))
-            .collect();
+    fn send_position(
+        &mut self,
+        method: &str,
+        kind: PendingKind,
+        path: &Path,
+        doc: &Document,
+        byte: usize,
+    ) -> bool {
+        if self.status != LspStatus::Ready {
+            return false;
+        }
+        let Some(client) = self.client.as_mut() else {
+            return false;
+        };
+        let (line, character) = position_of_byte(doc, byte.min(doc.text().len()));
+        let id = client.request(
+            method,
+            json!({
+                "textDocument": {"uri": path_to_uri(path)},
+                "position": {"line": line, "character": character},
+            }),
+        );
+        if let Some(id) = id {
+            self.pending.insert(id, (kind, Instant::now()));
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Synchronizes the documents this session owns (same spec, same root).
+    fn sync(&mut self, owned: &[PathBuf], ws: &Workspace) {
+        let live: HashSet<&Path> = owned.iter().map(PathBuf::as_path).collect();
         let closed: Vec<PathBuf> = self
             .open_docs
             .keys()
-            .filter(|path| !live.contains(*path))
+            .filter(|path| !live.contains(path.as_path()))
             .cloned()
             .collect();
         for path in closed {
@@ -1078,18 +869,16 @@ impl LspController {
         let now = Instant::now();
         let mut semantic_queue = Vec::new();
         let mut symbol_queue = Vec::new();
-        for doc in &ws.tabs {
-            let Some(path) = doc.path().map(Path::to_path_buf) else {
+        for path in owned {
+            let Some(doc) = ws
+                .tabs
+                .iter()
+                .find(|doc| doc.path() == Some(path.as_path()))
+            else {
                 continue;
             };
-            let Some(spec) = self.spec.as_ref() else {
-                continue;
-            };
-            if !spec.matches_path(&path) {
-                continue;
-            }
-            let uri = path_to_uri(&path);
-            match self.open_docs.get_mut(&path) {
+            let uri = path_to_uri(path);
+            match self.open_docs.get_mut(path) {
                 None => {
                     if let Some(client) = self.client.as_ref() {
                         client.notify(
@@ -1097,7 +886,7 @@ impl LspController {
                             json!({
                                 "textDocument": {
                                     "uri": uri,
-                                    "languageId": spec.language,
+                                    "languageId": self.spec.language_id(path),
                                     "version": 1,
                                     "text": doc.text(),
                                 }
@@ -1113,7 +902,7 @@ impl LspController {
                         },
                     );
                     semantic_queue.push(path.clone());
-                    symbol_queue.push(path);
+                    symbol_queue.push(path.clone());
                 }
                 Some(open) => {
                     if open.rev == doc.rev() {
@@ -1153,124 +942,6 @@ impl LspController {
         }
         self.flush_semantic_requests();
         self.flush_symbol_requests();
-    }
-
-    fn send_position(&mut self, method: &str, kind: PendingKind, doc: &Document) -> bool {
-        self.send_position_at(method, kind, doc, doc.caret())
-    }
-
-    fn send_position_at(
-        &mut self,
-        method: &str,
-        kind: PendingKind,
-        doc: &Document,
-        byte: usize,
-    ) -> bool {
-        if self.status != LspStatus::Ready {
-            return false;
-        }
-        let Some(path) = doc.path() else {
-            return false;
-        };
-        if !self
-            .spec
-            .as_ref()
-            .is_some_and(|spec| spec.matches_path(path))
-        {
-            return false;
-        }
-        let Some(client) = self.client.as_mut() else {
-            return false;
-        };
-        let (line, character) = position_of_byte(doc, byte.min(doc.text().len()));
-        let id = client.request(
-            method,
-            json!({
-                "textDocument": {"uri": path_to_uri(path)},
-                "position": {"line": line, "character": character},
-            }),
-        );
-        if let Some(id) = id {
-            self.pending.insert(id, (kind, Instant::now()));
-            true
-        } else {
-            false
-        }
-    }
-
-    fn cancel_popup_requests(&mut self) {
-        self.pending.retain(|_, (kind, _)| {
-            !matches!(
-                kind,
-                PendingKind::Hover
-                    | PendingKind::Completion
-                    | PendingKind::CompletionResolve { .. }
-            )
-        });
-    }
-
-    pub fn request_hover(&mut self, doc: &Document) -> bool {
-        self.hover = None;
-        self.hover_anchor = None;
-        self.completion = None;
-        self.cancel_popup_requests();
-        self.send_position("textDocument/hover", PendingKind::Hover, doc)
-    }
-
-    /// Hover at an arbitrary byte (mouse hover) with a viewport anchor.
-    pub fn request_hover_at(
-        &mut self,
-        doc: &Document,
-        byte: usize,
-        anchor: igui_core::Vec2,
-    ) -> bool {
-        // Keep the previous card until the new response arrives; this avoids a
-        // flicker while the pointer moves between identifiers.
-        self.hover_anchor = Some(anchor);
-        self.completion = None;
-        self.cancel_popup_requests();
-        self.send_position_at("textDocument/hover", PendingKind::Hover, doc, byte)
-    }
-
-    /// Ctrl/Cmd-click documentation probe: ask for hover at a byte and let the
-    /// caller open native docs if the declaration is a native symbol.
-    pub fn request_native_docs_at(&mut self, doc: &Document, byte: usize) -> bool {
-        self.native_docs_target = None;
-        self.send_position_at("textDocument/hover", PendingKind::HoverDocs, doc, byte)
-    }
-
-    pub fn take_native_docs_target(&mut self) -> Option<NativeTarget> {
-        self.native_docs_target.take()
-    }
-
-    pub fn request_completion(&mut self, doc: &Document) -> bool {
-        self.completion = None;
-        self.hover = None;
-        self.cancel_popup_requests();
-        self.completion_prefix = completion_prefix(doc);
-        self.send_position("textDocument/completion", PendingKind::Completion, doc)
-    }
-
-    pub fn request_definition(&mut self, doc: &Document) -> bool {
-        self.hover = None;
-        self.hover_anchor = None;
-        self.completion = None;
-        self.cancel_popup_requests();
-        self.send_position("textDocument/definition", PendingKind::Definition, doc)
-    }
-
-    /// Definition at an arbitrary byte (Ctrl/Cmd-click).
-    pub fn request_definition_at(&mut self, doc: &Document, byte: usize) -> bool {
-        self.hover = None;
-        self.hover_anchor = None;
-        self.completion = None;
-        self.cancel_popup_requests();
-        self.send_position_at(
-            "textDocument/definition",
-            PendingKind::Definition,
-            doc,
-            byte,
-        )
     }
 
     fn flush_semantic_requests(&mut self) {
@@ -1324,12 +995,754 @@ impl LspController {
         }
     }
 
+    fn cache_native_classes(&mut self, params: &Value) {
+        let Some(items) = params.get("native_classes").and_then(Value::as_array) else {
+            return;
+        };
+        self.native_classes.clear();
+        for item in items {
+            if let Some(name) = item.get("name").and_then(Value::as_str) {
+                self.native_classes.insert(name.to_string());
+            }
+        }
+    }
+
+    /// Removes timed-out requests; returns the kinds the controller still has to
+    /// resolve for the active session.
+    fn expire_pending(&mut self) -> Vec<PendingKind> {
+        let expired: Vec<u64> = self
+            .pending
+            .iter()
+            .filter(|(_, (_, sent))| sent.elapsed() >= Duration::from_secs(15))
+            .map(|(id, _)| *id)
+            .collect();
+        let mut out = Vec::new();
+        for id in expired {
+            match self.pending.remove(&id).map(|(kind, _)| kind) {
+                Some(PendingKind::Semantic(path)) => {
+                    self.semantic_in_flight.remove(&path);
+                }
+                Some(PendingKind::Symbols(path)) => {
+                    self.symbols_in_flight.remove(&path);
+                }
+                Some(kind) => out.push(kind),
+                None => {}
+            }
+        }
+        out
+    }
+
+    fn diagnostics_for(&self, path: &Path) -> &[Diagnostic] {
+        self.diagnostics.get(path).map(Vec::as_slice).unwrap_or(&[])
+    }
+}
+
+/// Cache of `(spec, file) → project root`. Root resolution stats marker files,
+/// so a frame must not walk the tree for every open tab.
+#[derive(Default)]
+struct RootCache {
+    entries: HashMap<(String, PathBuf), Option<PathBuf>>,
+    bound: Option<PathBuf>,
+}
+
+impl RootCache {
+    fn sync_bound(&mut self, ws: &Workspace) {
+        let bound = ws
+            .folder()
+            .map(|folder| std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf()));
+        if self.bound != bound {
+            self.bound = bound;
+            self.entries.clear();
+        }
+    }
+
+    fn forget(&mut self, path: &Path) {
+        self.entries.retain(|(_, candidate), _| candidate != path);
+    }
+
+    /// Drops entries for files that are no longer open, so a long session with
+    /// many opened files cannot grow the cache without bound.
+    fn retain(&mut self, live: &HashSet<&Path>) {
+        self.entries
+            .retain(|(_, path), _| live.contains(path.as_path()));
+    }
+
+    fn root(&mut self, spec: &LanguageServerSpec, path: &Path) -> Option<PathBuf> {
+        let key = (spec.id.clone(), path.to_path_buf());
+        if let Some(root) = self.entries.get(&key) {
+            return root.clone();
+        }
+        let root = project_root(path, spec, self.bound.as_deref());
+        self.entries.insert(key, root.clone());
+        root
+    }
+}
+
+/// The application-side LSP state: one server per `(language, project root)`,
+/// open-document synchronization, diagnostics and the latest hover/completion
+/// popup. Transient UI belongs to the active session and is cleared on switch.
+pub struct LspController {
+    sessions: Vec<Session>,
+    active: Option<usize>,
+    specs: Vec<LanguageServerSpec>,
+    roots: RootCache,
+    last_active_path: Option<PathBuf>,
+    failed: HashMap<(String, PathBuf), Instant>,
+    notified: HashSet<String>,
+    issue: Option<LspIssue>,
+    enabled: bool,
+    changed: bool,
+    pub hover: Option<HoverUi>,
+    pub hover_anchor: Option<igui_core::Vec2>,
+    /// Last painted hover card, used to keep it alive while the pointer enters it.
+    pub hover_rect: igui_core::Rect,
+    /// Hit rectangle for the hover card's "Open Docs" action.
+    pub hover_doc_hit: igui_core::Rect,
+    /// Hit rectangle for the completion preview's docs action.
+    pub completion_doc_hit: igui_core::Rect,
+    pub completion: Option<CompletionUi>,
+    completion_prefix: String,
+    native_docs_target: Option<NativeTarget>,
+    location: Option<Location>,
+    native_result: Option<(String, String, NativeSymbol)>,
+}
+
+/// Live servers kept at once (one per language root). Older idle sessions are
+/// dropped and restarted on demand.
+const MAX_SESSIONS: usize = 4;
+const IDLE_TIMEOUT: Duration = Duration::from_secs(600);
+
+impl Default for LspController {
+    fn default() -> Self {
+        Self {
+            sessions: Vec::new(),
+            active: None,
+            specs: Vec::new(),
+            roots: RootCache::default(),
+            last_active_path: None,
+            failed: HashMap::new(),
+            notified: HashSet::new(),
+            issue: None,
+            enabled: true,
+            changed: false,
+            hover: None,
+            hover_anchor: None,
+            hover_rect: igui_core::Rect::ZERO,
+            hover_doc_hit: igui_core::Rect::ZERO,
+            completion_doc_hit: igui_core::Rect::ZERO,
+            completion: None,
+            completion_prefix: String::new(),
+            native_docs_target: None,
+            location: None,
+            native_result: None,
+        }
+    }
+}
+
+impl LspController {
+    pub fn status(&self) -> &LspStatus {
+        static OFF: LspStatus = LspStatus::Off;
+        self.active_session()
+            .map(|session| &session.status)
+            .unwrap_or(&OFF)
+    }
+
+    /// Whether language servers are enabled (settings/footer toggle).
+    pub fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Applies the persisted on/off switch. Disabling kills every child.
+    pub fn set_enabled(&mut self, enabled: bool) {
+        if self.enabled == enabled {
+            return;
+        }
+        self.enabled = enabled;
+        if !enabled {
+            self.stop_all();
+        }
+        self.changed = true;
+    }
+
+    /// A missing-tool prompt waiting for the UI.
+    pub fn take_issue(&mut self) -> Option<LspIssue> {
+        self.issue.take()
+    }
+
+    /// Clears the retry back-off (tooling prompt `RETRY`).
+    pub fn retry(&mut self) {
+        self.failed.clear();
+        self.notified.clear();
+        self.issue = None;
+        for session in &mut self.sessions {
+            if session.client.is_none() {
+                session.status = LspStatus::Off;
+            }
+        }
+        self.changed = true;
+    }
+
+    fn stop_all(&mut self) {
+        self.sessions.clear();
+        self.active = None;
+        self.failed.clear();
+        self.notified.clear();
+        self.issue = None;
+        self.clear_transient();
+    }
+
+    fn clear_transient(&mut self) {
+        self.hover = None;
+        self.hover_anchor = None;
+        self.hover_rect = igui_core::Rect::ZERO;
+        self.hover_doc_hit = igui_core::Rect::ZERO;
+        self.completion_doc_hit = igui_core::Rect::ZERO;
+        self.completion = None;
+        self.completion_prefix.clear();
+        self.native_docs_target = None;
+        self.location = None;
+        self.native_result = None;
+        self.changed = true;
+    }
+
+    fn active_session(&self) -> Option<&Session> {
+        self.active.and_then(|index| self.sessions.get(index))
+    }
+
+    fn active_session_mut(&mut self) -> Option<&mut Session> {
+        self.active.and_then(|index| self.sessions.get_mut(index))
+    }
+
+    /// The session that owns `path` (diagnostics, semantic tokens, symbols).
+    fn session_for_path(&self, path: &Path) -> Option<&Session> {
+        self.sessions
+            .iter()
+            .find(|session| {
+                session.diagnostics.contains_key(path)
+                    || session.semantic.contains_key(path)
+                    || session.symbols.contains_key(path)
+                    || session.open_docs.contains_key(path)
+            })
+            .or_else(|| {
+                self.sessions.iter().find(|session| {
+                    session.spec.matches_path(path) && path.starts_with(&session.root)
+                })
+            })
+            .or_else(|| {
+                self.sessions
+                    .iter()
+                    .find(|session| session.spec.matches_path(path))
+            })
+    }
+
+    /// Whether a popup/diagnostic/status changed since the last frame.
+    pub fn take_changed(&mut self) -> bool {
+        let mut changed = std::mem::take(&mut self.changed);
+        for session in &mut self.sessions {
+            changed |= std::mem::take(&mut session.changed);
+        }
+        changed
+    }
+
+    pub fn supports(&self, path: &Path) -> bool {
+        self.enabled && self.specs.iter().any(|spec| spec.matches_path(path))
+    }
+
+    pub fn is_busy(&self) -> bool {
+        self.enabled
+            && self.sessions.iter().any(|session| {
+                matches!(session.status, LspStatus::Starting)
+                    || session
+                        .open_docs
+                        .values()
+                        .any(|doc| doc.changed_at.is_some())
+                    || !session.pending.is_empty()
+            })
+    }
+
+    /// Starts or reuses servers for the active document and synchronizes every
+    /// open document each server owns. Safe to call every frame.
+    pub fn tick(&mut self, ws: &Workspace, servers: &[LanguageServerSpec], enabled: bool) {
+        self.set_enabled(enabled);
+        if !self.enabled {
+            return;
+        }
+        if self.specs != servers {
+            self.specs = servers.to_vec();
+        }
+        self.roots.sync_bound(ws);
+
+        let active_path = ws
+            .active_doc()
+            .and_then(|doc| doc.path())
+            .map(Path::to_path_buf);
+        if self.last_active_path != active_path {
+            if let Some(path) = &active_path {
+                self.roots.forget(path);
+            }
+            self.last_active_path = active_path.clone();
+        }
+        let live: HashSet<&Path> = ws.tabs.iter().filter_map(|doc| doc.path()).collect();
+        self.roots.retain(&live);
+
+        let desired = active_path.as_ref().and_then(|path| {
+            self.specs.iter().find_map(|spec| {
+                if !spec.matches_path(path) {
+                    return None;
+                }
+                self.roots.root(spec, path).map(|root| (spec.clone(), root))
+            })
+        });
+        let previous = self.active;
+        // A docs/untitled tab has no path; keep the previous session active so
+        // Godot documentation links can still request nativeSymbol.
+        if let Some((spec, root)) = desired {
+            let index = self
+                .sessions
+                .iter()
+                .position(|session| session.spec.id == spec.id && session.root == root)
+                .unwrap_or_else(|| {
+                    self.sessions.push(Session::new(spec, root));
+                    self.sessions.len() - 1
+                });
+            self.sessions[index].last_active = Instant::now();
+            self.active = Some(index);
+        }
+        if self.active != previous {
+            self.clear_transient();
+        }
+
+        if let Some(index) = self.active {
+            if self.sessions[index].client.is_none() {
+                self.start(index);
+            }
+        }
+
+        for index in 0..self.sessions.len() {
+            let expired = self.sessions[index].expire_pending();
+            if self.active == Some(index) {
+                self.apply_expired(expired);
+            }
+        }
+        self.poll();
+        for index in 0..self.sessions.len() {
+            if self.sessions[index].status == LspStatus::Ready {
+                self.sync_owned(index, ws);
+            }
+        }
+        self.evict();
+    }
+
+    fn apply_expired(&mut self, expired: Vec<PendingKind>) {
+        for kind in expired {
+            match kind {
+                PendingKind::CompletionResolve { index } => {
+                    if let Some(completion) = self.completion.as_mut() {
+                        if completion.selected == index {
+                            completion.preview_pending = false;
+                            completion.preview = Some("Documentation request timed out.".into());
+                        }
+                    }
+                }
+                PendingKind::NativeSymbol { class, symbol } => {
+                    self.native_result = Some((
+                        class.clone(),
+                        symbol.clone(),
+                        NativeSymbol {
+                            name: symbol,
+                            native_class: class,
+                            detail: "Documentation unavailable".into(),
+                            documentation:
+                                "The language server did not return documentation for this symbol."
+                                    .into(),
+                            kind: 0,
+                            children: Vec::new(),
+                        },
+                    ));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn start(&mut self, index: usize) {
+        let spec = self.sessions[index].spec.clone();
+        let root = self.sessions[index].root.clone();
+        let key = (spec.id.clone(), root.clone());
+        if self
+            .failed
+            .get(&key)
+            .is_some_and(|at| at.elapsed() < RETRY_AFTER)
+        {
+            return;
+        }
+        match LspClient::spawn(&spec, &root) {
+            Ok(mut client) => {
+                let params = initialize_params(&root, &spec);
+                if let Some(id) = client.request("initialize", params) {
+                    self.sessions[index]
+                        .pending
+                        .insert(id, (PendingKind::Initialize, Instant::now()));
+                }
+                self.sessions[index].client = Some(client);
+                self.sessions[index].status = LspStatus::Starting;
+                self.failed.remove(&key);
+            }
+            Err(error) => {
+                self.sessions[index].status =
+                    LspStatus::Error(format!("{}: {error}", spec.command));
+                self.failed.insert(key, Instant::now());
+                let missing = error.kind() == io::ErrorKind::NotFound;
+                if missing && self.notified.insert(spec.id.clone()) {
+                    let install = spec.install.clone().unwrap_or_else(|| ToolInstall {
+                        tool: spec.command.clone(),
+                        language: spec.language.clone(),
+                        command: String::new(),
+                        note: None,
+                    });
+                    self.issue = Some(LspIssue {
+                        tool: install.tool,
+                        language: install.language,
+                        command: install.command,
+                        note: install.note,
+                        source: spec.command.clone(),
+                        root,
+                    });
+                }
+            }
+        }
+        self.changed = true;
+    }
+
+    fn sync_owned(&mut self, index: usize, ws: &Workspace) {
+        let spec = self.sessions[index].spec.clone();
+        let root = self.sessions[index].root.clone();
+        let mut owned = Vec::new();
+        for doc in &ws.tabs {
+            let Some(path) = doc.path() else {
+                continue;
+            };
+            if !spec.matches_path(path) {
+                continue;
+            }
+            if self.roots.root(&spec, path).as_deref() != Some(root.as_path()) {
+                continue;
+            }
+            owned.push(path.to_path_buf());
+        }
+        self.sessions[index].sync(&owned, ws);
+    }
+
+    fn evict(&mut self) {
+        let now = Instant::now();
+        let active = self.active;
+        let mut keep: Vec<bool> = self
+            .sessions
+            .iter()
+            .enumerate()
+            .map(|(index, session)| {
+                Some(index) == active || now.duration_since(session.last_active) <= IDLE_TIMEOUT
+            })
+            .collect();
+        while keep.iter().filter(|keep| **keep).count() > MAX_SESSIONS {
+            let victim = self
+                .sessions
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| Some(*index) != active && keep[*index])
+                .min_by_key(|(_, session)| session.last_active)
+                .map(|(index, _)| index);
+            let Some(victim) = victim else {
+                break;
+            };
+            keep[victim] = false;
+        }
+        let mut index = 0;
+        while index < self.sessions.len() {
+            if keep[index] {
+                index += 1;
+                continue;
+            }
+            self.sessions.remove(index);
+            if let Some(active) = self.active {
+                if active > index {
+                    self.active = Some(active - 1);
+                } else if active == index {
+                    self.active = None;
+                }
+            }
+        }
+    }
+
+    fn poll(&mut self) {
+        for index in 0..self.sessions.len() {
+            let mut events = Vec::new();
+            if let Some(client) = self.sessions[index].client.as_ref() {
+                while let Some(event) = client.try_recv() {
+                    events.push(event);
+                }
+            }
+            for event in events {
+                match event {
+                    ClientEvent::Message(message) => self.handle_message(index, message),
+                    ClientEvent::ReadError(error) => {
+                        let root = self.sessions[index].root.clone();
+                        let id = self.sessions[index].spec.id.clone();
+                        self.failed.insert((id, root), Instant::now());
+                        self.sessions[index].status = LspStatus::Error(error);
+                        self.sessions[index].client = None;
+                        self.sessions[index].reset_protocol();
+                        self.sessions[index].changed = true;
+                    }
+                }
+            }
+        }
+    }
+
+    fn handle_message(&mut self, index: usize, message: Value) {
+        let is_active = self.active == Some(index);
+        let method = message
+            .get("method")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        if let Some(method) = method {
+            if let Some(id) = message.get("id").cloned() {
+                self.sessions[index].respond_to_server(id, &method, &message["params"]);
+            } else if method == "textDocument/publishDiagnostics" {
+                self.sessions[index].publish_diagnostics(&message["params"]);
+            } else if method == "gdscript/capabilities" {
+                self.sessions[index].cache_native_classes(&message["params"]);
+            }
+            return;
+        }
+        let Some(id) = message.get("id").and_then(Value::as_u64) else {
+            return;
+        };
+        let Some((kind, _)) = self.sessions[index].pending.remove(&id) else {
+            return;
+        };
+        let result = message.get("result").cloned().unwrap_or(Value::Null);
+        let error = message.get("error").cloned();
+        match kind {
+            PendingKind::Initialize => {
+                if let Some(error) = error {
+                    self.sessions[index].status = LspStatus::Error(format!("initialize: {error}"));
+                    let root = self.sessions[index].root.clone();
+                    let id = self.sessions[index].spec.id.clone();
+                    self.failed.insert((id, root), Instant::now());
+                    self.sessions[index].client = None;
+                    self.sessions[index].reset_protocol();
+                } else {
+                    self.sessions[index].status = LspStatus::Ready;
+                    let (supported, legend) = semantic_capability(&result);
+                    self.sessions[index].semantic_supported = supported;
+                    self.sessions[index].semantic_legend = legend;
+                    if let Some(client) = self.sessions[index].client.as_ref() {
+                        client.notify("initialized", json!({}));
+                    }
+                }
+                self.sessions[index].changed = true;
+            }
+            PendingKind::Hover => {
+                if is_active {
+                    self.hover = hover_ui(&result);
+                    self.changed = true;
+                }
+            }
+            PendingKind::HoverDocs => {
+                if is_active {
+                    self.native_docs_target = hover_ui(&result).and_then(|hover| hover.native);
+                    self.changed = true;
+                }
+            }
+            PendingKind::Completion => {
+                if is_active {
+                    let items = parse_completions(&result, &self.completion_prefix);
+                    self.completion = (!items.is_empty()).then_some(CompletionUi {
+                        items,
+                        selected: 0,
+                        preview: None,
+                        preview_pending: false,
+                        native: None,
+                    });
+                    if self.completion.is_some() {
+                        self.request_completion_resolve(0);
+                    }
+                    self.changed = true;
+                }
+            }
+            PendingKind::CompletionResolve { index } => {
+                if is_active {
+                    if let Some(completion) = self.completion.as_mut() {
+                        if completion.selected == index {
+                            let text = completion_documentation(&result).or_else(|| {
+                                completion.items.get(index).map(|item| item.detail.clone())
+                            });
+                            completion.preview = text;
+                            completion.preview_pending = false;
+                            completion.native = completion
+                                .preview
+                                .as_deref()
+                                .and_then(native_target_from_hover);
+                            self.changed = true;
+                        }
+                    }
+                }
+            }
+            PendingKind::Definition => {
+                if is_active {
+                    self.location = parse_location(&result);
+                    self.changed = true;
+                }
+            }
+            PendingKind::NativeSymbol { class, symbol } => {
+                if let Some(parsed) = parse_native_symbol(&result) {
+                    self.sessions[index]
+                        .native_symbols
+                        .insert((class.clone(), symbol.clone()), parsed.clone());
+                    // Documentation tabs are not files, so the request may be
+                    // answered after the active document stopped being a path.
+                    self.native_result = Some((class, symbol, parsed));
+                    self.changed = true;
+                }
+            }
+            PendingKind::Semantic(path) => {
+                self.sessions[index].semantic_in_flight.remove(&path);
+                if self.sessions[index].open_docs.contains_key(&path) {
+                    let tokens =
+                        parse_semantic_tokens(&result, &self.sessions[index].semantic_legend);
+                    if tokens.is_empty() {
+                        self.sessions[index].semantic.remove(&path);
+                    } else {
+                        self.sessions[index].semantic.insert(path, tokens);
+                    }
+                    self.sessions[index].changed = true;
+                }
+            }
+            PendingKind::Symbols(path) => {
+                self.sessions[index].symbols_in_flight.remove(&path);
+                if self.sessions[index].open_docs.contains_key(&path) {
+                    let symbols = parse_document_symbols(&result);
+                    if symbols.is_empty() {
+                        self.sessions[index].symbols.remove(&path);
+                    } else {
+                        self.sessions[index].symbols.insert(path, symbols);
+                    }
+                    self.sessions[index].changed = true;
+                }
+            }
+        }
+    }
+
+    fn send_position(&mut self, method: &str, kind: PendingKind, doc: &Document) -> bool {
+        self.send_position_at(method, kind, doc, doc.caret())
+    }
+
+    fn send_position_at(
+        &mut self,
+        method: &str,
+        kind: PendingKind,
+        doc: &Document,
+        byte: usize,
+    ) -> bool {
+        let Some(path) = doc.path() else {
+            return false;
+        };
+        let Some(session) = self.active_session_mut() else {
+            return false;
+        };
+        if !session.spec.matches_path(path) {
+            return false;
+        }
+        session.send_position(method, kind, path, doc, byte)
+    }
+
+    pub fn request_hover(&mut self, doc: &Document) -> bool {
+        self.hover = None;
+        self.hover_anchor = None;
+        self.completion = None;
+        if let Some(session) = self.active_session_mut() {
+            session.cancel_popup_requests();
+        }
+        self.send_position("textDocument/hover", PendingKind::Hover, doc)
+    }
+
+    /// Hover at an arbitrary byte (mouse hover) with a viewport anchor.
+    pub fn request_hover_at(
+        &mut self,
+        doc: &Document,
+        byte: usize,
+        anchor: igui_core::Vec2,
+    ) -> bool {
+        // Keep the previous card until the new response arrives; this avoids a
+        // flicker while the pointer moves between identifiers.
+        self.hover_anchor = Some(anchor);
+        self.completion = None;
+        if let Some(session) = self.active_session_mut() {
+            session.cancel_popup_requests();
+        }
+        self.send_position_at("textDocument/hover", PendingKind::Hover, doc, byte)
+    }
+
+    /// Ctrl/Cmd-click documentation probe: ask for hover at a byte and let the
+    /// caller open native docs if the declaration is a native symbol.
+    pub fn request_native_docs_at(&mut self, doc: &Document, byte: usize) -> bool {
+        self.native_docs_target = None;
+        self.send_position_at("textDocument/hover", PendingKind::HoverDocs, doc, byte)
+    }
+
+    pub fn take_native_docs_target(&mut self) -> Option<NativeTarget> {
+        self.native_docs_target.take()
+    }
+
+    pub fn request_completion(&mut self, doc: &Document) -> bool {
+        self.completion = None;
+        self.hover = None;
+        if let Some(session) = self.active_session_mut() {
+            session.cancel_popup_requests();
+        }
+        self.completion_prefix = completion_prefix(doc);
+        self.send_position("textDocument/completion", PendingKind::Completion, doc)
+    }
+
+    pub fn request_definition(&mut self, doc: &Document) -> bool {
+        self.hover = None;
+        self.hover_anchor = None;
+        self.completion = None;
+        if let Some(session) = self.active_session_mut() {
+            session.cancel_popup_requests();
+        }
+        self.send_position("textDocument/definition", PendingKind::Definition, doc)
+    }
+
+    /// Definition at an arbitrary byte (Ctrl/Cmd-click).
+    pub fn request_definition_at(&mut self, doc: &Document, byte: usize) -> bool {
+        self.hover = None;
+        self.hover_anchor = None;
+        self.completion = None;
+        if let Some(session) = self.active_session_mut() {
+            session.cancel_popup_requests();
+        }
+        self.send_position_at(
+            "textDocument/definition",
+            PendingKind::Definition,
+            doc,
+            byte,
+        )
+    }
+
     pub fn symbols_for(&self, path: &Path) -> &[OutlineSymbol] {
-        self.symbols.get(path).map(Vec::as_slice).unwrap_or(&[])
+        self.session_for_path(path)
+            .and_then(|session| session.symbols.get(path))
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     pub fn semantic_for(&self, path: &Path) -> &[SemanticToken] {
-        self.semantic.get(path).map(Vec::as_slice).unwrap_or(&[])
+        self.session_for_path(path)
+            .and_then(|session| session.semantic.get(path))
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     pub fn semantic_color(
@@ -1374,19 +1787,23 @@ impl LspController {
         else {
             return;
         };
-        let Some(client) = self.client.as_mut() else {
+        let Some(session) = self.active_session_mut() else {
             return;
         };
-        if let Some(id) = client.request("completionItem/resolve", item.raw) {
-            if let Some(completion) = self.completion.as_mut() {
-                completion.preview_pending = true;
-                completion.preview = None;
-                completion.native = None;
-            }
-            self.pending.insert(
-                id,
-                (PendingKind::CompletionResolve { index }, Instant::now()),
-            );
+        let Some(client) = session.client.as_mut() else {
+            return;
+        };
+        let Some(id) = client.request("completionItem/resolve", item.raw) else {
+            return;
+        };
+        session.pending.insert(
+            id,
+            (PendingKind::CompletionResolve { index }, Instant::now()),
+        );
+        if let Some(completion) = self.completion.as_mut() {
+            completion.preview_pending = true;
+            completion.preview = None;
+            completion.native = None;
         }
     }
 
@@ -1415,51 +1832,59 @@ impl LspController {
         self.hover_doc_hit = igui_core::Rect::ZERO;
         self.completion_doc_hit = igui_core::Rect::ZERO;
         self.completion = None;
-        self.cancel_popup_requests();
+        if let Some(session) = self.active_session_mut() {
+            session.cancel_popup_requests();
+        }
     }
 
     /// Whether `name` is one of Godot's native classes (e.g. `Node`).
     pub fn is_native_class(&self, name: &str) -> bool {
-        self.native_classes.contains(name)
+        self.active_session()
+            .is_some_and(|session| session.native_classes.contains(name))
     }
 
     /// A cached native class/member document, if already fetched.
     pub fn native_symbol_cached(&self, class: &str, symbol: &str) -> Option<NativeSymbol> {
-        self.native_symbols
-            .get(&(class.to_string(), symbol.to_string()))
+        self.active_session()
+            .and_then(|session| {
+                session
+                    .native_symbols
+                    .get(&(class.to_string(), symbol.to_string()))
+            })
             .cloned()
     }
 
     /// Fetches a native class/member document through Godot's custom
     /// `textDocument/nativeSymbol` request.
     pub fn request_native_symbol(&mut self, class: &str, symbol: &str) -> bool {
-        if self
+        let Some(session) = self.active_session_mut() else {
+            return false;
+        };
+        if session
             .native_symbols
             .contains_key(&(class.to_string(), symbol.to_string()))
         {
             return true;
         }
-        if self.status != LspStatus::Ready {
+        if session.status != LspStatus::Ready {
             return false;
         }
-        let Some(client) = self.client.as_mut() else {
+        let pending = (
+            PendingKind::NativeSymbol {
+                class: class.to_string(),
+                symbol: symbol.to_string(),
+            },
+            Instant::now(),
+        );
+        let Some(client) = session.client.as_mut() else {
             return false;
         };
-        let id = client.request(
+        let request = client.request(
             "textDocument/nativeSymbol",
             json!({"native_class": class, "symbol_name": symbol}),
         );
-        if let Some(id) = id {
-            self.pending.insert(
-                id,
-                (
-                    PendingKind::NativeSymbol {
-                        class: class.to_string(),
-                        symbol: symbol.to_string(),
-                    },
-                    Instant::now(),
-                ),
-            );
+        if let Some(id) = request {
+            session.pending.insert(id, pending);
             true
         } else {
             false
@@ -1470,20 +1895,10 @@ impl LspController {
         self.native_result.take()
     }
 
-    fn cache_native_classes(&mut self, params: &Value) {
-        let Some(items) = params.get("native_classes").and_then(Value::as_array) else {
-            return;
-        };
-        self.native_classes.clear();
-        for item in items {
-            if let Some(name) = item.get("name").and_then(Value::as_str) {
-                self.native_classes.insert(name.to_string());
-            }
-        }
-    }
-
     pub fn diagnostics_for(&self, path: &Path) -> &[Diagnostic] {
-        self.diagnostics.get(path).map(Vec::as_slice).unwrap_or(&[])
+        self.session_for_path(path)
+            .map(|session| session.diagnostics_for(path))
+            .unwrap_or(&[])
     }
 
     pub fn diagnostic_color(&self, severity: u32, p: &crate::theme::Palette) -> igui_core::Color {
@@ -1523,20 +1938,17 @@ impl LspController {
     /// Footer summary for the active document. `None` hides the fact entirely.
     pub fn summary(&self, path: Option<&Path>) -> Option<String> {
         let path = path?;
-        if !self
-            .spec
-            .as_ref()
-            .is_some_and(|spec| spec.matches_path(path))
-        {
-            return None;
+        if !self.enabled {
+            return Some("LSP OFF".into());
         }
-        if matches!(self.status, LspStatus::Error(_)) {
+        let session = self.session_for_path(path)?;
+        if matches!(session.status, LspStatus::Error(_)) {
             return Some("LSP ERR".into());
         }
-        if !matches!(self.status, LspStatus::Ready | LspStatus::Starting) {
+        if !matches!(session.status, LspStatus::Ready | LspStatus::Starting) {
             return None;
         }
-        let diagnostics = self.diagnostics_for(path);
+        let diagnostics = session.diagnostics_for(path);
         if diagnostics.is_empty() {
             return Some("LSP".into());
         }
@@ -1935,6 +2347,126 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
+    fn fixture_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("igui-lsp-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn workspace_marker_wins_over_nested_package_marker() {
+        let dir = fixture_dir("monorepo-go");
+        std::fs::create_dir_all(dir.join("a")).unwrap();
+        std::fs::create_dir_all(dir.join("b")).unwrap();
+        std::fs::write(dir.join("go.work"), "go 1.22\n").unwrap();
+        std::fs::write(dir.join("a/go.mod"), "module a\n").unwrap();
+        std::fs::write(dir.join("b/go.mod"), "module b\n").unwrap();
+        let spec = crate::services::go::go_server();
+        let bound = std::fs::canonicalize(&dir).unwrap();
+        let root = project_root(&dir.join("a/main.go"), &spec, Some(&bound)).unwrap();
+        assert_eq!(root, std::fs::canonicalize(&dir).unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn nearest_package_marker_is_used_without_a_workspace_marker() {
+        let dir = fixture_dir("monorepo-package");
+        std::fs::create_dir_all(dir.join("a/src")).unwrap();
+        std::fs::write(dir.join("a/go.mod"), "module a\n").unwrap();
+        let spec = crate::services::go::go_server();
+        let bound = std::fs::canonicalize(&dir).unwrap();
+        let root = project_root(&dir.join("a/src/main.go"), &spec, Some(&bound)).unwrap();
+        assert_eq!(root, std::fs::canonicalize(dir.join("a")).unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn workspace_markers_are_found_above_the_open_folder() {
+        let dir = fixture_dir("monorepo-bound");
+        std::fs::create_dir_all(dir.join("packages/web/src")).unwrap();
+        std::fs::write(dir.join("pnpm-workspace.yaml"), "packages: []\n").unwrap();
+        std::fs::write(dir.join("packages/web/package.json"), "{}\n").unwrap();
+        let spec = crate::services::typescript::typescript_server();
+        // Opening a single file inside a package still finds the repository
+        // workspace root, so one server serves every package.
+        let bound = std::fs::canonicalize(dir.join("packages/web")).unwrap();
+        let root = project_root(&dir.join("packages/web/src/a.ts"), &spec, Some(&bound)).unwrap();
+        assert_eq!(root, std::fs::canonicalize(&dir).unwrap());
+        let root = project_root(&dir.join("packages/web/src/a.ts"), &spec, None).unwrap();
+        assert_eq!(root, std::fs::canonicalize(&dir).unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn loose_file_servers_fall_back_to_the_file_folder() {
+        let dir = fixture_dir("loose");
+        let spec = crate::services::python::python_server();
+        let root = project_root(&dir.join("script.py"), &spec, None).unwrap();
+        assert_eq!(root, std::fs::canonicalize(&dir).unwrap());
+        // A marker-only server refuses to start outside a project.
+        let rust = crate::services::lsp::rust_server();
+        assert!(project_root(&dir.join("loose.rs"), &rust, None).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn language_ids_follow_the_session_spec() {
+        let ts = crate::services::typescript::typescript_server();
+        assert_eq!(ts.language_id(Path::new("/p/app.tsx")), "typescriptreact");
+        let c = crate::services::clang::clang_server();
+        assert_eq!(c.language_id(Path::new("/p/main.h")), "c");
+        assert_eq!(c.language_id(Path::new("/p/main.cpp")), "cpp");
+    }
+
+    #[test]
+    fn sessions_are_keyed_by_spec_and_root() {
+        let dir = fixture_dir("sessions");
+        std::fs::create_dir_all(dir.join("a")).unwrap();
+        std::fs::create_dir_all(dir.join("b")).unwrap();
+        std::fs::write(dir.join("a/go.mod"), "module a\n").unwrap();
+        std::fs::write(dir.join("b/go.mod"), "module b\n").unwrap();
+        let spec = crate::services::go::go_server();
+        let mut lsp = LspController {
+            specs: vec![spec.clone()],
+            sessions: vec![
+                Session::new(spec.clone(), dir.join("a")),
+                Session::new(spec.clone(), dir.join("b")),
+            ],
+            active: Some(0),
+            ..LspController::default()
+        };
+        lsp.sessions[0]
+            .diagnostics
+            .insert(dir.join("a/main.go"), Vec::new());
+        lsp.sessions[1]
+            .diagnostics
+            .insert(dir.join("b/main.go"), Vec::new());
+        assert!(lsp.enabled());
+        assert!(lsp.supports(&dir.join("a/main.go")));
+        assert_eq!(
+            lsp.session_for_path(&dir.join("b/main.go"))
+                .map(|session| session.root.as_path()),
+            Some(dir.join("b").as_path())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn disabling_drops_every_session() {
+        let spec = crate::services::go::go_server();
+        let mut lsp = LspController::default();
+        lsp.sessions.push(Session::new(spec, PathBuf::from("/tmp")));
+        lsp.active = Some(0);
+        lsp.set_enabled(false);
+        assert!(!lsp.enabled());
+        assert!(lsp.sessions.is_empty());
+        assert_eq!(
+            lsp.summary(Some(Path::new("/tmp/a.go"))).as_deref(),
+            Some("LSP OFF")
+        );
+    }
+
     #[test]
     fn uri_round_trip_encodes_spaces() {
         let path = Path::new("/tmp/a b/ünicode.rs");
@@ -1966,12 +2498,16 @@ mod tests {
             language: "gdscript".into(),
             extensions: vec!["gd".into()],
             project_markers: vec![],
+            workspace_markers: vec![],
+            language_ids: Default::default(),
+            loose_files: false,
             command: "/bin/sh".into(),
             command_env: None,
             args: vec!["-c".into(), "sleep 30".into()],
             transport: crate::services::LanguageServerTransport::Tcp,
             port_arg: None,
             port: Some(port),
+            install: None,
         };
         let mut client = LspClient::spawn(&spec, Path::new("/tmp")).unwrap();
         let (stream, _) = listener.accept().unwrap();
@@ -2061,7 +2597,12 @@ mod tests {
     #[test]
     fn native_capabilities_populate_the_class_index() {
         let mut lsp = LspController::default();
-        lsp.cache_native_classes(&json!({
+        lsp.sessions.push(Session::new(
+            crate::services::godot::godot_server(),
+            PathBuf::from("/tmp"),
+        ));
+        lsp.active = Some(0);
+        lsp.sessions[0].cache_native_classes(&json!({
             "native_classes": [
                 {"name": "Node", "inherits": "Object"},
                 {"name": "Sprite2D", "inherits": "Node2D"}
