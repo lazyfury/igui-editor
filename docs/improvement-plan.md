@@ -240,13 +240,27 @@ Acceptance:
   Ctrl+C/Ctrl+A still reach the shell.
 - On macOS, Cmd+C/V/A continue to use the selection.
 
+### Task 10: Workspace Trust UI (done)
+
+- [x] Add a persistent **Trust Local Servers** setting row.
+- [x] Feed the setting into the LSP controller; changing it restarts sessions
+      so the executable-resolution policy applies immediately.
+- [x] Keep `IGUI_EDITOR_TRUST_WORKSPACE=1` as a per-launch override.
+- [x] Bump the session format to v13 and document the new key.
+- [x] Tests: settings default/row wiring and session round-trip.
+
+Acceptance:
+
+- Trust is off by default and can be toggled from Settings.
+- With trust off, repo-local `node_modules/.bin` shims are not selected; with
+  trust on they are, and the env var still forces them on.
+
 ## Deferred to the next feature slice
 
 These are intentionally not part of this plan's implementation phases:
 
 - Native macOS close guard + Dock reopen.
 - Terminal multiple sessions.
-- Workspace Trust UI (the opt-in local-binary guard is implemented).
 - Incremental Markdown preview layout.
 
 ## Progress log
@@ -269,6 +283,7 @@ These are intentionally not part of this plan's implementation phases:
 | Session 2 | Follow-up 7 | done | Grapheme-aware movement/deletion/selection; 246 unit tests. |
 | Session 2 | Follow-up 8 | done | Grapheme-aware word movement; 247 unit tests. |
 | Session 2 | Follow-up 9 | done | Terminal Ctrl+Shift clipboard chords; 248 unit tests. |
+| Session 2 | Follow-up 10 | done | Workspace Trust UI, session v13; 248 unit tests. |
 
 ## Final acceptance checklist
 

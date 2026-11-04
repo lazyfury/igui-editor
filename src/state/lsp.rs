@@ -5,6 +5,9 @@ use super::*;
 impl AppState {
     /// Pumps the language server and applies a pending go-to-definition.
     pub fn tick_lsp(&mut self) {
+        self.lsp.set_workspace_binaries(
+            self.settings.trust_local_servers || model_lsp::workspace_binaries_enabled(),
+        );
         self.lsp
             .tick(&self.ws, &self.services.language_servers, self.settings.lsp);
         self.tooling.tick();

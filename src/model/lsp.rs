@@ -193,18 +193,14 @@ struct LspClient {
 }
 
 impl LspClient {
-    fn spawn(spec: &LanguageServerSpec, root: &Path) -> io::Result<Self> {
+    fn spawn(spec: &LanguageServerSpec, root: &Path, allow_workspace: bool) -> io::Result<Self> {
         let command = spec
             .command_env
             .as_deref()
             .and_then(|name| std::env::var(name).ok())
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| spec.command.to_string());
-        let mut process = Command::new(resolve_command(
-            &command,
-            root,
-            workspace_binaries_enabled(),
-        ));
+        let mut process = Command::new(resolve_command(&command, root, allow_workspace));
         process
             .args(&spec.args)
             .current_dir(root)
@@ -606,7 +602,7 @@ fn resolve_command(command: &str, root: &Path, allow_workspace: bool) -> std::ff
 ///
 /// This is deliberately opt-in: opening an untrusted project must not run a
 /// `node_modules/.bin` file just because its language id matches.
-fn workspace_binaries_enabled() -> bool {
+pub fn workspace_binaries_enabled() -> bool {
     std::env::var("IGUI_EDITOR_TRUST_WORKSPACE")
         .ok()
         .is_some_and(|value| {
@@ -1116,6 +1112,8 @@ pub struct LspController {
     notified: HashSet<String>,
     issue: Option<LspIssue>,
     enabled: bool,
+    /// Whether repository-local `node_modules/.bin` shims may be executed.
+    allow_workspace_binaries: bool,
     changed: bool,
     pub hover: Option<HoverUi>,
     pub hover_anchor: Option<igui_core::Vec2>,
@@ -1149,6 +1147,7 @@ impl Default for LspController {
             notified: HashSet::new(),
             issue: None,
             enabled: true,
+            allow_workspace_binaries: workspace_binaries_enabled(),
             changed: false,
             hover: None,
             hover_anchor: None,
@@ -1186,6 +1185,17 @@ impl LspController {
         if !enabled {
             self.stop_all();
         }
+        self.changed = true;
+    }
+
+    /// Applies the settings/UI trust switch. Changing it restarts sessions so
+    /// the new executable resolution policy takes effect.
+    pub fn set_workspace_binaries(&mut self, allow: bool) {
+        if self.allow_workspace_binaries == allow {
+            return;
+        }
+        self.allow_workspace_binaries = allow;
+        self.stop_all();
         self.changed = true;
     }
 
@@ -1401,7 +1411,7 @@ impl LspController {
         {
             return;
         }
-        match LspClient::spawn(&spec, &root) {
+        match LspClient::spawn(&spec, &root, self.allow_workspace_binaries) {
             Ok(mut client) => {
                 let params = initialize_params(&root, &spec);
                 if let Some(id) = client.request("initialize", params) {
@@ -2552,7 +2562,7 @@ mod tests {
             port: Some(port),
             install: None,
         };
-        let mut client = LspClient::spawn(&spec, Path::new("/tmp")).unwrap();
+        let mut client = LspClient::spawn(&spec, Path::new("/tmp"), false).unwrap();
         let (stream, _) = listener.accept().unwrap();
         let mut reader = BufReader::new(stream);
         let id = client

@@ -161,6 +161,7 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
                 Row::IndentGuides => state.settings.indent_guides,
                 Row::Syntax => state.settings.syntax,
                 Row::LanguageIntelligence => state.settings.lsp,
+                Row::TrustLocalServers => state.settings.trust_local_servers,
                 _ => false,
             };
             let label = if on { "ON" } else { "OFF" };

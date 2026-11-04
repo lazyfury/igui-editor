@@ -29,7 +29,7 @@ src/
   model/fs_tree.rs    lazy sidebar tree (dirs first, hidden entries skipped)
   model/fsutil.rs     atomic temp+fsync+rename writer shared by model IO
   model/markdown.rs   Markdown event stream -> flat block model
-  model/session.rs    key=value session file (atomic write, escaping, v12)
+  model/session.rs    key=value session file (atomic write, escaping, v13)
   model/workspace.rs  tabs + file IO (open/save/move/close folder)
   model/wrap.rs       soft-wrap display rows + visual row/column mapping
   dialogs.rs          `Dialogs` trait + scripted test double

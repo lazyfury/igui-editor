@@ -153,7 +153,7 @@ its own language-server binary.
   by path, so background tabs keep their state.
 - **Enable/disable**: `Settings::lsp` (settings row **Language Intelligence** and
   the footer `LSP` dot) stops every child and clears transient state; re-enabling
-  starts the active project lazily. Persisted in the session (format v12).
+  starts the active project lazily. Persisted in the session (format v13).
 - **Missing tools**: a spawn error with `ErrorKind::NotFound` opens the shared
   tooling prompt (`state/tooling.rs` + `ui/tooling.rs`) with the spec's
   `ToolInstall` hint. It offers **COPY COMMAND**, **RETRY** and **CLOSE** only —

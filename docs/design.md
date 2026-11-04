@@ -176,7 +176,7 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    metadata snapshot under `<config>/recovery/`, and a startup prompt offers
    Restore All / Discard All. Window size/position and the maximized flag
    persist in the session and are restored on launch. Session format is version
-   12 (`window.max` stores maximize state). Saves use temp + fsync + rename
+   13 (`trust_local_servers` stores the local-server trust switch). Saves use temp + fsync + rename
    (remove + rename on Windows) and preserve the file's LF/CRLF style,
    permissions and the undo save point.
 24. **Language packs are data, not code.** `<config>/languages/*.json` packs are

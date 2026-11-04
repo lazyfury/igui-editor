@@ -35,6 +35,8 @@ pub struct Settings {
     pub autosave: bool,
     /// Run language servers (start on demand, stop all when disabled).
     pub lsp: bool,
+    /// Allow repository-local language-server binaries (`node_modules/.bin`).
+    pub trust_local_servers: bool,
     /// Sidebar width in logical pixels.
     pub sidebar_width: f32,
     /// Selectable keyboard profile.
@@ -51,6 +53,7 @@ impl Default for Settings {
             syntax: true,
             autosave: true,
             lsp: true,
+            trust_local_servers: false,
             sidebar_width: 232.0,
             keymap: KeymapId::VsCode,
         }
@@ -68,6 +71,7 @@ impl Settings {
             syntax: self.syntax,
             autosave: self.autosave,
             lsp: self.lsp,
+            trust_local_servers: self.trust_local_servers,
             sidebar_width: clamp_sidebar(self.sidebar_width),
             keymap: self.keymap,
         }
@@ -148,12 +152,13 @@ pub enum Row {
     Syntax,
     Autosave,
     LanguageIntelligence,
+    TrustLocalServers,
     SidebarWidth,
     Keymap,
     Reset,
 }
 
-pub const ROWS: [Row; 11] = [
+pub const ROWS: [Row; 12] = [
     Row::Theme,
     Row::FontSize,
     Row::TabWidth,
@@ -164,6 +169,7 @@ pub const ROWS: [Row; 11] = [
     Row::SidebarWidth,
     Row::Keymap,
     Row::LanguageIntelligence,
+    Row::TrustLocalServers,
     Row::Reset,
 ];
 
@@ -178,6 +184,7 @@ impl Row {
             Row::Syntax => "Syntax Highlight",
             Row::Autosave => "Autosave",
             Row::LanguageIntelligence => "Language Intelligence",
+            Row::TrustLocalServers => "Trust Local Servers",
             Row::SidebarWidth => "Sidebar Width",
             Row::Keymap => "Keymap",
             Row::Reset => "Reset to Defaults",
@@ -188,7 +195,11 @@ impl Row {
     pub const fn is_toggle(self) -> bool {
         matches!(
             self,
-            Row::LineNumbers | Row::IndentGuides | Row::Syntax | Row::LanguageIntelligence
+            Row::LineNumbers
+                | Row::IndentGuides
+                | Row::Syntax
+                | Row::LanguageIntelligence
+                | Row::TrustLocalServers
         )
     }
 }
@@ -211,8 +222,12 @@ mod tests {
         let settings = Settings::default();
         assert!(settings.lsp);
         assert!(settings.normalized().lsp);
+        assert!(!settings.trust_local_servers);
+        assert!(!settings.normalized().trust_local_servers);
         assert!(ROWS.contains(&Row::LanguageIntelligence));
+        assert!(ROWS.contains(&Row::TrustLocalServers));
         assert!(Row::LanguageIntelligence.is_toggle());
+        assert!(Row::TrustLocalServers.is_toggle());
         assert!(ROWS.contains(&Row::Reset));
     }
 

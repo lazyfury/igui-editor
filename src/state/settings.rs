@@ -237,6 +237,7 @@ impl AppState {
             Row::Syntax => on_off(self.settings.syntax),
             Row::Autosave => on_off(self.settings.autosave),
             Row::LanguageIntelligence => on_off(self.settings.lsp),
+            Row::TrustLocalServers => on_off(self.settings.trust_local_servers),
             Row::SidebarWidth => format!("{} px", self.settings.sidebar_width as i32),
             Row::Keymap => self.settings.keymap.name().into(),
             Row::Reset => "DEFAULT".into(),
@@ -278,6 +279,18 @@ impl AppState {
             }
             Row::LanguageIntelligence => {
                 self.set_lsp_enabled(!self.settings.lsp);
+            }
+            Row::TrustLocalServers => {
+                self.settings.trust_local_servers = !self.settings.trust_local_servers;
+                self.settings_changed();
+                self.status(format!(
+                    "local language servers: {}",
+                    if self.settings.trust_local_servers {
+                        "TRUSTED"
+                    } else {
+                        "BLOCKED"
+                    }
+                ));
             }
             Row::SidebarWidth => {
                 self.settings.step_sidebar(delta as f32 * 8.0);
@@ -332,6 +345,7 @@ impl AppState {
         self.session.syntax = self.settings.syntax;
         self.session.autosave = self.settings.autosave;
         self.session.lsp = self.settings.lsp;
+        self.session.trust_local_servers = self.settings.trust_local_servers;
         self.session.sidebar_width = self.settings.sidebar_width;
         self.session.keymap = self.settings.keymap.session_value().into();
         self.session.theme = match self.theme.mode {

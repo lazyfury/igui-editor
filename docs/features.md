@@ -380,6 +380,7 @@ setting is persisted in the session. Preview-only and Edit modes ignore it.
 | Autosave | on / off |
 | Sidebar Width | 180–420 px |
 | Language Intelligence | on / off (start/stop all language servers) |
+| Trust Local Servers | on / off (allow repository `node_modules/.bin` shims) |
 | Reset to Defaults | — |
 
 Changes apply immediately and are stored in the session file. `↑↓` select,
@@ -476,10 +477,11 @@ remembered per document and the last ratio is persisted.
   original name/path and are marked dirty so the first save writes them back.
 - **Window state**: size, position and the maximized flag are persisted and
   restored (fullscreen is not persisted).
-- Session format is version 12 (`window.max` stores maximize state; v10 added
-  the current-tab/window geometry set, v9 `outline_width`, v8 `outline`, v7
-  `keymap`, v6 `terminal_open`, `terminal_height`, v5 `sidebar_tab`, v4
-  `soft_wrap`); older files still load
+- Session format is version 13 (`trust_local_servers` stores the local-server
+  trust switch; v12 added `window.max`, v10 added the current-tab/window
+  geometry set, v9 `outline_width`, v8 `outline`, v7 `keymap`, v6
+  `terminal_open`, `terminal_height`, v5 `sidebar_tab`, v4 `soft_wrap`); older
+  files still load
   (v1 infers the folder from the first tab, and sessions without `active` fall
   back to the last opened tab).
 
