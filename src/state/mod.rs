@@ -50,7 +50,6 @@ mod files;
 mod find;
 mod format;
 mod git;
-pub(crate) mod godot;
 mod keymap;
 mod lsp;
 mod modal;
@@ -1251,8 +1250,6 @@ pub struct AppState {
     pub git: GitState,
     pub terminal: TerminalState,
     pub lsp: LspController,
-    /// Base-class members for the INHERITED / SIGNALS panels.
-    pub godot: godot::GodotUi,
     pub keymap: Keymap,
     keymap_pending: Vec<KeyChord>,
     keymap_pending_at: Instant,
@@ -1431,7 +1428,6 @@ impl AppState {
                 lsp.set_aggressive_reload(settings.lsp_reload);
                 lsp
             },
-            godot: godot::GodotUi::default(),
             keymap: Keymap::for_id(settings.keymap),
             keymap_pending: Vec::new(),
             keymap_pending_at: Instant::now(),

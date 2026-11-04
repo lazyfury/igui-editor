@@ -81,8 +81,6 @@ pub struct SemanticToken {
 #[derive(Clone, Debug)]
 pub struct OutlineSymbol {
     pub name: String,
-    /// `detail` from the server (`signal hit(damage)`, `var hp: int = 1`).
-    pub detail: String,
     pub kind: u32,
     pub depth: usize,
     pub line: u32,
@@ -187,18 +185,11 @@ enum PendingKind {
     Hover,
     HoverDocs,
     Completion,
-    CompletionResolve {
-        index: usize,
-    },
+    CompletionResolve { index: usize },
     Definition,
-    NativeSymbol {
-        class: String,
-        symbol: String,
-    },
+    NativeSymbol { class: String, symbol: String },
     Semantic(PathBuf),
     Symbols(PathBuf),
-    /// `documentSymbol` for a base script that is not necessarily open.
-    BaseSymbols(PathBuf),
 }
 
 struct OpenDoc {
@@ -825,16 +816,11 @@ struct Session {
     symbols: HashMap<PathBuf, Vec<OutlineSymbol>>,
     symbols_pending: HashSet<PathBuf>,
     symbols_in_flight: HashSet<PathBuf>,
-    /// Symbols of base scripts requested by the inherited-members panels.
-    base_symbols: HashMap<PathBuf, Vec<OutlineSymbol>>,
-    base_pending: HashSet<PathBuf>,
-    /// Whole-class `nativeSymbol` documents (signal/property panels).
-    native_class_docs: HashMap<String, NativeSymbol>,
     pending: HashMap<u64, (PendingKind, Instant)>,
     /// `(registration id, watcher)` pairs the server asked for.
     watchers: Vec<(String, Watcher)>,
-    /// Native class name → base class (`gdscript/capabilities`).
-    native_classes: HashMap<String, String>,
+    /// Native class names from `gdscript/capabilities`.
+    native_classes: HashSet<String>,
     native_symbols: HashMap<(String, String), NativeSymbol>,
     last_active: Instant,
     changed: bool,
@@ -860,12 +846,9 @@ impl Session {
             symbols: HashMap::new(),
             symbols_pending: HashSet::new(),
             symbols_in_flight: HashSet::new(),
-            base_symbols: HashMap::new(),
-            base_pending: HashSet::new(),
-            native_class_docs: HashMap::new(),
             pending: HashMap::new(),
             watchers: Vec::new(),
-            native_classes: HashMap::new(),
+            native_classes: HashSet::new(),
             native_symbols: HashMap::new(),
             last_active: Instant::now(),
             changed: false,
@@ -883,9 +866,6 @@ impl Session {
         self.symbols.clear();
         self.symbols_pending.clear();
         self.symbols_in_flight.clear();
-        self.base_symbols.clear();
-        self.base_pending.clear();
-        self.native_class_docs.clear();
         self.pending.clear();
         // A restarted server registers its watchers again.
         self.watchers.clear();
@@ -1243,15 +1223,9 @@ impl Session {
         };
         self.native_classes.clear();
         for item in items {
-            let Some(name) = item.get("name").and_then(Value::as_str) else {
-                continue;
-            };
-            let base = item
-                .get("inherits")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            self.native_classes
-                .insert(name.to_string(), base.to_string());
+            if let Some(name) = item.get("name").and_then(Value::as_str) {
+                self.native_classes.insert(name.to_string());
+            }
         }
     }
 
@@ -1272,9 +1246,6 @@ impl Session {
                 }
                 Some(PendingKind::Symbols(path)) => {
                     self.symbols_in_flight.remove(&path);
-                }
-                Some(PendingKind::BaseSymbols(path)) => {
-                    self.base_pending.remove(&path);
                 }
                 Some(kind) => out.push(kind),
                 None => {}
@@ -1963,11 +1934,6 @@ impl LspController {
             }
             PendingKind::NativeSymbol { class, symbol } => {
                 if let Some(parsed) = parse_native_symbol(&result) {
-                    if symbol.is_empty() {
-                        self.sessions[index]
-                            .native_class_docs
-                            .insert(class.clone(), parsed.clone());
-                    }
                     self.sessions[index]
                         .native_symbols
                         .insert((class.clone(), symbol.clone()), parsed.clone());
@@ -2001,13 +1967,6 @@ impl LspController {
                     }
                     self.sessions[index].changed = true;
                 }
-            }
-            PendingKind::BaseSymbols(path) => {
-                self.sessions[index].base_pending.remove(&path);
-                self.sessions[index]
-                    .base_symbols
-                    .insert(path, parse_document_symbols(&result));
-                self.sessions[index].changed = true;
             }
         }
     }
@@ -2218,66 +2177,7 @@ impl LspController {
     /// Whether `name` is one of Godot's native classes (e.g. `Node`).
     pub fn is_native_class(&self, name: &str) -> bool {
         self.active_session()
-            .is_some_and(|session| session.native_classes.contains_key(name))
-    }
-
-    /// Base class of a native Godot class (`Node2D → CanvasItem`).
-    pub fn native_base(&self, name: &str) -> Option<&str> {
-        self.active_session()
-            .and_then(|session| session.native_classes.get(name))
-            .map(String::as_str)
-            .filter(|base| !base.is_empty())
-    }
-
-    /// A cached whole-class `nativeSymbol` document (`symbol_name` empty).
-    pub fn native_class_symbol(&self, class: &str) -> Option<&NativeSymbol> {
-        self.sessions
-            .iter()
-            .find_map(|session| session.native_class_docs.get(class))
-    }
-
-    /// Cached `documentSymbol` rows of a base script.
-    pub fn base_symbols(&self, path: &Path) -> Option<&[OutlineSymbol]> {
-        self.sessions
-            .iter()
-            .find_map(|session| session.base_symbols.get(path).map(Vec::as_slice))
-    }
-
-    /// Requests `documentSymbol` for a base script (once per path).
-    ///
-    /// Returns whether the rows are cached or a request is already in flight.
-    pub fn request_base_symbols(&mut self, path: &Path) -> bool {
-        let Some(index) = self
-            .sessions
-            .iter()
-            .position(|session| session.spec.matches_path(path) && path_under(path, &session.root))
-        else {
-            return false;
-        };
-        let session = &mut self.sessions[index];
-        if session.base_symbols.contains_key(path) {
-            return true;
-        }
-        if session.status != LspStatus::Ready || !session.base_pending.insert(path.to_path_buf()) {
-            return session.base_pending.contains(path);
-        }
-        let Some(client) = session.client.as_mut() else {
-            return false;
-        };
-        let request = client.request(
-            "textDocument/documentSymbol",
-            json!({"textDocument": {"uri": path_to_uri(path)}}),
-        );
-        if let Some(id) = request {
-            session.pending.insert(
-                id,
-                (PendingKind::BaseSymbols(path.to_path_buf()), Instant::now()),
-            );
-            true
-        } else {
-            session.base_pending.remove(path);
-            false
-        }
+            .is_some_and(|session| session.native_classes.contains(name))
     }
 
     /// A cached native class/member document, if already fetched.
@@ -2712,7 +2612,6 @@ fn parse_document_symbols(result: &Value) -> Vec<OutlineSymbol> {
             };
             out.push(OutlineSymbol {
                 name: name.to_string(),
-                detail: item["detail"].as_str().unwrap_or_default().to_string(),
                 kind: item["kind"].as_u64().unwrap_or(13) as u32,
                 depth,
                 line: start["line"].as_u64().unwrap_or(0) as u32,
@@ -3120,27 +3019,6 @@ fn parse_location(result: &Value) -> Option<Location> {
         line: start["line"].as_u64().unwrap_or(0) as u32,
         character: start["character"].as_u64().unwrap_or(0) as u32,
     })
-}
-
-#[cfg(test)]
-impl LspController {
-    /// Test fixture: install the native inheritance map without a server.
-    pub(crate) fn test_set_native_classes(&mut self, pairs: &[(&str, &str)]) {
-        if self.sessions.is_empty() {
-            self.sessions.push(Session::new(
-                crate::services::godot::godot_server(),
-                PathBuf::from("/tmp"),
-            ));
-            self.active = Some(0);
-        }
-        let session = &mut self.sessions[0];
-        session.native_classes.clear();
-        for (name, base) in pairs {
-            session
-                .native_classes
-                .insert((*name).to_string(), (*base).to_string());
-        }
-    }
 }
 
 #[cfg(test)]
@@ -3931,8 +3809,6 @@ mod tests {
         assert!(lsp.is_native_class("Node"));
         assert!(lsp.is_native_class("Sprite2D"));
         assert!(!lsp.is_native_class("print"));
-        assert_eq!(lsp.native_base("Node"), Some("Object"));
-        assert_eq!(lsp.native_base("Object"), None);
     }
 
     #[test]

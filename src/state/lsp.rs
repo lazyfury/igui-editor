@@ -35,12 +35,6 @@ impl AppState {
         // (Godot) instead gets a delayed re-parse of the open documents.
         let events = std::mem::take(&mut self.file_events);
         if !events.is_empty() {
-            if events.iter().any(|event| {
-                event.path.file_name().and_then(|name| name.to_str())
-                    == Some("global_script_class_cache.cfg")
-            }) {
-                self.invalidate_godot_panel();
-            }
             self.lsp.notify_file_events(&events);
         }
         self.tooling.tick();
@@ -265,25 +259,6 @@ impl AppState {
     pub(crate) fn show_docs_tab(&mut self, symbol: &crate::model::lsp::NativeSymbol) {
         let rendered = crate::model::docs::render(symbol);
         let name = format!("{} — Godot Docs", symbol.name);
-        // Update in place: the user may have switched tabs while the request
-        // was in flight, and documentation must not steal focus.
-        if self
-            .ws
-            .tabs
-            .iter()
-            .any(|doc| doc.view_key() == Some("godot-docs"))
-        {
-            if let Some(index) = self
-                .ws
-                .update_docs_view("godot-docs", name, rendered.text.clone())
-            {
-                if let Some(doc) = self.ws.tabs.get(index) {
-                    self.docs.links.insert(doc.id(), rendered.links);
-                }
-            }
-            self.dirty = true;
-            return;
-        }
         self.show_docs_text(rendered.text, name, rendered.links);
     }
 

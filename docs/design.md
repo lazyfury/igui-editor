@@ -368,19 +368,7 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    rate-limited) and deliberately ignores the attach target, because only a
    process we start can be made to rescan on demand.
 
-40. **Base-class members are a projection of the LSP caches, not a second
-   parser.** The INHERITED and SIGNALS panels share one resolved chain: the
-   project class cache maps `class_name → path`, each script's `extends` header
-   supplies the next hop (the cache's `base` is flattened for path bases, so the
-   source wins), and `gdscript/capabilities` supplies the native `inherits`
-   chain. Members come from the existing `documentSymbol` cache (project
-   scripts, including files that are not open) and the `nativeSymbol` cache for
-   native classes; both panels filter the same rows by kind (24 signals, 7
-   properties, 13 variables). Paint records the row rectangles and click reads
-   them back, so the two views never grow a parallel layout. A background docs
-   request updates its tab in place and never steals focus.
-
-41. **Indentation belongs to the document, not to the setting.** A file's
+40. **Indentation belongs to the document, not to the setting.** A file's
    existing tabs/spaces win (detected on load), so editing a Godot template
    cannot silently introduce the mix the GDScript parser rejects. The setting
    only supplies the fallback for files without indentation and the target of

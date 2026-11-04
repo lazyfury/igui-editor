@@ -33,12 +33,11 @@ pub(crate) enum Icon {
     PanelBottom,
     Terminal,
     CircleAlert,
-    Radio,
 }
 
 impl Icon {
     /// Every icon, in cache order (see [`Icon::index`]).
-    pub(crate) const ALL: [Icon; 9] = [
+    pub(crate) const ALL: [Icon; 8] = [
         Icon::Files,
         Icon::GitBranch,
         Icon::ListTree,
@@ -47,7 +46,6 @@ impl Icon {
         Icon::PanelBottom,
         Icon::Terminal,
         Icon::CircleAlert,
-        Icon::Radio,
     ];
 
     /// Source SVG (embedded, never read from disk at runtime).
@@ -61,7 +59,6 @@ impl Icon {
             Icon::PanelBottom => include_str!("../../assets/icons/lucide/panel-bottom.svg"),
             Icon::Terminal => include_str!("../../assets/icons/lucide/terminal.svg"),
             Icon::CircleAlert => include_str!("../../assets/icons/lucide/circle-alert.svg"),
-            Icon::Radio => include_str!("../../assets/icons/lucide/radio.svg"),
         }
     }
 
@@ -76,7 +73,6 @@ impl Icon {
             Icon::PanelBottom => 5,
             Icon::Terminal => 6,
             Icon::CircleAlert => 7,
-            Icon::Radio => 8,
         }
     }
 }

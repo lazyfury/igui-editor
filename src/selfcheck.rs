@@ -5467,55 +5467,6 @@ while True:
             "capabilities": {"textDocumentSync": 1},
             "serverInfo": {"name": "godot-editor-fixture"},
         }})
-    elif method == "initialized":
-        send({"jsonrpc": "2.0", "method": "gdscript/capabilities", "params": {
-            "native_classes": [
-                {"name": "Node", "inherits": "Object"},
-                {"name": "Object", "inherits": ""},
-            ],
-        }})
-    elif method == "textDocument/nativeSymbol":
-        cls = params.get("native_class", "")
-        symbol = params.get("symbol_name", "")
-        if symbol:
-            send({"jsonrpc": "2.0", "id": request_id, "result": {
-                "name": symbol, "native_class": cls,
-                "detail": "%s.%s docs" % (cls, symbol),
-                "documentation": "Fixture docs for %s." % symbol,
-                "kind": 6, "children": [],
-            }})
-        elif cls == "Node":
-            send({"jsonrpc": "2.0", "id": request_id, "result": {
-                "name": "Node", "native_class": "Node",
-                "detail": "<Native> class Node extends Object",
-                "documentation": "Node fixture.",
-                "kind": 5,
-                "children": [
-                    {"name": "ready", "native_class": "Node",
-                     "detail": "func Node.ready() -> void", "documentation": "Ready.",
-                     "kind": 24, "children": []},
-                    {"name": "tree_entered", "native_class": "Node",
-                     "detail": "func Node.tree_entered() -> void", "documentation": "Entered.",
-                     "kind": 24, "children": []},
-                    {"name": "name", "native_class": "Node",
-                     "detail": "var Node.name: StringName", "documentation": "Name.",
-                     "kind": 7, "children": []},
-                ],
-            }})
-        elif cls == "Object":
-            send({"jsonrpc": "2.0", "id": request_id, "result": {
-                "name": "Object", "native_class": "Object",
-                "detail": "<Native> class Object",
-                "documentation": "Object fixture.",
-                "kind": 5,
-                "children": [
-                    {"name": "script_changed", "native_class": "Object",
-                     "detail": "func Object.script_changed() -> void",
-                     "documentation": "Script changed.", "kind": 24, "children": []},
-                ],
-            }})
-        else:
-            send({"jsonrpc": "2.0", "id": request_id, "result": None})
     elif method == "textDocument/didOpen":
         document = params["textDocument"]
         uri = document["uri"]
@@ -5796,75 +5747,6 @@ fn check_godot_attach(dir: &Path) -> Result<(), String> {
             return Err("the re-parse did not carry the full document text".into());
         }
 
-        // Base-class panels: main.gd extends Node; the fixture answers
-        // `gdscript/capabilities` and `textDocument/nativeSymbol`.
-        harness
-            .app
-            .state_mut()
-            .dock_show(crate::state::Panel::Signals);
-        wait_for_lsp(&mut harness, |state| {
-            state.godot_signal_count() > 0
-                && state
-                    .godot
-                    .signals
-                    .hits
-                    .iter()
-                    .any(|(_, hit)| matches!(hit, crate::state::godot::PanelHit::Member { .. }))
-        })?;
-        let frame = harness.frame()?;
-        let painted = texts(&frame);
-        if !painted.iter().any(|text| text == "Node") || !painted.iter().any(|text| text == "ready")
-        {
-            return Err(format!(
-                "the SIGNALS panel did not paint the base class signals: {painted:?}"
-            ));
-        }
-        let member = harness
-            .app
-            .state()
-            .godot
-            .signals
-            .hits
-            .iter()
-            .find(|(_, hit)| matches!(hit, crate::state::godot::PanelHit::Member { .. }))
-            .map(|(rect, _)| rect.center())
-            .ok_or("the SIGNALS panel has no member hit target")?;
-        harness.click(member);
-        wait_for_lsp(&mut harness, |state| {
-            state.ws.tabs.iter().any(|doc| {
-                doc.view_key() == Some("godot-docs") && doc.text().contains("Fixture docs")
-            })
-        })?;
-        {
-            let state = harness.app.state();
-            let docs = state
-                .ws
-                .active_doc()
-                .filter(|doc| doc.view_key() == Some("godot-docs"))
-                .map(|doc| doc.text().to_string())
-                .ok_or("clicking a native signal did not open the docs tab")?;
-            if !docs.contains("GODOT DOCS") || !docs.contains("Node") {
-                return Err(format!(
-                    "the signal docs tab has the wrong content: {docs:?}"
-                ));
-            }
-        }
-
-        // Back to the script for the INHERITED panel.
-        harness.app.state_mut().open_path(script.clone());
-        harness
-            .app
-            .state_mut()
-            .dock_show(crate::state::Panel::Inherited);
-        wait_for_lsp(&mut harness, |state| state.godot_property_count() > 0)?;
-        let frame = harness.frame()?;
-        let painted = texts(&frame);
-        if !painted.iter().any(|text| text == "name") {
-            return Err(format!(
-                "the INHERITED panel did not paint the base class properties: {painted:?}"
-            ));
-        }
-        println!("selfcheck: Godot base-class panels ok");
         println!("selfcheck: Godot rescan instead of watched files ok");
         Ok(())
     });

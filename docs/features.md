@@ -8,7 +8,7 @@ verification, see [design.md](design.md) and [verification.md](verification.md).
 The file tree marks modified/untracked files with a colored Git status letter
 (modified orange, added green, deleted/conflict red, renamed purple, untracked
 teal), and the footer shows `GIT <branch> ↑ahead ↓behind` on its left. The sidebar has
-`EXPLORER / GIT / INHERITED / SIGNALS` tabs. GIT shows the repository branch,
+`EXPLORER / GIT` tabs. GIT shows the repository branch,
 ahead/behind, and staged/changes/conflicts sections from `git status
 --porcelain=v2 -z`. Click a file for a read-only unified diff overlay; `Esc` or
 the overlay ✕ closes it. `+` / `−` stage or unstage a row, `Stage all` stages the
@@ -212,33 +212,6 @@ visible after you click back into Godot. For a hard guarantee enable
 Godot and restarts it after file changes and explicit saves instead of attaching
 to the editor.
 
-### INHERITED / SIGNALS panels
-
-Two left-dock tabs list the active GDScript's **base classes** (the script's
-own members stay in the right OUTLINE panel). **INHERITED** lists properties and
-`var`/`@export` variables, **SIGNALS** lists signals; each class in the chain is
-a collapsible group with a count badge (`INHERITED 7`, `SIGNALS 3`), direct
-parent first:
-
-```
-ENEMY                 12
-  speed               var Enemy.speed: int
-ENEMYBASE              4
-  base_hit            signal base_hit(damage)
-NODE2D                 23
-  position            var Node2D.position: Vector2
-```
-
-The chain comes from the project's `.godot/global_script_class_cache.cfg`
-(`class_name → path`), each script's `extends` header, and the native
-`inherits` map from `gdscript/capabilities`. Members are read from the existing
-LSP caches: `documentSymbol` for project scripts (works for files that are not
-open) and `textDocument/nativeSymbol` for native classes. Clicking a native
-member opens the read-only **GODOT DOCS** tab; clicking a project-script member
-opens that base script at its declaration. The panels refresh when the active
-tab, the class cache or the server changes, and a slow request never steals
-focus from the editor.
-
 ## Header panel groups
 
 The right side of the header is a compact row of icon buttons: **Git**, then
@@ -250,8 +223,8 @@ when the dock already shows another one, and closes the dock when the tab is
 already visible. The open project name sits next to the toggles and the active
 file label sits to its left; both truncate from the left when space runs out.
 The generic toggles remain in the View menu, and every panel is bindable through
-`keymaps.json` (`view.explorer`, `view.git`, `view.inherited`, `view.signals`,
-`view.outline`, `view.terminal`, `view.problems`).
+`keymaps.json` (`view.explorer`, `view.git`, `view.outline`, `view.terminal`,
+`view.problems`).
 
 Icons are Lucide SVGs vendored under `assets/icons/lucide` (ISC). They are
 compiled in, parsed once by the engine's `igui_svg` renderer and stroked by

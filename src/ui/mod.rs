@@ -6,7 +6,6 @@ pub mod drop;
 pub mod editor;
 pub mod find_bar;
 pub mod git;
-pub mod godot;
 pub mod handle;
 pub mod icon;
 pub mod lsp;

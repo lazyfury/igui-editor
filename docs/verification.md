@@ -85,11 +85,7 @@ type 1/3; saving an open document sends `textDocument/didSave`. A scripted
 running Godot editor checks the rescan path instead: a deleted file's
 diagnostics leave PROBLEMS at once, the ignored `didChangeWatchedFiles`
 notification is never sent, and the open document is re-sent as a full-text
-`didChange` once the configured rescan delay has passed. The same scripted
-Godot editor answers `gdscript/capabilities` and `nativeSymbol`: the SIGNALS
-tab paints `Node` / `ready`, clicking a signal opens the docs tab without
-stealing focus from a later tab switch, and INHERITED paints the base
-`name` property. A GDScript buffer checks that `Enter` after `func _ready():`
+`didChange` once the configured rescan delay has passed. A GDScript buffer checks that `Enter` after `func _ready():`
 adds a tab and that Format Document converts it to the configured four spaces.
 
 A missing clangd executable checks the copy-only tooling prompt: install hint,

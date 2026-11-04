@@ -93,7 +93,7 @@ motion.left, motion.right, motion.wordLeft, motion.wordRight
 motion.lineStart, motion.lineEnd, motion.docStart, motion.docEnd
 editor.find, editor.findNext, editor.findPrevious
 view.split, view.preview, view.softWrap, view.sidebar, view.explorer, view.git,
-view.inherited, view.signals, view.outline, view.terminal, view.problems
+view.outline, view.terminal, view.problems
 lsp.hover, lsp.completion, lsp.definition
 ```
 
