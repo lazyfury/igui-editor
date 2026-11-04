@@ -3,6 +3,16 @@
 use super::*;
 
 impl AppState {
+    /// A git worker request is outstanding; the app must keep polling for the
+    /// reply until it lands.
+    pub fn git_busy(&self) -> bool {
+        self.git.pending
+            || self.git.loading
+            || self.git.diff_loading
+            || self.git.detail_loading
+            || self.git.history_loading
+    }
+
     pub fn git_entry_for(&self, path: &Path) -> Option<&crate::model::git::GitEntry> {
         let root = self.git.status.root.as_ref()?;
         let relative = path.strip_prefix(root).ok()?;
@@ -45,6 +55,7 @@ impl AppState {
 
     pub fn request_git_log(&mut self) {
         self.ensure_git_worker();
+        self.git.history_loading = true;
         self.git.history_generation += 1;
         let generation = self.git.history_generation;
         let cwd = self
@@ -280,7 +291,8 @@ impl AppState {
         self.dirty = true;
     }
 
-    /// Drains Git worker events and issues a pending status request.
+    /// Loads `<config>/keymaps.json` once at startup. Invalid JSON is reported
+    /// but never prevents the editor from starting.
     pub(crate) fn rebuild_keymap(&mut self) {
         self.keymap = Keymap::for_id(self.settings.keymap);
         if let Some(overrides) = self.keymap_overrides.clone() {
@@ -291,18 +303,33 @@ impl AppState {
             .reset_for_keymap(self.settings.keymap == KeymapId::Vim);
     }
 
-    /// Loads `<config>/keymaps.json` once at startup. Invalid JSON is reported
-    /// but never prevents the editor from starting.
+    /// Drains Git worker events and issues a pending status request.
     pub fn tick_git(&mut self) {
-        let events = if let Some(worker) = &self.git.worker {
-            let mut events = Vec::new();
-            while let Some(event) = worker.try_recv() {
-                events.push(event);
+        let mut events = Vec::new();
+        let mut disconnected = false;
+        if let Some(worker) = &self.git.worker {
+            loop {
+                match worker.try_recv() {
+                    Ok(event) => events.push(event),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        disconnected = true;
+                        break;
+                    }
+                }
             }
-            events
-        } else {
-            Vec::new()
-        };
+        }
+        // A dead worker must not keep `needs_frame` polling forever.
+        if disconnected {
+            self.git.worker = None;
+            self.git.pending = false;
+            self.git.loading = false;
+            self.git.diff_loading = false;
+            self.git.detail_loading = false;
+            self.git.history_loading = false;
+            self.git.error = Some("git worker stopped".into());
+            self.dirty = true;
+        }
         for event in events {
             match event {
                 GitEvent::Status { generation, status } if generation == self.git.generation => {
@@ -344,6 +371,7 @@ impl AppState {
                     commits,
                 } if generation == self.git.history_generation => {
                     self.git.commits = commits;
+                    self.git.history_loading = false;
                     self.dirty = true;
                 }
                 GitEvent::CommitDetail { generation, detail }

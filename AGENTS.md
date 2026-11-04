@@ -75,9 +75,9 @@ Read the minimum set; do not preload the whole tree.
 | Text buffer, caret, selection, undo | `src/model/doc.rs` | Tests at the bottom of the file. |
 | Tabs, files, save/open, folder | `src/model/workspace.rs`, `src/state/files.rs` | `src/state/tabs.rs` for lifecycle. |
 | Editor painting / gutter / IME | `src/ui/editor.rs`, `src/kit.rs` | `src/fonts.rs` for family policy. |
-| App shell / input precedence | `src/app.rs`, `src/input.rs` | `src/state/mod.rs` for `Action`. |
+| App shell / input precedence | `src/app.rs`, `src/input.rs` | `src/state/mod.rs` for `Action`; `src/wake.rs` for frame scheduling/wakeups. |
 | Commands / shortcuts / profiles | `src/keymap.rs`, `src/state/actions.rs` | [`docs/keymaps.md`](docs/keymaps.md), [`docs/keys.md`](docs/keys.md). |
-| Shared state / a domain method | `src/state/mod.rs` + matching `src/state/*.rs` | Keep the struct in `mod.rs`; put impls in the domain file. |
+| Shared state / a domain method | `src/state/mod.rs` + matching `src/state/*.rs` | Keep the struct in `mod.rs`; put impls in the domain file. Time-based wakeups live in `src/state/schedule.rs`. |
 | Markdown parsing / preview | `src/model/markdown.rs`, `src/ui/preview.rs` | [`docs/benchmarks.md`](docs/benchmarks.md); run bench. |
 | Syntax highlighting | `src/syntax/`, `src/model/highlight.rs` | Language packs: `src/syntax/pack.rs`. |
 | Find / replace / project search | `src/model/find.rs`, `src/ui/find_bar.rs`, `src/model/search.rs`, `src/ui/project_search.rs` | `src/model/replace.rs` for files. |

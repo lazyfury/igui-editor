@@ -104,23 +104,10 @@ impl AppState {
         self.hover_target = None;
     }
 
-    /// Keeps a hover card alive while the pointer is over it or in a short
-    /// leave grace period.
-    pub fn hover_dismissing(&self) -> bool {
-        self.hover_leave_at
-            .is_some_and(|at| at.elapsed() < Duration::from_millis(1_500))
-    }
-
-    /// Whether a delayed hover still needs frames before it requests.
-    pub fn hover_waiting(&self) -> bool {
-        self.hover_target
-            .is_some_and(|target| !target.requested && target.since.elapsed().as_millis() < 700)
-    }
-
     /// Fires the pending hover request once the dwell time has passed.
     pub fn tick_hover(&mut self) {
         if let Some(at) = self.hover_leave_at {
-            if at.elapsed() >= Duration::from_millis(1_500) {
+            if at.elapsed() >= super::schedule::HOVER_DISMISS {
                 self.hover_leave_at = None;
                 self.lsp.hover = None;
                 self.lsp.hover_anchor = None;
@@ -131,7 +118,7 @@ impl AppState {
         let Some(target) = self.hover_target else {
             return;
         };
-        if target.requested || target.since.elapsed() < Duration::from_millis(350) {
+        if target.requested || target.since.elapsed() < super::schedule::HOVER_DELAY {
             return;
         }
         let Some(doc) = self.ws.active_doc() else {

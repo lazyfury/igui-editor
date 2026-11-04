@@ -104,6 +104,39 @@ Fix:
 Verified with `LANG=C LC_ALL=C LC_CTYPE=C cargo test model::pty` and with a
 rebuilt/shaded `.app` bundle.
 
+## Improvement cycle 3: frame scheduling, paint reuse, font fallback
+
+Measured on macOS arm64 (1193×656, terminal panel open, maximized session):
+
+| Metric | Before | After |
+|---|---|---|
+| Idle CPU | 13–30% (vsync-locked 60 fps) | **0.0–0.1%** |
+| Incremental frames | none | **none** (0 fps) |
+| RSS | 480 MB | **237 MB** |
+| Physical footprint | 565 MB | **315 MB** |
+| Preview paint (bench) | 0.04 ms/iter | **0.01 ms/iter** |
+| Typing (bench) | 1.17 ms/frame | **1.06 ms/frame** |
+
+Fixes:
+
+- `needs_frame` no longer treats `terminal.open` (or a status message / hover
+  dwell / preview debounce) as "keep drawing": those are deadlines now.
+- `wake::FrameClock` (a Condvar thread) asks the window for one frame at the
+  next deadline; `PtySession`'s reader thread wakes the same handle on output.
+- `igui_ui::paint_cached` reuses the tree `DrawList`; `AppState::dirty` is
+  consumed at paint entry so a paint-time change still schedules one more frame.
+- `sync_scroll_positions`, `tick_reliability`, the native Dock/menu bridge and
+  `sync_title` skip their per-frame work when nothing changed.
+- Preview token measurement no longer allocates a `String` per character.
+- The mono family is Menlo-first: it covers the command prompt's `➜`/`✗`
+  glyphs, which otherwise made the font server load the ~180 MB emoji fallback
+  face (the main RSS contributor while the terminal was open).
+- A dead git worker is detected and its busy flags cleared instead of polling
+  forever; the self-check asserts the loop settles and the draw list is reused.
+
+`scripts/check.sh` (fmt, clippy, 191 unit tests, selfcheck) passes. The
+self-check now covers idle-frame settling and `paint_cached` reuse.
+
 ## Next candidates
 
 - Split `selfcheck.rs` by feature; report the failing check by name.

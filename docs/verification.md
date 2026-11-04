@@ -39,7 +39,10 @@ file**, then asserts:
    and wheel scrolling work,
 10. `⇧⌘L` repaints with the light palette, `⇧⌘O` retargets the sidebar root,
     and a fresh app restores the theme, the open tabs and current tab, the
-    recent list and every editor setting from the session file.
+    recent list and every editor setting from the session file,
+11. an idle app with a terminal panel open requests **no** further frames
+    (`needs_frame` is false; async workers are given a bounded settle window),
+    and a second unchanged frame reuses the cached tree `DrawList`.
 
 M3 checks: syntax token colors (keyword/function/string/comment), incremental
 re-highlight after an edit, indent guides on/off, caret bracket matching, the
@@ -75,6 +78,10 @@ search (debounced worker → result → jump selects the match), split-divider d
 + double-click reset + persisted ratio, autosave write, recovery snapshot
 creation/removal, the startup restore/discard prompt, window geometry
 persistence, and folder/split/window restored from the session.
+
+Unit tests additionally cover the frame wake path: PTY output invokes the wake
+callback, `FrameClock` fires once per deadline, and `AppState::next_wake` picks
+the earliest of the status/hover/autocomplete/preview/poll deadlines.
 
 No OS capture of any kind is used. Native AppKit menus and the borderless
 window chrome are a manual smoke-test item; the headless check covers the

@@ -37,6 +37,9 @@ use crate::syntax::{SyntaxProvider, SyntaxRegistry, TokenKind};
 use crate::theme::{Mode, Theme};
 use crate::ui::preview::PreviewUi;
 
+/// Deadline scheduling: the shared timing constants and the next wakeup.
+pub(crate) mod schedule;
+
 // Domain implementations of [`AppState`]. The struct and its constructors stay
 // in this module; each child owns one concern so no single file becomes a god
 // object. Fields remain private to `state`, which child modules may access.
@@ -695,6 +698,8 @@ pub struct GitState {
     pub mode: GitMode,
     pub commits: Vec<GitCommit>,
     pub history_generation: u64,
+    /// A `git log` request is in flight (drives frame polling).
+    pub history_loading: bool,
     pub history_rows: Vec<(String, Rect)>,
     pub history_rect: Rect,
     pub changes_rect: Rect,
@@ -735,6 +740,7 @@ impl Default for GitState {
             mode: GitMode::Changes,
             commits: Vec::new(),
             history_generation: 0,
+            history_loading: false,
             history_rows: Vec::new(),
             history_rect: Rect::ZERO,
             changes_rect: Rect::ZERO,
@@ -1015,6 +1021,9 @@ pub struct AppState {
     /// Status-bar message and whether it is an error.
     pub message: Option<(String, bool, Instant)>,
     pub clipboard: Option<Rc<RefCell<dyn Clipboard>>>,
+    /// Cross-thread "draw a frame" handle (pty output, frame clock). `None` in
+    /// headless runs, where the runner drives frames itself.
+    pub wake: Option<crate::wake::WakeFn>,
     /// Set when the shell must be rebuilt (sidebar, find bar, view mode).
     pub needs_rebuild: bool,
     /// View mode the shell was last built for.
@@ -1171,6 +1180,7 @@ impl AppState {
             menu_hover: None,
             message: None,
             clipboard: None,
+            wake: None,
             needs_rebuild: false,
             built_view: ViewMode::Edit,
             built_docs: false,
@@ -1268,10 +1278,12 @@ impl AppState {
 
     pub fn status(&mut self, message: impl Into<String>) {
         self.message = Some((message.into(), false, Instant::now()));
+        self.dirty = true;
     }
 
     pub fn error(&mut self, message: impl Into<String>) {
         self.message = Some((message.into(), true, Instant::now()));
+        self.dirty = true;
     }
 
     /// Message text plus severity, if one is still worth showing.

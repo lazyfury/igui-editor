@@ -14,21 +14,22 @@ impl AppState {
         for doc in &self.ws.tabs {
             let id = doc.id();
             let rev = doc.rev();
-            match self.doc_revs.get(&id) {
-                Some(known) if *known == rev => {}
-                _ => {
-                    self.doc_revs.insert(id, rev);
-                    changed = true;
-                }
+            if self.doc_revs.get(&id) != Some(&rev) {
+                self.doc_revs.insert(id, rev);
+                changed = true;
             }
         }
-        let live: std::collections::HashSet<u64> =
-            self.ws.tabs.iter().map(|doc| doc.id()).collect();
-        self.doc_revs.retain(|id, _| live.contains(id));
+        // Only rebuild the live set when a tab was closed (the common case has
+        // the same count and no set work per frame).
+        if changed || self.doc_revs.len() != self.ws.tabs.len() {
+            let live: std::collections::HashSet<u64> =
+                self.ws.tabs.iter().map(|doc| doc.id()).collect();
+            self.doc_revs.retain(|id, _| live.contains(id));
+        }
         if changed {
             self.last_activity = Instant::now();
         }
-        if self.last_activity.elapsed().as_secs_f32() < 2.0 {
+        if self.last_activity.elapsed() < super::schedule::AUTOSAVE_DELAY {
             return;
         }
         self.flush_reliability();

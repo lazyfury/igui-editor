@@ -33,7 +33,7 @@ impl AppState {
             .or_else(|| self.ws.folder().map(Path::to_path_buf))
             .unwrap_or_else(|| PathBuf::from("."));
         let (spawn_rows, spawn_cols) = self.terminal_grid();
-        match PtySession::spawn(&cwd, spawn_rows, spawn_cols) {
+        match PtySession::spawn(&cwd, spawn_rows, spawn_cols, self.wake.clone()) {
             Ok(session) => {
                 let rows = std::num::NonZeroU16::new(spawn_rows).unwrap();
                 let cols = std::num::NonZeroU16::new(spawn_cols).unwrap();
@@ -64,7 +64,8 @@ impl AppState {
                 .or_else(|| self.ws.folder().map(Path::to_path_buf))
                 .unwrap_or_else(|| PathBuf::from("."));
             let (spawn_rows, spawn_cols) = self.terminal_grid();
-            if let Ok(session) = PtySession::spawn(&cwd, spawn_rows, spawn_cols) {
+            if let Ok(session) = PtySession::spawn(&cwd, spawn_rows, spawn_cols, self.wake.clone())
+            {
                 self.terminal.parser = Some(vt100::Parser::new(
                     std::num::NonZeroU16::new(spawn_rows).unwrap(),
                     std::num::NonZeroU16::new(spawn_cols).unwrap(),

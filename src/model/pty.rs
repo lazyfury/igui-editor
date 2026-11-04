@@ -3,6 +3,11 @@
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
+use std::sync::Arc;
+
+/// "Please draw a frame" callback. Thread-safe by construction; the model does
+/// not know what the other end does with it.
+pub type WakeFn = Arc<dyn Fn() + Send + Sync>;
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 
@@ -77,7 +82,9 @@ pub struct PtySession {
 }
 
 impl PtySession {
-    pub fn spawn(cwd: &Path, rows: u16, cols: u16) -> Result<Self, String> {
+    /// `wake` is called from the reader thread whenever output arrives (and
+    /// on EOF), so the app can stay asleep while the shell is idle.
+    pub fn spawn(cwd: &Path, rows: u16, cols: u16, wake: Option<WakeFn>) -> Result<Self, String> {
         let size = PtySize {
             rows: rows.max(2),
             cols: cols.max(8),
@@ -124,8 +131,15 @@ impl PtySession {
                             if tx.send(buffer[..n].to_vec()).is_err() {
                                 break;
                             }
+                            if let Some(wake) = wake.as_ref() {
+                                wake();
+                            }
                         }
                     }
+                }
+                // EOF: the app still needs one frame to notice `try_wait`.
+                if let Some(wake) = wake.as_ref() {
+                    wake();
                 }
             })
             .ok();
@@ -181,6 +195,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn output_wakes_the_host() {
+        let dir = std::env::temp_dir().join(format!("igui-editor-pty-wake-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (tx, rx) = mpsc::channel();
+        let wake: WakeFn = Arc::new(move || {
+            let _ = tx.send(());
+        });
+        let mut session = PtySession::spawn(&dir, 24, 80, Some(wake)).unwrap();
+        // Any output (a prompt or the echoed line) must ask for a frame.
+        session.write(b"echo awake\n");
+        rx.recv_timeout(std::time::Duration::from_secs(5))
+            .expect("pty output should wake the host");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn utf8_locales_are_left_alone() {
         let fix = locale_fix(None, None, Some("zh_CN.UTF-8"));
         assert_eq!(
@@ -224,7 +255,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("igui-editor-中文终端-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let mut session = PtySession::spawn(&dir, 24, 80).unwrap();
+        let mut session = PtySession::spawn(&dir, 24, 80, None).unwrap();
         let mut parser = vt100::Parser::new(
             std::num::NonZeroU16::new(24).unwrap(),
             std::num::NonZeroU16::new(80).unwrap(),
@@ -269,7 +300,7 @@ mod tests {
     #[test]
     fn pty_round_trip() {
         let dir = std::env::temp_dir();
-        let mut session = PtySession::spawn(&dir, 24, 80).unwrap();
+        let mut session = PtySession::spawn(&dir, 24, 80, None).unwrap();
         session.write(b"printf terminal-ok\\n");
         let mut seen = String::new();
         for _ in 0..100 {

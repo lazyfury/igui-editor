@@ -117,6 +117,12 @@ Measured on macOS arm64 for 0.1.0:
 | `dist/igui-editor.app` | 10 MB | **5.0 MB** |
 | `dist/*.zip` | 4.1 MB | **2.9 MB** |
 
+Frames are event-driven: an idle window presents **zero** frames, and an open
+terminal no longer keeps a 60 fps loop alive (PTY output wakes the window, timed
+work runs on a deadline clock). The tree's `DrawList` is reused while the UI is
+unchanged. Measured on macOS arm64 with a 1193×656 window and the terminal open:
+**0.0–0.1% idle CPU, 237 MB RSS** (was 13–30% / 480 MB).
+
 Quick Open caches workspace-relative/lowercase paths once per index; Markdown
 preview culls off-screen draw primitives and coalesces full relayouts for large
 documents. See [docs/benchmarks.md](docs/benchmarks.md) for numbers and how to

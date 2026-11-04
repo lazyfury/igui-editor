@@ -26,6 +26,7 @@ use crate::model::Workspace;
 use crate::state::{Action, AppState, DialogKind, DialogRequest, Focus, Menu, ViewMode};
 use crate::theme::{Mode, Theme};
 use crate::ui;
+use crate::wake::{FrameClock, WindowWake};
 
 /// The editor application, host-agnostic: no window, no wgpu, no winit.
 pub struct EditorApp {
@@ -41,6 +42,21 @@ pub struct EditorApp {
     drop: Option<SharedDropTarget>,
     /// Whether the saved window position was applied.
     window_restored: bool,
+    /// Cross-thread wakeups (PTY output, frame clock).
+    wake: WindowWake,
+    /// Deadline driver; `None` in headless runs and on non-windowed hosts.
+    clock: Option<FrameClock>,
+    /// Last UI `DrawList`, reused while only the app overlays change.
+    paint_cache: igui_ui::UiPaintCache,
+    /// Whether the last frame spliced the cached tree list (diagnostics).
+    last_paint_reused: bool,
+    /// Mirrors of the native Dock/menu state, so idle frames do not clone or
+    /// rebuild it.
+    recent: Vec<PathBuf>,
+    dirty_count: usize,
+    /// Active-document identity last pushed to the window title.
+    title_key: Option<(u64, bool)>,
+    title_folder: Option<PathBuf>,
     /// The dialog currently open (native sheet / portal / scripted).
     pending: Option<PendingDialog>,
     /// Drop the committed text that follows the Alt+Z soft-wrap shortcut.
@@ -91,12 +107,16 @@ impl EditorApp {
             Mode::Light
         });
         let workspace = workspace_for(open, &session);
+        // A lazily bound wake handle: the PTY is restored below, before the
+        // window exists, and must still be able to ask for frames later.
+        let wake = WindowWake::default();
         let mut state = AppState::new(
             Theme::new(theme_mode),
             workspace,
             session,
             config_path.clone(),
         );
+        state.wake = Some(wake.function());
         // Data-only language packs (`<config>/languages/*.json`) join the
         // registry after the built-ins, so a pack can never override one.
         let (providers, servers, errors) = crate::syntax::load_language_packs(
@@ -165,6 +185,14 @@ impl EditorApp {
             analysis_behind: false,
             drop: None,
             window_restored: false,
+            wake,
+            clock: None,
+            paint_cache: igui_ui::UiPaintCache::new(),
+            last_paint_reused: false,
+            recent: Vec::new(),
+            dirty_count: 0,
+            title_key: None,
+            title_folder: None,
         }
     }
 
@@ -176,7 +204,11 @@ impl EditorApp {
     /// through it when a pointer/keys would be overkill).
     #[doc(hidden)]
     pub fn state_mut(&mut self) -> std::cell::RefMut<'_, AppState> {
-        self.state.borrow_mut()
+        let mut state = self.state.borrow_mut();
+        // Wiring tests mutate visible state directly; keep the paint cache
+        // honest without requiring every test to know about it.
+        state.dirty = true;
+        state
     }
 
     /// Registers an additional syntax provider (the plugin seam). Re-registering
@@ -198,6 +230,45 @@ impl EditorApp {
         self.tree.iter().count()
     }
 
+    /// Whether the last frame reused the cached tree `DrawList` (self-check).
+    #[doc(hidden)]
+    pub fn paint_cache_reused(&self) -> bool {
+        self.last_paint_reused
+    }
+
+    /// Why the frame loop is still awake (self-check diagnostics).
+    #[doc(hidden)]
+    pub fn frame_blocker(&self) -> &'static str {
+        if self.pending.is_some() {
+            "dialog"
+        } else if self.window_dragging {
+            "window-drag"
+        } else if self.analysis_behind {
+            "highlight"
+        } else {
+            let state = self.state.borrow();
+            if state.dirty {
+                "dirty"
+            } else if state.search_busy() {
+                "search"
+            } else if state.git.pending {
+                "git-pending"
+            } else if state.git.loading {
+                "git-loading"
+            } else if state.git.diff_loading {
+                "git-diff"
+            } else if state.git.detail_loading {
+                "git-detail"
+            } else if state.git.history_loading {
+                "git-history"
+            } else if state.lsp.is_busy() {
+                "lsp"
+            } else {
+                ""
+            }
+        }
+    }
+
     /// Drains deferred work: rebuild the shell when its structure changed,
     /// refresh find matches, run queued dialogs, persist the session, expire the
     /// status message and sync the window title.
@@ -217,13 +288,25 @@ impl EditorApp {
         // structure, and the same frame must rebuild for it.
         self.pump_dialog();
         self.pump_native_requests();
-        // Keep native Dock Recent / quit state in step with the session.
-        {
-            let state = self.state.borrow();
-            crate::macos::set_recent(&state.session.recent);
-            crate::macos::set_dirty_count(
-                state.ws.tabs.iter().filter(|doc| doc.is_dirty()).count(),
-            );
+        // Keep native Dock Recent / quit state in step with the session. Both
+        // are Objective-C calls; only touch them when the value changed.
+        let recent_changed = self.state.borrow().session.recent != self.recent;
+        if recent_changed {
+            let recent = self.state.borrow().session.recent.clone();
+            crate::macos::set_recent(&recent);
+            self.recent = recent;
+        }
+        let dirty_count = self
+            .state
+            .borrow()
+            .ws
+            .tabs
+            .iter()
+            .filter(|doc| doc.is_dirty())
+            .count();
+        if dirty_count != self.dirty_count {
+            self.dirty_count = dirty_count;
+            crate::macos::set_dirty_count(dirty_count);
         }
         // A settings panel change (or a sidebar drag) may need the flex basis
         // updated without rebuilding the shell.
@@ -244,6 +327,7 @@ impl EditorApp {
             self.state.borrow_mut().pending_sidebar_sync = false;
         }
         self.analysis_behind = self.state.borrow_mut().tick_analysis();
+        self.state.borrow_mut().tick_preview_debounce();
         self.state.borrow_mut().tick_external_changes();
         self.state.borrow_mut().tick_git();
         self.state.borrow_mut().tick_lsp();
@@ -271,19 +355,48 @@ impl EditorApp {
             state
                 .message
                 .as_ref()
-                .is_some_and(|(_, _, at)| at.elapsed().as_secs_f32() > 3.0)
+                .is_some_and(|(_, _, at)| at.elapsed() > crate::state::schedule::STATUS_TTL)
         };
         if expired {
             let mut state = self.state.borrow_mut();
             state.message = None;
             state.dirty = true;
         }
+        // A coalesced preview rebuild is only meaningful while the preview
+        // pane is mounted; drop the deadline instead of waking for nothing.
+        {
+            let mut state = self.state.borrow_mut();
+            if state.preview.rebuild_pending()
+                && (state.ws.active_doc().is_none() || state.view_of_active() == ViewMode::Edit)
+            {
+                state.preview.cancel_rebuild();
+            }
+        }
         self.sync_title();
         self.state.borrow_mut().save_session_if_dirty();
+        self.schedule_wake();
+    }
+
+    /// Hands the earliest time-based deadline to the frame clock. Time-based
+    /// work must never return `true` from `needs_frame` (that asks for the next
+    /// frame immediately and recreates the 60 fps idle loop).
+    fn schedule_wake(&self) {
+        let Some(clock) = self.clock.as_ref() else {
+            return;
+        };
+        clock.set_deadline(self.state.borrow().next_wake());
     }
 
     pub fn layout(&mut self, viewport: ViewportSize) {
-        self.state.borrow_mut().viewport = viewport;
+        {
+            let mut state = self.state.borrow_mut();
+            if state.viewport != viewport {
+                state.viewport = viewport;
+                // Menus/modals anchor to the viewport; their cached geometry
+                // must not survive a resize.
+                state.dirty = true;
+            }
+        }
         igui_ui::layout(&mut self.tree, viewport);
         self.tree.update();
         // Both drag handles share this vertical anchor, so their grip bars are
@@ -296,7 +409,16 @@ impl EditorApp {
     }
 
     pub fn paint(&mut self, ctx: &mut PaintContext) {
-        igui_ui::paint(&self.tree, ctx);
+        // Consume the dirty flag at entry: anything a painter sets during this
+        // frame survives for the next one (`needs_frame` also reads it).
+        let dirty = std::mem::take(&mut self.state.borrow_mut().dirty);
+        if dirty {
+            self.paint_cache.clear();
+        }
+        // Rebuild the tree's `DrawList` only when the tree or the app changed;
+        // an idle frame replays the cached commands.
+        self.last_paint_reused =
+            igui_ui::paint_cached(&self.tree, &mut self.paint_cache, ctx).is_reused();
         // Git diff is an app overlay, above the tree but below menus/modals.
         let measurer = igui_ui::text_measurer(&self.tree);
         let mut state = self.state.borrow_mut();
@@ -319,6 +441,9 @@ impl EditorApp {
         ui::drop::paint(&state, measurer.as_ref(), ctx);
         ui::modal::paint(&mut state, measurer.as_ref(), ctx);
         ui::recovery::paint(&state, measurer.as_ref(), ctx);
+        drop(state);
+        // The preview debounce deadline is chosen while painting.
+        self.schedule_wake();
     }
 
     pub fn event(&mut self, event: &InputEvent) -> EventResult {
@@ -1037,33 +1162,14 @@ impl EditorApp {
     }
 
     pub fn needs_frame(&self) -> bool {
-        self.pending.is_some()
-            || self.window_dragging
-            || self.analysis_behind
-            || self.state.borrow().search_busy()
-            || self.state.borrow().terminal.open
-            || self.state.borrow().lsp.is_busy()
-            || self.state.borrow().auto_completion_pending()
-            || self.state.borrow().hover_waiting()
-            || self.state.borrow().hover_dismissing()
-            || self.state.borrow().message.is_some()
-            || self.preview_rebuild_pending()
-    }
-
-    /// Whether a coalesced preview rebuild still needs frames. If the preview
-    /// pane is no longer mounted, clear the deadline instead of spinning.
-    fn preview_rebuild_pending(&self) -> bool {
-        let Ok(mut state) = self.state.try_borrow_mut() else {
+        if self.pending.is_some() || self.window_dragging || self.analysis_behind {
             return true;
-        };
-        if !state.preview.rebuild_pending() {
-            return false;
         }
-        if state.ws.active_doc().is_none() || state.view_of_active() == ViewMode::Edit {
-            state.preview.cancel_rebuild();
-            return false;
-        }
-        true
+        let state = self.state.borrow();
+        // `dirty` catches a painter that changed state mid-frame; the rest are
+        // "keep polling until the work lands" states. Timed work lives in
+        // `AppState::next_wake`, not here.
+        state.dirty || state.search_busy() || state.git_busy() || state.lsp.is_busy()
     }
 
     /// Starts a requested dialog (one at a time) and polls the open one. The
@@ -1339,25 +1445,39 @@ impl EditorApp {
     }
 
     fn sync_title(&mut self) {
+        let doc_key = self
+            .state
+            .borrow()
+            .ws
+            .active_doc()
+            .map(|doc| (doc.id(), doc.is_dirty()));
+        let folder_changed = {
+            let state = self.state.borrow();
+            state.ws.folder() != self.title_folder.as_deref()
+        };
+        if self.title_key == doc_key && !folder_changed {
+            return;
+        }
+        self.title_key = doc_key;
         let title = {
             let state = self.state.borrow();
+            if folder_changed {
+                self.title_folder = state.ws.folder().map(Path::to_path_buf);
+            }
             match state.ws.active_doc() {
                 Some(doc) => format!(
                     "{}{} — igui-editor",
                     doc.name(),
                     if doc.is_dirty() { " •" } else { "" }
                 ),
-                None => state
-                    .ws
-                    .folder()
+                None => self
+                    .title_folder
+                    .as_deref()
                     .and_then(|folder| folder.file_name())
                     .map(|name| format!("{} — igui-editor", name.to_string_lossy()))
                     .unwrap_or_else(|| "igui-editor".to_string()),
             }
         };
-        if self.state.borrow().title == title {
-            return;
-        }
         self.state.borrow_mut().title = title.clone();
         if let Some(window) = &self.window {
             let window = window.borrow().clone();
@@ -1368,7 +1488,12 @@ impl EditorApp {
     }
 
     fn rebuild(&mut self) {
-        self.state.borrow_mut().needs_rebuild = false;
+        {
+            let mut state = self.state.borrow_mut();
+            state.needs_rebuild = false;
+            state.dirty = true;
+        }
+        self.paint_cache.clear();
         self.state.borrow_mut().find.hits.clear();
         self.tree.remove(self.shell);
         let (shell, editor) = build_shell(&mut self.tree, &self.state);
@@ -1618,6 +1743,12 @@ impl AppLogic for EditorApp {
         }
         if let Some(window) = ctx.service::<SharedWindow>() {
             self.window = Some(window.clone());
+            if let Some(handle) = window.borrow().as_ref().cloned() {
+                self.wake.set(handle);
+                if self.clock.is_none() {
+                    self.clock = Some(FrameClock::start(self.wake.function()));
+                }
+            }
             self.restore_window_position();
         }
         if let Some(drop) = ctx.service::<SharedDropTarget>() {

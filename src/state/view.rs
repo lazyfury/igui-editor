@@ -5,6 +5,21 @@ use super::*;
 impl AppState {
     // -- view mode -------------------------------------------------------
 
+    /// Fires a coalesced preview rebuild once its debounce deadline passed.
+    ///
+    /// The rebuild itself happens in the preview painter (it needs the
+    /// measurer); this only marks the frame dirty so the cached `DrawList` is
+    /// dropped and the painter runs. Without it a cached idle frame would never
+    /// reach the rebuild.
+    pub fn tick_preview_debounce(&mut self) {
+        let Some(at) = self.preview.rebuild_deadline() else {
+            return;
+        };
+        if Instant::now() >= at {
+            self.dirty = true;
+        }
+    }
+
     pub fn view_of_active(&self) -> ViewMode {
         let Some(doc) = self.ws.active_doc() else {
             return ViewMode::Edit;

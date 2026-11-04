@@ -135,9 +135,13 @@ fn ansi_color(color: vt100::Color, default: Color) -> Color {
 /// fallback may be wider, so it must fit in two columns or it would overlap
 /// the next cell.
 fn cell_width(measurer: &dyn TextMeasurer, font: f32, family: Option<&str>) -> f32 {
+    // Wide glyphs are painted with the UI family (see `paint`), so measure the
+    // wide probe with that family too. Asking the fixed-pitch face for a Han
+    // glyph makes the font server probe every fallback face and load each font
+    // file (tens of MB) just to answer the advance.
     measurer
         .advance_in('M', font, family)
-        .max(measurer.advance_in('中', font, family) / 2.0)
+        .max(crate::fonts::advance(measurer, '中', font, family) / 2.0)
         .max(1.0)
 }
 
@@ -286,6 +290,8 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                 // Korean/Japanese face with the wrong regional glyph shapes.
                 // Same em as the Latin cells; centered in the two columns.
                 let (draw_family, draw_x) = if cell.is_wide() {
+                    // Wide glyphs come from the UI family, same as the
+                    // editor (the mono face usually has no Han coverage).
                     let wide_family = None;
                     let advance = env.measurer.measure_run_in(text, font, wide_family);
                     (

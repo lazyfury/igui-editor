@@ -267,8 +267,8 @@ impl GitWorker {
         self.tx.send(request).is_ok()
     }
 
-    pub fn try_recv(&self) -> Option<GitEvent> {
-        self.rx.try_recv().ok()
+    pub fn try_recv(&self) -> Result<GitEvent, mpsc::TryRecvError> {
+        self.rx.try_recv()
     }
 }
 

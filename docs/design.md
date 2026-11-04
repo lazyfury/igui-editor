@@ -254,6 +254,21 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    terminal. The built-in terminal is a second native plugin (`portable-pty` +
    `vt100`) with a cell-grid renderer and a dedicated focus mode.
 
+36. **Frames are event- and deadline-driven; the tree `DrawList` is cached.**
+    `needs_frame` answers only "does work remain" (highlight catch-up, a busy
+    git/search/LSP worker, an open dialog, a window drag). Time-based work
+    names a deadline in `state::schedule::next_wake` (status-message expiry,
+    hover dwell/dismiss, autosave, the external-change poll, the preview
+    debounce); `wake::FrameClock` asks the window for exactly one frame when the
+    deadline elapses. The PTY reader thread calls the same wake when the shell
+    prints, so an open terminal no longer keeps a 60 fps loop alive. `paint`
+    reuses the tree's last `DrawList` through `igui_ui::paint_cached`; the
+    app-level `dirty` flag is consumed at paint entry (a painter that sets it
+    keeps the next frame awake) and forces a cache clear, while the app
+    overlays (menus, modals, git diff) are still painted every frame. The mono
+    family list is Menlo-first because it also covers prompt symbols (`➜`,
+    `✗`); a face miss would make the font server load a huge fallback font.
+
 ## Theme spec (geek / compact / no corners)
 
 Rules:
@@ -262,7 +277,7 @@ Rules:
 - one UI text family for chrome and wide CJK runs; on macOS the default is
   PingFang SC so Chinese has real glyphs (the engine's symbol fallback otherwise
   paints boxes), while the editor and terminal draw narrow runs in a resolved
-  fixed-pitch face (Monaco first);
+  fixed-pitch face (Menlo first);
 - sizes are em pixels (`FontConfig::em_size`, CSS/VS Code semantics), so the
   editor, chrome and terminal share one scale;
 - dense rhythm, generous horizontal air inside rows.
@@ -303,7 +318,7 @@ Palette:
 
 macOS uses PingFang SC as the UI/chrome primary text face so Chinese has real
 glyphs; the engine's first symbol fallback is otherwise box-shaped. The editor
-and terminal draw narrow runs in a resolved fixed-pitch face (Monaco first) and
+and terminal draw narrow runs in a resolved fixed-pitch face (Menlo first) and
 wide CJK runs in that UI face, so code stays column-aligned without changing
 Chinese glyphs.
 

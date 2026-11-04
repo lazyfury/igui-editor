@@ -105,6 +105,11 @@ impl PreviewUi {
         self.rebuild_at.is_some()
     }
 
+    /// The debounce deadline, for the frame scheduler.
+    pub fn rebuild_deadline(&self) -> Option<Instant> {
+        self.rebuild_at
+    }
+
     /// Drops a pending rebuild when the preview pane is no longer mounted.
     pub fn cancel_rebuild(&mut self) {
         self.rebuild_at = None;
@@ -702,12 +707,9 @@ fn split_long_tokens(
         let mut space_before = token.space_before;
         for (text, style) in &token.segments {
             for ch in text.chars() {
-                let advance = kit::width_weighted(
-                    measurer,
-                    &ch.to_string(),
-                    size,
-                    style_weight(*style, weight),
-                );
+                // A single character does not need a temporary `String` just
+                // to be measured; long CJK lines hit this per character.
+                let advance = measurer.advance_weighted(ch, size, style_weight(*style, weight));
                 if width + advance > max_w && !segments.is_empty() {
                     out.push(Token {
                         segments: std::mem::take(&mut segments),
@@ -858,12 +860,7 @@ fn runs_width(measurer: &dyn TextMeasurer, runs: &[Run], size: f32, weight: Font
                 width += measurer.advance(' ', size);
             }
             pending_space = false;
-            width += kit::width_weighted(
-                measurer,
-                &ch.to_string(),
-                size,
-                style_weight(run.style, weight),
-            );
+            width += measurer.advance_weighted(ch, size, style_weight(run.style, weight));
         }
     }
     width

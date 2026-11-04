@@ -2643,6 +2643,39 @@ fn check(dir: &Path) -> Result<(), String> {
         }
     }
 
+    // Frame loop: an idle app must not request frames. A terminal panel is the
+    // classic offender (being open used to be enough to keep a 60 fps loop
+    // alive), and a second unchanged frame must reuse the cached draw list.
+    {
+        let mut state = harness.app.state_mut();
+        state.terminal.open = true;
+        state.preview.cancel_rebuild();
+        state.dirty = true;
+    }
+    // Async workers (git) answer on their own thread; give them a moment.
+    let settle = std::time::Instant::now() + Duration::from_secs(2);
+    while harness.app.needs_frame() && std::time::Instant::now() < settle {
+        harness.frame()?;
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    if harness.app.needs_frame() {
+        return Err(format!(
+            "an idle app still requests frames with the terminal open ({})",
+            harness.app.frame_blocker()
+        ));
+    }
+    let _ = harness.frame()?;
+    if harness.app.needs_frame() {
+        return Err(format!(
+            "a settled frame still requests another ({})",
+            harness.app.frame_blocker()
+        ));
+    }
+    if !harness.app.paint_cache_reused() {
+        return Err("an unchanged frame did not reuse the cached draw list".into());
+    }
+    harness.app.state_mut().terminal.open = false;
+
     let _ = restored_dialogs;
     println!(
         "selfcheck: main flow ok ({} commands in the final frame, {} controls)",

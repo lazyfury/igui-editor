@@ -178,7 +178,7 @@ exist. This makes `cargo`, `rust-analyzer` and Homebrew tools discoverable from
 the terminal, LSP and Git even when the app was launched from Finder.
 
 `src/fonts.rs` is the project's font policy: the editor and terminal pick a
-**fixed-pitch** family at runtime (`Monaco` / `SF Mono` / `Menlo` /
+**fixed-pitch** family at runtime (`Menlo` / `SF Mono` / `.SF NS Mono` / `Monaco` /
 `JetBrains Mono` / … — each candidate is accepted only if its glyph advances
 agree, and the first hit wins), while chrome and overlays keep the UI family
 (PingFang SC on macOS, the system default elsewhere). Code text draws narrow runs
@@ -421,7 +421,7 @@ Not `igui_theme::DefaultTheme`. The app owns its palette and metrics
 - **No rounded rectangle anywhere** — every surface is a square fill with 1 px
   rules; scrollbar thumbs and carets are straight bars.
 - **Monospace code, CJK-safe chrome** — the editor and terminal draw narrow
-  runs in the first installed fixed-pitch face (`Monaco` on macOS), while
+  runs in the first installed fixed-pitch face (`Menlo` on macOS), while
   chrome/overlays and wide CJK runs use the UI family: **PingFang SC** on macOS
   so Chinese renders with real glyphs instead of the engine's box-shaped symbol
   fallback, the system default elsewhere. Other hosts prefer JetBrains Mono /

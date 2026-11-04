@@ -103,11 +103,22 @@ impl AppState {
         let line_h = self.editor_metrics().line_h.max(1.0);
         let editor_scroll = doc.scroll_y;
         let preview_scroll = self.preview.scroll;
-        let anchors = self.preview.anchors.clone();
-        if !split || !self.sync_scroll || rev != self.sync_rev || anchors.len() < 2 {
+        let editor_changed = (editor_scroll - self.last_editor_scroll).abs() > 0.5;
+        let preview_changed = (preview_scroll - self.last_preview_scroll).abs() > 0.5;
+        // Most frames neither pane moved; do not touch the sync state (and do
+        // not mark the frame dirty) in that case.
+        if !(split && self.sync_scroll && rev == self.sync_rev)
+            || !(editor_changed || preview_changed)
+        {
             self.last_editor_scroll = editor_scroll;
             self.last_preview_scroll = preview_scroll;
             self.sync_rev = rev;
+            return;
+        }
+        let anchors = self.preview.anchors.clone();
+        if anchors.len() < 2 {
+            self.last_editor_scroll = editor_scroll;
+            self.last_preview_scroll = preview_scroll;
             return;
         }
         let soft_wrap = self.session.soft_wrap
@@ -122,8 +133,6 @@ impl AppState {
         } else {
             editor_scroll / line_h
         };
-        let editor_changed = (editor_scroll - self.last_editor_scroll).abs() > 0.5;
-        let preview_changed = (preview_scroll - self.last_preview_scroll).abs() > 0.5;
         if editor_changed && !preview_changed {
             self.preview.scroll = preview_y_for_line(&anchors, editor_line);
         } else if preview_changed && !editor_changed {
@@ -347,6 +356,10 @@ impl AppState {
             } = self;
             match ws.active_doc() {
                 Some(doc) => {
+                    // A budgeted pass changes the painted tokens without
+                    // changing the document revision; repaint for both the
+                    // running and the completing frame.
+                    let was_behind = highlight.is_behind();
                     highlight.sync(
                         doc,
                         syntax,
@@ -354,7 +367,8 @@ impl AppState {
                         crate::model::highlight::FRAME_LINE_BUDGET,
                         language_override.as_deref(),
                     );
-                    highlight.is_behind()
+                    let behind = highlight.is_behind();
+                    behind || was_behind
                 }
                 None => {
                     highlight.reset();
@@ -362,6 +376,9 @@ impl AppState {
                 }
             }
         };
+        if behind {
+            self.dirty = true;
+        }
 
         let key = self.ws.active_doc().map(|doc| {
             (

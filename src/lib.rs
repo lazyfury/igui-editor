@@ -65,5 +65,6 @@ mod services;
 mod state;
 mod ui;
 mod vim;
+mod wake;
 
 pub use app::EditorApp;

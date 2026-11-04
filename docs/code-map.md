@@ -9,6 +9,8 @@ src/
   model/fuzzy.rs      Quick Open ranking
   model/workspace_index.rs  ignored-dir file index (Quick Open)
   model/search.rs     background project search (worker + caps)
+  wake.rs             cross-thread frame wakeups + deadline clock
+  fonts.rs            family policy (Menlo-first mono, CJK UI face)
   keymap.rs           chord parser, profiles, user override resolver
   vim.rs              Normal/Insert/Visual key handling (Vim profile)
   syntax/pack.rs      declarative JSON language packs
@@ -46,6 +48,7 @@ src/
   state/{terminal,git,lsp,search}.rs  native services and workers
   state/{settings,view,reliability,services,new_file,quick_open}.rs
                       settings, layout, autosave/recovery and prompt state
+  state/schedule.rs   time-based wakeup deadlines (status/hover/autosave/poll)
   theme.rs            geek palette + compact metrics
   kit.rs              control-node construction and text/line helpers
   ui/menu.rs          menu bar + app-level drop-down overlay

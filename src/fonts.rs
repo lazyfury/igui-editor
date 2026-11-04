@@ -45,17 +45,20 @@ pub const FALLBACK_FACE_FILES: &[&str] = &[
 
 /// Fixed-pitch candidates for the editor and terminal, in preference order.
 ///
-/// `Monaco` is first, so it is the default on macOS whenever it is installed;
-/// reorder this list to prefer another face. Covers the stock macOS
-/// (`Monaco`, `SF Mono`, `Menlo`), Linux (`JetBrains Mono`, `Fira Code`,
-/// `DejaVu Sans Mono`, `Noto Sans Mono`) and Windows (`Cascadia Mono`,
-/// `Consolas`) faces. Missing names are skipped by the probe, so one list
-/// works on every host.
+/// `Menlo` is first: it also covers the dingbat/symbol glyphs shells put in
+/// their prompts (`➜`, `✗`, …). `Monaco` is fixed-pitch too but lacks them,
+/// and asking the font server for an uncovered glyph makes it probe every
+/// fallback face and load the whole font file — on macOS that can mean the
+/// ~180 MB emoji face for one prompt character. Reorder this list to prefer
+/// another face. Covers the stock macOS (`Menlo`, `SF Mono`, `Monaco`), Linux
+/// (`JetBrains Mono`, `Fira Code`, `DejaVu Sans Mono`, `Noto Sans Mono`) and
+/// Windows (`Cascadia Mono`, `Consolas`) faces. Missing names are skipped by
+/// the probe, so one list works on every host.
 pub const MONO_FAMILIES: &[&str] = &[
-    "Monaco",
+    "Menlo",
     "SF Mono",
     ".SF NS Mono",
-    "Menlo",
+    "Monaco",
     "JetBrains Mono",
     "Fira Code",
     "Cascadia Mono",
@@ -213,20 +216,17 @@ mod tests {
     }
 
     #[test]
-    fn monaco_is_the_preferred_code_face() {
-        assert_eq!(MONO_FAMILIES.first(), Some(&"Monaco"));
+    fn menlo_is_the_preferred_code_face() {
+        // Menlo covers the dingbats shells put in prompts; Monaco does not.
+        assert_eq!(MONO_FAMILIES.first(), Some(&"Menlo"));
     }
 
     #[test]
     fn family_runs_keep_wide_glyphs_on_the_ui_face() {
-        let runs: Vec<_> = family_runs("abc中文x", Some("Monaco")).collect();
+        let runs: Vec<_> = family_runs("abc中文x", Some("Menlo")).collect();
         assert_eq!(
             runs,
-            vec![
-                ("abc", Some("Monaco")),
-                ("中文", None),
-                ("x", Some("Monaco")),
-            ]
+            vec![("abc", Some("Menlo")), ("中文", None), ("x", Some("Menlo")),]
         );
     }
 
@@ -271,7 +271,7 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn real_font_server_resolves_monaco() {
+    fn real_font_server_resolves_menlo() {
         use std::rc::Rc;
 
         struct Metrics(igui_font::FontMetrics);
@@ -303,14 +303,13 @@ mod tests {
 
         let server = Rc::new(igui_font::FontServer::load_with(crate::host::font_config()));
         let measurer = Metrics(igui_font::FontMetrics::new(server));
-        assert_eq!(mono_family(&measurer, 13.0).as_deref(), Some("Monaco"));
+        assert_eq!(mono_family(&measurer, 13.0).as_deref(), Some("Menlo"));
 
-        // Mixed code keeps the Monaco advance for Latin and the UI-family
+        // Mixed code keeps the Menlo advance for Latin and the UI-family
         // advance for the wide glyph.
-        let expected = measurer.0.advance_in('a', 13.0, Some("Monaco"))
+        let expected = measurer.0.advance_in('a', 13.0, Some("Menlo"))
             + measurer.0.advance_in('中', 13.0, None);
-        let mixed =
-            measure_run_weighted(&measurer, "a中", 13.0, FontWeight::NORMAL, Some("Monaco"));
+        let mixed = measure_run_weighted(&measurer, "a中", 13.0, FontWeight::NORMAL, Some("Menlo"));
         assert!(
             (mixed - expected).abs() < 0.01,
             "mixed={mixed} expected={expected}"

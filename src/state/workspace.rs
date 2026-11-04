@@ -81,7 +81,7 @@ impl AppState {
 
     /// Runs the 1-second metadata poll.
     pub fn tick_external_changes(&mut self) {
-        if self.last_external_check.elapsed() < Duration::from_secs(1) {
+        if self.last_external_check.elapsed() < super::schedule::EXTERNAL_POLL {
             return;
         }
         self.last_external_check = Instant::now();
