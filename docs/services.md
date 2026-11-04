@@ -170,6 +170,12 @@ its own language-server binary.
 - **Server requests**: `workspace/configuration`, `workspace/workspaceFolders`,
   `client/registerCapability` and progress requests are answered defensively so
   a server cannot stall the UI.
+- **File changes**: the client advertises `workspace.didChangeWatchedFiles` and
+  honours dynamic registrations (`client/registerCapability`), forwarding the
+  editor's own create/rename/delete and the filesystem poll as create/change/
+  delete events per session; saves send `textDocument/didSave`. A server
+  therefore sees files that were never opened as tabs (Godot's `.gd.uid`,
+  generated files, `git checkout`).
 - **UI state**: diagnostics are keyed by path and painted as underlines + a
   gutter severity rail. The footer LSP chip is severity-colored and opens the
   bottom dock's PROBLEMS tab, which snapshots every session's diagnostics

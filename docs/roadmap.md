@@ -58,9 +58,10 @@ Notes:
   that window can still lose the last keystrokes (autosave shares the delay).
 - Project search skips binary files, files over 1 MB, and stops at the caps
   above.
-- Quick Open builds its index when opened (no filesystem watcher), so files
-  created while it is closed appear on the next open. Open files are polled for
-  external changes, but the sidebar/search index is not automatically refreshed.
+- Quick Open builds its index when opened (no filesystem watcher); the
+  one-second poll invalidates that index and refreshes the Explorer when files
+  are created or deleted, so a closed palette picks up the change on its next
+  open. Project search always scans on demand.
 - Soft wrap prefers word boundaries and falls back to character boundaries for
   long tokens; it uses a full-layout cache and is intentionally disabled for
   very large files.

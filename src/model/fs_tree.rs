@@ -7,6 +7,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use super::watch::MAX_DIR_ENTRIES;
+
 /// A flattened, visible row (what the sidebar paints and hit-tests).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Row {
@@ -75,6 +77,37 @@ impl FsTree {
             }
         }
         self.rebuild_flat();
+    }
+
+    /// Re-reads the directories that are already loaded, keeping every
+    /// expansion. Returns whether the visible rows changed.
+    ///
+    /// This is the external-change refresh: `reload` resets the tree (used when
+    /// the project changes), `refresh` is what a file created by another tool
+    /// must not do to the user's expanded folders.
+    pub fn refresh(&mut self) -> bool {
+        let previous = std::mem::take(&mut self.flat);
+        match reload_loaded(&self.root, 0, &self.nodes) {
+            Ok(nodes) => {
+                self.nodes = nodes;
+                self.error = None;
+            }
+            // Keep the last good tree when the root cannot be read.
+            Err(error) => self.error = Some(error),
+        }
+        self.rebuild_flat();
+        self.flat != previous
+    }
+
+    /// Directories whose children are loaded: the root plus every expanded
+    /// node. The external-change poll snapshots exactly these.
+    pub fn watch_dirs(&self) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        if !self.root.as_os_str().is_empty() {
+            out.push(self.root.clone());
+            collect_watch_dirs(&self.nodes, &mut out);
+        }
+        out
     }
 
     /// Expands or collapses the directory at `path`.
@@ -153,7 +186,7 @@ fn toggle_in(nodes: &mut [FsNode], path: &Path) -> bool {
 fn read_dir(path: &Path, depth: usize) -> Result<Vec<FsNode>, String> {
     let entries = fs::read_dir(path).map_err(|error| format!("{}: {error}", path.display()))?;
     let mut nodes = Vec::new();
-    for entry in entries.flatten() {
+    for entry in entries.flatten().take(MAX_DIR_ENTRIES) {
         let name = entry.file_name().to_string_lossy().into_owned();
         if name.starts_with('.') {
             continue; // hidden files stay hidden, like every editor's sidebar
@@ -178,6 +211,37 @@ fn read_dir(path: &Path, depth: usize) -> Result<Vec<FsNode>, String> {
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
     Ok(nodes)
+}
+
+/// Rebuilds one directory level, carrying over `expanded`/loaded children from
+/// `previous` so a refresh never collapses the tree.
+fn reload_loaded(path: &Path, depth: usize, previous: &[FsNode]) -> Result<Vec<FsNode>, String> {
+    let mut nodes = read_dir(path, depth)?;
+    for node in &mut nodes {
+        if !node.is_dir {
+            continue;
+        }
+        let Some(old) = previous.iter().find(|old| old.path == node.path) else {
+            continue;
+        };
+        node.expanded = old.expanded;
+        if let Some(children) = old.children.as_deref() {
+            if let Ok(children) = reload_loaded(&node.path, depth + 1, children) {
+                node.children = Some(children);
+            }
+        }
+    }
+    Ok(nodes)
+}
+
+fn collect_watch_dirs(nodes: &[FsNode], out: &mut Vec<PathBuf>) {
+    for node in nodes {
+        if !node.is_dir || node.children.is_none() {
+            continue;
+        }
+        out.push(node.path.clone());
+        collect_watch_dirs(node.children.as_deref().unwrap_or_default(), out);
+    }
 }
 
 fn expand_ancestors(nodes: &mut [FsNode], path: &Path) -> bool {
@@ -239,6 +303,53 @@ mod tests {
         assert_eq!(rows[1].depth, 1);
         assert!(tree.toggle(&src));
         assert_eq!(tree.rows().len(), 3);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn refresh_keeps_expansions_and_picks_up_external_files() {
+        let dir = temp_dir("refresh");
+        let mut tree = FsTree::new(&dir);
+        let src = dir.join("src");
+        assert!(tree.toggle(&src));
+        assert!(tree.rows().iter().any(|row| row.name == "main.rs"));
+
+        // A tool creates a file next to the expanded folder and inside it.
+        fs::write(dir.join("new.gd.uid"), "uid://x").unwrap();
+        fs::write(src.join("player.gd"), "extends Node").unwrap();
+        assert!(tree.refresh());
+
+        let rows = tree.rows();
+        let names: Vec<&str> = rows.iter().map(|row| row.name.as_str()).collect();
+        assert!(names.contains(&"new.gd.uid"), "{names:?}");
+        assert!(
+            names.contains(&"player.gd"),
+            "the expanded folder stays open"
+        );
+        let player = rows
+            .iter()
+            .find(|row| row.name == "player.gd")
+            .expect("player.gd row");
+        assert_eq!(player.depth, 1);
+
+        // Nothing changed: refresh reports no visible change.
+        assert!(!tree.refresh());
+
+        // Deleting the file removes its row without collapsing `src`.
+        fs::remove_file(src.join("player.gd")).unwrap();
+        assert!(tree.refresh());
+        assert!(!tree.rows().iter().any(|row| row.name == "player.gd"));
+        assert!(tree.rows().iter().any(|row| row.name == "main.rs"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn watch_dirs_lists_the_root_and_loaded_folders() {
+        let dir = temp_dir("watch");
+        let mut tree = FsTree::new(&dir);
+        assert_eq!(tree.watch_dirs(), vec![dir.clone()]);
+        tree.toggle(&dir.join("src"));
+        assert!(tree.watch_dirs().iter().any(|path| path.ends_with("src")));
         let _ = fs::remove_dir_all(dir);
     }
 

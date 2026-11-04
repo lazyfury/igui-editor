@@ -6,7 +6,7 @@
 //! event — the standard immediate-mode trade.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -63,6 +63,7 @@ mod tabs;
 mod terminal;
 mod tooling;
 mod view;
+mod watch;
 mod workspace;
 
 pub use dock::{DockId, Panel};
@@ -1298,6 +1299,10 @@ pub struct AppState {
     pub sync_scroll: bool,
     /// Last seen disk identity per open path (`None` = missing on disk).
     external: HashMap<PathBuf, Option<DiskStamp>>,
+    /// Directory listings last seen by the external-change poll.
+    watched_dirs: HashMap<PathBuf, Vec<crate::model::watch::EntryStamp>>,
+    /// File changes queued for the language servers.
+    file_events: Vec<crate::model::watch::FileEvent>,
     last_external_check: Instant,
     last_editor_scroll: f32,
     last_preview_scroll: f32,
@@ -1457,6 +1462,8 @@ impl AppState {
             language_by_id: HashMap::new(),
             sync_scroll,
             external,
+            watched_dirs: HashMap::new(),
+            file_events: Vec::new(),
             last_external_check: Instant::now(),
             last_editor_scroll: 0.0,
             last_preview_scroll: 0.0,

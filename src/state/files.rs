@@ -97,6 +97,7 @@ impl AppState {
             self.sidebar.selected = Some(path.clone());
             self.request_git_refresh();
             self.remember_disk(&path);
+            self.lsp.notify_doc_saved(&path);
             crate::macos::note_recent(&path);
         }
         self.sync_session_tabs();

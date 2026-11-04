@@ -78,6 +78,11 @@ item, and `F12` jumps to the returned definition. A second scripted server
 checks a `go.work` monorepo: one `initialize`, two `didOpen`s with the `go`
 language id, both modules' diagnostics alive at once, the footer dot stopping
 every child (`LSP OFF`, diagnostics cleared) and the settings row restarting it.
+A file created/deleted behind the editor's back (a Godot `.gd.uid`) checks the
+external watch: it appears/disappears in the Explorer with folders still
+expanded, and the scripted server receives `workspace/didChangeWatchedFiles`
+type 1/3; saving an open document sends `textDocument/didSave`.
+
 A missing clangd executable checks the copy-only tooling prompt: install hint,
 painted title/button, COPY confirmation, RETRY re-arming the start, and `Esc`
 dismissal.

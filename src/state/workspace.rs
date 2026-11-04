@@ -65,6 +65,8 @@ impl AppState {
             self.language_by_id.remove(&id);
         }
         self.external.clear();
+        self.watched_dirs.clear();
+        self.file_events.clear();
         self.hover_target = None;
         self.hover_leave_at = None;
         self.auto_completion_at = None;
@@ -154,13 +156,13 @@ impl AppState {
         }
     }
 
-    /// Runs the 1-second metadata poll.
+    /// Runs the 1-second filesystem poll (open files and watched directories).
     pub fn tick_external_changes(&mut self) {
         if self.last_external_check.elapsed() < super::schedule::EXTERNAL_POLL {
             return;
         }
         self.last_external_check = Instant::now();
-        self.check_external_changes();
+        self.poll_filesystem();
     }
 
     pub(crate) fn reload_tab(&mut self, tab: usize, report: bool) {
@@ -281,11 +283,12 @@ impl AppState {
             .retain(|candidate| candidate != &path && !(is_dir && candidate.starts_with(&path)));
         self.config_dirty = true;
         if self.ws.folder_open {
-            self.ws.tree.reload();
+            self.ws.tree.refresh();
             if let Some(parent) = path.parent() {
                 self.ws.tree.expand_to(parent);
             }
         }
+        self.note_file_event(path.clone(), crate::model::watch::FileEventKind::Deleted);
         let name = project_name(&path);
         self.status(format!(
             "deleted {} {name}",

@@ -29,7 +29,8 @@ src/
   model/fs_tree.rs    lazy sidebar tree (dirs first, hidden entries skipped)
   model/fsutil.rs     atomic temp+fsync+rename writer shared by model IO
   model/markdown.rs   Markdown event stream -> flat block model
-  model/session.rs    key=value session file (atomic write, escaping, v13)
+  model/session.rs    key=value session file (atomic write, escaping, v15)
+  model/watch.rs      directory snapshots, change diffs, watcher globs
   model/workspace.rs  tabs + file IO (open/save/move/close folder)
   model/wrap.rs       soft-wrap display rows + visual row/column mapping
   dialogs.rs          `Dialogs` trait + scripted test double
@@ -58,6 +59,7 @@ src/
   state/dock.rs       dock/panel table, open state, tab commands, badges
   state/{settings,view,reliability,services,new_file,quick_open}.rs
                       settings, layout, autosave/recovery and prompt state
+  state/watch.rs      external-change poll: visible directories -> FileEvents
   state/schedule.rs   time-based wakeup deadlines (status/hover/autosave/poll)
   theme.rs            geek palette + compact metrics
   kit.rs              control-node construction and text/line helpers

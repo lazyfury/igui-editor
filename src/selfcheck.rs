@@ -161,6 +161,15 @@ impl Harness {
     }
 }
 
+/// Restores a process-wide env var when the check returns (including errors).
+struct EnvGuard(&'static str);
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        std::env::remove_var(self.0);
+    }
+}
+
 /// Header panel group: one recorded hit per panel, icon strokes in the header
 /// band, and a click toggles the dock without starting a window drag.
 fn check_header_panels(harness: &mut Harness, frame: &RecordedFrame) -> Result<(), String> {
@@ -4615,7 +4624,9 @@ fn check_lsp(dir: &Path) -> Result<(), String> {
     fs::write(
         &server,
         r#"#!/usr/bin/env python3
-import sys, json
+import os, sys, json
+
+WATCH_LOG = os.environ.get("IGUI_LSP_WATCH_LOG")
 
 def read():
     headers = {}
@@ -4650,6 +4661,22 @@ while True:
                 "legend": {"tokenTypes": ["variable", "function"], "tokenModifiers": []},
             },
         }}})
+        # Ask for every file change; the editor must report externally created
+        # files through workspace/didChangeWatchedFiles.
+        send({"jsonrpc": "2.0", "id": "register-watch", "method": "client/registerCapability",
+              "params": {"registrations": [{
+                  "id": "watch-all",
+                  "method": "workspace/didChangeWatchedFiles",
+                  "registerOptions": {"watchers": [{"globPattern": "**/*"}]},
+              }]}})
+    elif method == "workspace/didChangeWatchedFiles":
+        if WATCH_LOG:
+            with open(WATCH_LOG, "a") as log:
+                log.write(json.dumps(params) + "\n")
+    elif method == "textDocument/didSave":
+        if WATCH_LOG:
+            with open(WATCH_LOG, "a") as log:
+                log.write(json.dumps({"didSave": params}) + "\n")
     elif method == "textDocument/didOpen":
         uri = params["textDocument"]["uri"]
         send({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": {
@@ -4737,6 +4764,10 @@ while True:
 }
 
 fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
+    let watch_log = dir.join("lsp-watch.log");
+    let _ = fs::remove_file(&watch_log);
+    std::env::set_var("IGUI_LSP_WATCH_LOG", &watch_log);
+    let _watch_guard = EnvGuard("IGUI_LSP_WATCH_LOG");
     let config = dir.join("lsp-session.conf");
     let mut harness = Harness::new(
         Some(main.to_path_buf()),
@@ -4867,6 +4898,111 @@ fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
         || harness.app.state().bottom_tab != crate::state::Panel::Terminal
     {
         return Err("switching back to the TERMINAL dock tab failed".into());
+    }
+
+    // -- external file watch --------------------------------------------
+    // The server registered `**/*`; a file created by another tool (Godot writes
+    // `<script>.gd.uid`) must reach the sidebar and the language server.
+    let watch_log = dir.join("lsp-watch.log");
+    let watched = harness.app.state().ws.root.join("godot_note.gd.uid");
+    let _ = fs::remove_file(&watched);
+    {
+        // Baseline snapshot, then the file appears behind our back.
+        harness.app.state_mut().poll_filesystem();
+        fs::write(&watched, "uid://watch\n").map_err(|error| format!("watch fixture: {error}"))?;
+        harness.app.state_mut().poll_filesystem();
+    }
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        if !state
+            .ws
+            .tree
+            .rows()
+            .iter()
+            .any(|row| row.name == "godot_note.gd.uid")
+        {
+            return Err(format!(
+                "an externally created file did not reach the sidebar: {:?}",
+                state
+                    .ws
+                    .tree
+                    .rows()
+                    .iter()
+                    .map(|row| row.name.clone())
+                    .collect::<Vec<_>>()
+            ));
+        }
+    }
+    for _ in 0..100 {
+        harness.frame()?;
+        if watch_log_has(&watch_log, "godot_note.gd.uid", 1) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    if !watch_log_has(&watch_log, "godot_note.gd.uid", 1) {
+        return Err(format!(
+            "the language server was not told about the external file: {:?}",
+            fs::read_to_string(&watch_log).unwrap_or_default()
+        ));
+    }
+    fs::remove_file(&watched).map_err(|error| format!("watch fixture: {error}"))?;
+    harness.app.state_mut().poll_filesystem();
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        if state
+            .ws
+            .tree
+            .rows()
+            .iter()
+            .any(|row| row.name == "godot_note.gd.uid")
+        {
+            return Err("an externally deleted file stayed in the sidebar".into());
+        }
+    }
+    for _ in 0..100 {
+        harness.frame()?;
+        if watch_log_has(&watch_log, "godot_note.gd.uid", 3) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    if !watch_log_has(&watch_log, "godot_note.gd.uid", 3) {
+        return Err(format!(
+            "the language server was not told about the external delete: {:?}",
+            fs::read_to_string(&watch_log).unwrap_or_default()
+        ));
+    }
+    // Saving an open document sends `textDocument/didSave`.
+    let primary = if cfg!(target_os = "macos") {
+        Modifiers {
+            meta: true,
+            ..Modifiers::NONE
+        }
+    } else {
+        Modifiers {
+            ctrl: true,
+            ..Modifiers::NONE
+        }
+    };
+    harness.shortcut(Key::Character('s'), primary);
+    for _ in 0..100 {
+        harness.frame()?;
+        if fs::read_to_string(&watch_log)
+            .unwrap_or_default()
+            .contains("didSave")
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    if !fs::read_to_string(&watch_log)
+        .unwrap_or_default()
+        .contains("didSave")
+    {
+        return Err("saving an open document did not send textDocument/didSave".into());
     }
 
     let frame = harness.frame()?;
@@ -5291,6 +5427,25 @@ while True:
     elif request_id is not None:
         send({"jsonrpc": "2.0", "id": request_id, "result": None})
 "#;
+
+/// Whether the watch log contains a change of `kind` (1/2/3) for a file whose
+/// name ends with `name`.
+fn watch_log_has(path: &Path, name: &str, kind: u64) -> bool {
+    fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .any(|entry| {
+            entry["changes"].as_array().is_some_and(|changes| {
+                changes.iter().any(|change| {
+                    change["type"].as_u64() == Some(kind)
+                        && change["uri"]
+                            .as_str()
+                            .is_some_and(|uri| uri.ends_with(name))
+                })
+            })
+        })
+}
 
 fn lsp_log_events(path: &Path) -> Vec<serde_json::Value> {
     fs::read_to_string(path)

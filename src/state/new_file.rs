@@ -124,7 +124,9 @@ impl AppState {
         self.new_file.open = false;
         self.new_file.error = None;
         if self.ws.folder_open {
-            self.ws.tree.reload();
+            // `refresh` keeps every expanded folder; the new entry shows up
+            // without collapsing the user's tree.
+            self.ws.tree.refresh();
             let expand = match kind {
                 NewFileKind::File => path.parent(),
                 NewFileKind::Folder => Some(path.as_path()),
@@ -133,6 +135,9 @@ impl AppState {
             if let Some(parent) = expand {
                 self.ws.tree.expand_to(parent);
             }
+        }
+        if kind == NewFileKind::File {
+            self.note_file_event(path.clone(), crate::model::watch::FileEventKind::Created);
         }
         match kind {
             NewFileKind::File => {

@@ -210,11 +210,18 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    already the session's `tabs.N` order. The right-click menu reuses the overlay
    pattern; Close Others / Close to the Right collect targets and ask once
    (Cancel / Discard) if any target is dirty. No tree rebuild during a drag.
-28. **External changes are metadata-only.** Each open path has a
-   `(length, mtime)` stamp refreshed on open/save. Once a second the UI thread
-   compares stamps: clean tabs reload through `Document::reload`, dirty tabs show
-   Keep / Reload, missing files are reported and the buffer is kept. No
-   filesystem watcher dependency; the session is untouched.
+28. **External changes are metadata-only, and the visible tree is polled.** Each
+   open path has a `(length, mtime)` stamp refreshed on open/save. Once a
+   second the UI thread compares stamps: clean tabs reload through
+   `Document::reload`, dirty tabs show Keep / Reload, missing files are reported
+   and the buffer is kept. The same poll snapshots the directories the user can
+   see (the loaded `FsTree` levels plus the parents of open tabs) and diffs
+   their entry metadata (`model::watch`), so a file created by another tool — a
+   Godot `<script>.gd.uid`, a generator, `git checkout` — reaches the Explorer
+   (`FsTree::refresh` keeps every expansion; `reload` would collapse it) and
+   invalidates the Quick Open index. The scan is bounded per tick (32
+   directories / 20k entries), a directory lists at most 2,000 rows in the
+   sidebar, and there is no OS watcher dependency.
 29. **Soft wrap is a display-row cache.** `model::wrap` maps each logical line
    to one or more `(start/end column+byte, first)` rows, keyed by document id,
    revision, width, font and tab width. The editor paints/hit-tests/scrolls by
@@ -321,6 +328,19 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    grouped by file, and a click opens the file and jumps without hiding the
    panel. The footer chip keeps reporting the active document's counts and now
    opens that tab.
+
+38. **File changes are pushed to the language servers, not polled by them.**
+   The client advertises `workspace.didChangeWatchedFiles` and records the
+   watchers a server registers in `client/registerCapability` (plain globs and
+   `RelativePattern`, resolved against the session root; `**`, `*`, `?` and
+   `{a,b}` suffice). Every detected change — editor-side create/rename/delete
+   and the filesystem poll — is queued as a `FileEvent` and forwarded as one
+   `workspace/didChangeWatchedFiles` notification per session: registered
+   watchers decide what a session sees, otherwise the spec's extensions do.
+   Saves additionally send `textDocument/didSave` for open documents. This is
+   what lets a server notice a script that another tool (the Godot editor,
+   creating the `.uid` companion) brought into the project without the file
+   ever being opened as a tab.
 
 ## Theme spec (geek / compact / no corners)
 
@@ -456,5 +476,6 @@ undo and incremental preview layout for very large documents.
   bounded; revisit if large-file work demands it.
 - Syntax trees: highlighting needs coloring, not parsing.
 - Multi-cursor, VCS integration: not planned.
-- A filesystem watcher: external changes are polled; sidebar/search indexes are
-  rebuilt on demand.
+- An OS filesystem watcher: the visible directories are polled once a second and
+  the Explorer refreshes from those snapshots; project search still scans on
+  demand.

@@ -144,10 +144,14 @@ impl AppState {
         self.new_file.error = None;
         self.new_file.preedit = None;
         self.focus = Focus::Explorer;
-        self.ws.tree.reload();
+        self.ws.tree.refresh();
         if let Some(parent) = dest.parent() {
             self.ws.tree.expand_to(parent);
         }
+        // Tell the language servers about the move: the old path is gone, the
+        // new one exists (directories report both ends).
+        self.note_file_event(target.clone(), crate::model::watch::FileEventKind::Deleted);
+        self.note_file_event(dest.clone(), crate::model::watch::FileEventKind::Created);
         self.request_git_refresh();
         self.sync_session_tabs();
         self.find.dirty = true;

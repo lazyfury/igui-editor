@@ -10,7 +10,7 @@
 //! One session (child process) exists per `(spec, project root)`, so a monorepo
 //! runs one server per language root and tab switches reuse it.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{self, BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -18,6 +18,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
+
+use super::watch::{self, FileEvent, FileEventKind};
 
 use serde_json::{json, Value};
 
@@ -705,6 +707,23 @@ pub struct ProblemEntry {
     pub diagnostic: Diagnostic,
 }
 
+/// One `workspace/didChangeWatchedFiles` registration from a server.
+///
+/// The pattern is a glob relative to the session root (a `RelativePattern`
+/// base is folded in at registration time) and `kinds` is the LSP
+/// `FileSystemWatcher.kind` bitmask: 1 create, 2 change, 4 delete.
+#[derive(Clone, Debug)]
+struct Watcher {
+    glob: String,
+    kinds: u32,
+}
+
+impl Watcher {
+    fn matches(&self, relative: &str, kind: FileEventKind) -> bool {
+        self.kinds & kind.watch_bit() != 0 && watch::glob_matches(&self.glob, relative)
+    }
+}
+
 /// One language-server process for a `(spec, project root)` pair.
 ///
 /// A monorepo keeps one session per language root; switching tabs reuses the
@@ -725,6 +744,8 @@ struct Session {
     symbols_pending: HashSet<PathBuf>,
     symbols_in_flight: HashSet<PathBuf>,
     pending: HashMap<u64, (PendingKind, Instant)>,
+    /// `(registration id, watcher)` pairs the server asked for.
+    watchers: Vec<(String, Watcher)>,
     native_classes: HashSet<String>,
     native_symbols: HashMap<(String, String), NativeSymbol>,
     last_active: Instant,
@@ -749,6 +770,7 @@ impl Session {
             symbols_pending: HashSet::new(),
             symbols_in_flight: HashSet::new(),
             pending: HashMap::new(),
+            watchers: Vec::new(),
             native_classes: HashSet::new(),
             native_symbols: HashMap::new(),
             last_active: Instant::now(),
@@ -767,6 +789,8 @@ impl Session {
         self.symbols_pending.clear();
         self.symbols_in_flight.clear();
         self.pending.clear();
+        // A restarted server registers its watchers again.
+        self.watchers.clear();
         self.native_classes.clear();
     }
 
@@ -781,11 +805,18 @@ impl Session {
         });
     }
 
-    fn respond_to_server(&self, id: Value, method: &str, params: &Value) {
-        let Some(client) = self.client.as_ref() else {
-            return;
-        };
+    fn respond_to_server(&mut self, id: Value, method: &str, params: &Value) {
         let result = match method {
+            // Servers that want file-watch events register here; without this
+            // they never learn about files created outside the editor.
+            "client/registerCapability" => {
+                self.register_capabilities(params);
+                Value::Null
+            }
+            "client/unregisterCapability" => {
+                self.unregister_capabilities(params);
+                Value::Null
+            }
             "workspace/configuration" => {
                 let count = params["items"].as_array().map_or(0, Vec::len);
                 Value::Array(vec![Value::Null; count])
@@ -801,7 +832,68 @@ impl Session {
             "window/showMessageRequest" => Value::Null,
             _ => Value::Null,
         };
-        client.respond(id, result);
+        if let Some(client) = self.client.as_ref() {
+            client.respond(id, result);
+        }
+    }
+
+    /// Records `workspace/didChangeWatchedFiles` registrations. Patterns are
+    /// resolved against the session root so the poll only has to compare paths.
+    fn register_capabilities(&mut self, params: &Value) {
+        let Some(registrations) = params["registrations"].as_array() else {
+            return;
+        };
+        for registration in registrations {
+            if registration["method"].as_str() != Some("workspace/didChangeWatchedFiles") {
+                continue;
+            }
+            let Some(id) = registration["id"].as_str() else {
+                continue;
+            };
+            let Some(watchers) = registration["registerOptions"]["watchers"].as_array() else {
+                continue;
+            };
+            for watcher in watchers {
+                let (pattern, base) = watcher_glob(watcher);
+                let Some(pattern) = pattern else { continue };
+                let glob = resolve_watcher_glob(&self.root, base.as_deref(), &pattern);
+                let kinds = watcher["kind"].as_u64().unwrap_or(7) as u32;
+                self.watchers
+                    .push((id.to_string(), Watcher { glob, kinds }));
+            }
+        }
+    }
+
+    fn unregister_capabilities(&mut self, params: &Value) {
+        // The LSP field name is `unregisterations` (sic); accept both spellings.
+        let ids = params
+            .get("unregisterations")
+            .or_else(|| params.get("unregistrations"))
+            .and_then(Value::as_array);
+        let Some(ids) = ids else { return };
+        for registration in ids {
+            // `Unregistration { id, method }`, but accept a bare string too.
+            let id = registration
+                .as_str()
+                .or_else(|| registration["id"].as_str());
+            let Some(id) = id else { continue };
+            self.watchers.retain(|(registered, _)| registered != id);
+        }
+    }
+
+    /// Whether this session wants `path` reported as `kind`.
+    ///
+    /// With registered watchers the pattern decides; without them the file
+    /// belongs to the session when its spec (extension) does.
+    fn wants(&self, path: &Path, kind: FileEventKind) -> bool {
+        if self.watchers.is_empty() {
+            return self.spec.matches_path(path);
+        }
+        let relative = path.strip_prefix(&self.root).unwrap_or(path);
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        self.watchers
+            .iter()
+            .any(|(_, watcher)| watcher.matches(&relative, kind))
     }
 
     fn publish_diagnostics(&mut self, params: &Value) {
@@ -1992,6 +2084,57 @@ impl LspController {
         out
     }
 
+    /// Forwards file changes (editor-side and polled) to every ready server.
+    ///
+    /// Events are deduped by path (later kinds win) and filtered per session:
+    /// registered watchers decide, otherwise the spec's extensions do.
+    pub fn notify_file_events(&self, events: &[FileEvent]) {
+        if events.is_empty() {
+            return;
+        }
+        for session in &self.sessions {
+            let Some(client) = session.client.as_ref() else {
+                continue;
+            };
+            let mut changes: BTreeMap<&Path, FileEventKind> = BTreeMap::new();
+            for event in events {
+                if !path_under(&event.path, &session.root) {
+                    continue;
+                }
+                if !session.wants(&event.path, event.kind) {
+                    continue;
+                }
+                changes.insert(event.path.as_path(), event.kind);
+            }
+            if changes.is_empty() {
+                continue;
+            }
+            let changes: Vec<Value> = changes
+                .into_iter()
+                .map(|(path, kind)| json!({"uri": path_to_uri(path), "type": kind.lsp_type()}))
+                .collect();
+            client.notify(
+                "workspace/didChangeWatchedFiles",
+                json!({ "changes": changes }),
+            );
+        }
+    }
+
+    /// `textDocument/didSave` for the sessions that have `path` open.
+    pub fn notify_doc_saved(&self, path: &Path) {
+        for session in &self.sessions {
+            if !session.open_docs.contains_key(path) {
+                continue;
+            }
+            if let Some(client) = session.client.as_ref() {
+                client.notify(
+                    "textDocument/didSave",
+                    json!({"textDocument": {"uri": path_to_uri(path)}}),
+                );
+            }
+        }
+    }
+
     pub fn diagnostic_color(&self, severity: u32, p: &crate::theme::Palette) -> igui_core::Color {
         severity_color(severity, p)
     }
@@ -2180,6 +2323,55 @@ fn parse_semantic_tokens(result: &Value, legend: &[String]) -> Vec<SemanticToken
     tokens
 }
 
+/// Splits one LSP `FileSystemWatcher` into its glob and (optional) base path.
+fn watcher_glob(watcher: &Value) -> (Option<String>, Option<PathBuf>) {
+    match &watcher["globPattern"] {
+        Value::String(pattern) => (Some(pattern.clone()), None),
+        // `RelativePattern { baseUri, pattern }` from a server that ignored our
+        // `relativePatternSupport: false`.
+        Value::Object(_) => {
+            let pattern = watcher["globPattern"]["pattern"]
+                .as_str()
+                .map(str::to_string);
+            let base = watcher["globPattern"]["baseUri"]
+                .as_str()
+                .and_then(uri_to_path);
+            (pattern, base)
+        }
+        _ => (None, None),
+    }
+}
+
+/// Folds a watcher's base into a pattern relative to the session root.
+fn resolve_watcher_glob(root: &Path, base: Option<&Path>, pattern: &str) -> String {
+    let pattern = pattern.replace('\\', "/");
+    let base = base.filter(|base| *base != root);
+    let Some(base) = base else {
+        return pattern;
+    };
+    let prefix = base
+        .strip_prefix(root)
+        .unwrap_or(base)
+        .to_string_lossy()
+        .replace('\\', "/");
+    let prefix = prefix.trim_end_matches('/');
+    if prefix.is_empty() {
+        pattern
+    } else {
+        format!("{prefix}/{pattern}")
+    }
+}
+
+/// True when `path` is `root` or below it. The polled path may be the
+/// non-canonical spelling of a symlinked root (`/var` vs `/private/var`).
+fn path_under(path: &Path, root: &Path) -> bool {
+    path.starts_with(root)
+        || path
+            .canonicalize()
+            .map(|canonical| canonical.starts_with(root))
+            .unwrap_or(false)
+}
+
 fn initialize_params(root: &Path, spec: &LanguageServerSpec) -> Value {
     json!({
         "processId": null,
@@ -2191,11 +2383,20 @@ fn initialize_params(root: &Path, spec: &LanguageServerSpec) -> Value {
             "name": root.file_name().and_then(|name| name.to_str()).unwrap_or("workspace"),
         }],
         "capabilities": {
-            "workspace": {"workspaceFolders": true, "configuration": true},
+            "workspace": {
+                "workspaceFolders": true,
+                "configuration": true,
+                // File watches: servers register patterns, the poll reports the
+                // files, so an externally created script reaches the server.
+                "didChangeWatchedFiles": {
+                    "dynamicRegistration": true,
+                    "relativePatternSupport": false
+                }
+            },
             "textDocument": {
                 "synchronization": {
                     "dynamicRegistration": false,
-                    "didSave": false,
+                    "didSave": true,
                     "change": 1
                 },
                 "hover": {"contentFormat": ["markdown", "plaintext"]},
@@ -2559,6 +2760,86 @@ mod tests {
             Some(dir.join("b").as_path())
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn initialize_advertises_file_watches_and_saves() {
+        let spec = crate::services::go::go_server();
+        let params = initialize_params(Path::new("/tmp/project"), &spec);
+        let workspace = &params["capabilities"]["workspace"];
+        assert_eq!(workspace["workspaceFolders"], json!(true));
+        assert_eq!(
+            workspace["didChangeWatchedFiles"]["dynamicRegistration"],
+            json!(true)
+        );
+        assert_eq!(
+            params["capabilities"]["textDocument"]["synchronization"]["didSave"],
+            json!(true)
+        );
+    }
+
+    #[test]
+    fn watcher_globs_are_resolved_against_the_session_root() {
+        let root = Path::new("/root/project");
+        assert_eq!(
+            resolve_watcher_glob(root, None, "**/*.gd"),
+            "**/*.gd".to_string()
+        );
+        assert_eq!(
+            resolve_watcher_glob(root, Some(root), "**/*.gd"),
+            "**/*.gd".to_string()
+        );
+        assert_eq!(
+            resolve_watcher_glob(root, Some(&root.join("scripts")), "**/*.gd"),
+            "scripts/**/*.gd".to_string()
+        );
+        // A base outside the root keeps its absolute spelling; the matcher
+        // compares absolute patterns against absolute paths.
+        assert_eq!(
+            resolve_watcher_glob(root, Some(Path::new("/elsewhere")), "**/*.ts"),
+            "/elsewhere/**/*.ts".to_string()
+        );
+    }
+
+    #[test]
+    fn registered_watchers_filter_file_events() {
+        let spec = crate::services::go::go_server();
+        let mut session = Session::new(spec, PathBuf::from("/root"));
+
+        // Without a registration the spec's extension decides.
+        assert!(session.wants(Path::new("/root/a.go"), FileEventKind::Created));
+        assert!(!session.wants(Path::new("/root/a.gd"), FileEventKind::Created));
+
+        session.register_capabilities(&json!({"registrations": [{
+            "id": "watch-gd",
+            "method": "workspace/didChangeWatchedFiles",
+            "registerOptions": {"watchers": [
+                {"globPattern": "**/*.gd"},
+                {"globPattern": {"baseUri": "file:///root/sub", "pattern": "**/*.ts"}, "kind": 4}
+            ]}
+        }]}));
+        assert_eq!(session.watchers.len(), 2);
+        // A watcher replaces the extension fallback: `.go` files are no longer
+        // reported unless a pattern says so.
+        assert!(!session.wants(Path::new("/root/a.go"), FileEventKind::Created));
+        assert!(session.wants(Path::new("/root/scripts/a.gd"), FileEventKind::Deleted));
+        // The `kind: 4` watcher only reports deletions.
+        assert!(session.wants(Path::new("/root/sub/x.ts"), FileEventKind::Deleted));
+        assert!(!session.wants(Path::new("/root/sub/x.ts"), FileEventKind::Changed));
+        assert!(!session.wants(Path::new("/root/x.ts"), FileEventKind::Deleted));
+
+        session.unregister_capabilities(&json!({"unregisterations": [
+            {"id": "watch-gd", "method": "workspace/didChangeWatchedFiles"}
+        ]}));
+        assert!(session.watchers.is_empty());
+        assert!(session.wants(Path::new("/root/a.go"), FileEventKind::Created));
+    }
+
+    #[test]
+    fn path_under_accepts_the_canonical_spelling() {
+        let root = Path::new("/tmp/does-not-exist/root");
+        assert!(path_under(&root.join("a.gd"), root));
+        assert!(!path_under(Path::new("/tmp/other/a.gd"), root));
     }
 
     #[test]

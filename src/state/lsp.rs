@@ -30,6 +30,12 @@ impl AppState {
         );
         self.lsp
             .tick(&self.ws, &self.services.language_servers, self.settings.lsp);
+        // File changes collected by the editor and the filesystem poll reach the
+        // servers as `workspace/didChangeWatchedFiles`.
+        let events = std::mem::take(&mut self.file_events);
+        if !events.is_empty() {
+            self.lsp.notify_file_events(&events);
+        }
         self.tooling.tick();
         if let Some(issue) = self.lsp.take_issue() {
             self.show_tool_prompt(issue);

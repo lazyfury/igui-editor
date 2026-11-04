@@ -79,6 +79,12 @@ chip has a small on/off dot: stopping kills every child and clears
 diagnostics/semantic tokens/outline. The same switch is the
 **Language Intelligence** settings row, persisted in the session.
 
+- File changes reach the servers: the client advertises
+  `workspace.didChangeWatchedFiles`, honours watcher registrations, forwards the
+  editor's own create/rename/delete and the filesystem poll as
+  create/change/delete events, and sends `textDocument/didSave` on save. Files
+  never opened as tabs (a Godot `.gd.uid`, generated code, `git checkout`) are
+  therefore visible to the server too.
 - Diagnostics are painted as severity-colored underlines and a full-height
   gutter severity rail. The footer chip is colored by the worst severity and
   shows the active document's `LSP 1E 2W` (or `LSP ERR` if the server cannot
@@ -497,10 +503,27 @@ horizontal scroll offset is restored when wrap is turned off.
 
 ## External file changes
 
-Every second the app compares open files' length + mtime. A clean tab reloads
-automatically; a dirty tab asks **Keep** or **Reload** before replacing the
-buffer. Deleted files are reported in the status bar and the buffer is kept. No
-filesystem-watcher dependency; the poll is metadata-only.
+Every second the app polls two things:
+
+- **open files** by length + mtime — a clean tab reloads automatically, a dirty
+  tab asks **Keep** or **Reload**, deleted files are reported in the status bar
+  and the buffer is kept;
+- **the directories you can see** — the loaded Explorer tree plus the parents of
+  open tabs — by entry metadata. Files created, deleted or rewritten by another
+  tool (a Godot `.gd.uid`, a code generator, `git checkout`) appear in the
+  Explorer without collapsing the folders you expanded, and Quick Open's index is
+  invalidated. The scan is bounded (32 directories / 20k entries per tick), and
+  a directory lists at most 2,000 entries in the sidebar.
+
+Detected changes are also forwarded to the language servers as
+`workspace/didChangeWatchedFiles` (create/change/delete), and saving an open
+document sends `textDocument/didSave`. Servers that register file watchers
+(`gopls`, `rust-analyzer`, TypeScript) get exactly the files their patterns
+cover; servers without a registration get the files their own extensions own.
+Editor-side create/rename/delete are queued the same way, so the server learns
+about them without waiting for the next poll.
+
+No filesystem-watcher dependency; everything is metadata polling.
 
 ## Split view
 
