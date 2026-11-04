@@ -5,6 +5,10 @@ scripts/check.sh                            # fmt + clippy + tests + self-check
 scripts/check.sh --release                  # also builds the shipped binary
 ```
 
+CI (`.github/workflows/check.yml`) checks out this repository plus the `igui`
+engine at tag `v0.6.0` as siblings, installs Rust 1.85 with rustfmt/clippy and
+runs the same `scripts/check.sh` gate on `macos-latest`.
+
 Or individually:
 
 ```bash

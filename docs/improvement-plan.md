@@ -154,6 +154,19 @@ Acceptance:
 - A repository-local shim is not selected unless explicitly trusted.
 - The normal PATH/toolchain resolution still works.
 
+### Task 4: CI gate (done)
+
+- [x] Add a GitHub Actions workflow that checks out the editor and `igui`
+      `v0.6.0` as sibling directories.
+- [x] Run the existing `scripts/check.sh` gate on `macos-latest` with Rust 1.85.
+- [x] Document the CI gate in verification/roadmap.
+
+Acceptance:
+
+- The workflow file parses as YAML and runs `scripts/check.sh` from the
+  `igui-editor` checkout.
+- The local gate remains green.
+
 ## Deferred to the next feature slice
 
 These are intentionally not part of this plan's implementation phases:
@@ -161,7 +174,6 @@ These are intentionally not part of this plan's implementation phases:
 - Native macOS close guard + Dock reopen.
 - Terminal multiple sessions, selection/copy, scrollback.
 - Workspace Trust UI (the opt-in local-binary guard is implemented).
-- CI workflow with a pinned sibling `igui` checkout.
 - Incremental line index and incremental Markdown preview layout.
 - Grapheme-aware caret movement.
 
@@ -179,6 +191,7 @@ These are intentionally not part of this plan's implementation phases:
 | Session 2 | Follow-up 1 | done | Incremental line index; 234 unit tests; typing bench 1.41 → 1.04 ms/frame. |
 | Session 2 | Follow-up 2 | done | Word-boundary soft wrap; 237 unit tests; selfcheck green. |
 | Session 2 | Follow-up 3 | done | Repo-local LSP shims require explicit trust; 238 unit tests. |
+| Session 2 | Follow-up 4 | done | GitHub Actions gate with pinned igui v0.6.0. |
 
 ## Final acceptance checklist
 
