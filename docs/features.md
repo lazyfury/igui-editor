@@ -269,8 +269,9 @@ contents do not, and sessions are not restored after a restart.
   `Action` commands as the keyboard. The in-app header menu is hidden on macOS.
 - **Custom window chrome**: the macOS window is borderless/full-size-content
   with the native title bar and traffic lights hidden. The header paints
-  simulated red/yellow/green controls; red uses the existing dirty-quit guard,
-  yellow minimizes and green toggles maximize/restore. Pressing anywhere else
+  simulated red/yellow/green controls; red hides the window (close-to-hide,
+  Dock reopens it), yellow minimizes and green toggles maximize/restore.
+  Pressing anywhere else
   on the header starts a custom window drag; double-clicking it toggles
   maximize/restore. Quit requests are deferred one run-loop turn, because
   AppKit's terminate notification re-enters winit's event handler.
@@ -283,13 +284,14 @@ contents do not, and sessions are not restored after a restart.
   Items via `NSDocumentController`.
 - **Quit guard**: `⌘Q` with dirty tabs returns `NSTerminateLater` and shows the
   in-app **Discard & Quit / Cancel** confirmation; a clean app quits directly.
-  Closing the window goes through the same guard: `windowShouldClose:` is hooked
-  on winit's window delegate, dirty windows stay open for the confirmation and
-  clean windows follow winit's normal close path. Dock reopen remains a follow-up.
+  Closing the window is close-to-hide (`windowShouldClose:` on winit's window
+  delegate): the app and its buffers stay alive, and clicking the Dock icon
+  reopens the window. `⌘Q` still runs the dirty-tab quit guard.
 - The native bridge never replaces winit's `NSApplicationDelegate`; it adds
-  `application:openURLs:`, `applicationDockMenu:` and
-  `applicationShouldTerminate:` to the existing delegate class and keeps
-  `setDelegate:` hooked so cold-open events are not lost.
+  `application:openURLs:`, `applicationDockMenu:`,
+  `applicationShouldTerminate:` and
+  `applicationShouldHandleReopen:hasVisibleWindows:` to the existing delegate
+  class and keeps `setDelegate:` hooked so cold-open events are not lost.
 
 ## Syntax highlighting
 

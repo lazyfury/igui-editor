@@ -255,7 +255,7 @@ Acceptance:
 - With trust off, repo-local `node_modules/.bin` shims are not selected; with
   trust on they are, and the env var still forces them on.
 
-### Task 11: macOS window close guard (done)
+### Task 11: macOS window close guard (superseded by Task 14)
 
 - [x] Replace winit's window-delegate `windowShouldClose:` with a wrapper that
       blocks dirty windows and enqueues the existing quit guard.
@@ -302,6 +302,22 @@ Acceptance:
   session without corrupting the active index.
 - Closing the last session closes the panel; quitting still kills every PTY.
 
+### Task 14: close-to-hide + Dock reopen (done)
+
+- [x] Make `windowShouldClose:` hide the NSWindow instead of exiting the app.
+- [x] Route the simulated red traffic light through the same hide action.
+- [x] Add `applicationShouldHandleReopen:hasVisibleWindows:` to show the stored
+      window and activate the app when the Dock icon is clicked.
+- [x] Keep `⌘Q` as the dirty-tab quit path; native children are still killed on
+      termination.
+- [x] Update the macOS integration docs and roadmap.
+
+Acceptance:
+
+- Closing the window keeps the process and buffers alive; reopening from the
+  Dock shows the same window.
+- Quit still runs the save guard.
+
 ## Deferred to the next feature slice
 
 These are intentionally not part of this plan's implementation phases:
@@ -334,6 +350,7 @@ These are intentionally not part of this plan's implementation phases:
 | Session 2 | Follow-up 11 | done | macOS dirty-window close guard; 249 unit tests. |
 | Session 2 | Follow-up 12 | done | Native child cleanup on quit; 251 unit tests + packaged Godot test. |
 | Session 2 | Follow-up 13 | done | Multiple terminal sessions; 252 unit tests + selfcheck tabs. |
+| Session 2 | Follow-up 14 | done | Close-to-hide + Dock reopen; 252 unit tests. |
 
 ## Final acceptance checklist
 

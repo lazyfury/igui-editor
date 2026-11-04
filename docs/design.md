@@ -241,12 +241,14 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    native state; `applicationShouldTerminate:` returns `NSTerminateLater` and
    queues `Quit` when dirty. The in-app modal responds with
    `replyToApplicationShouldTerminate:` (`Discard & Quit` / `Cancel`).
-   Closing the window is guarded by replacing winit's window-delegate
-   `windowShouldClose:` implementation: dirty windows enqueue `Quit`, clean
-   windows call the original method and let winit exit. Dock reopen still needs
-   a host/engine change. Native children (LSP/PTY) live in a process registry;
-   the quit path kills them synchronously because AppKit may exit without
-   unwinding Rust destructors.
+   Closing the window is close-to-hide: winit's window-delegate
+   `windowShouldClose:` returns NO and calls `orderOut:`, so the app, buffers,
+   LSP sessions and PTYs stay alive. The application delegate's
+   `applicationShouldHandleReopen:hasVisibleWindows:` shows the stored NSWindow
+   when the Dock icon is clicked; `⌘Q` still runs the dirty-tab quit guard.
+   Native children (LSP/PTY) live in a process registry; the quit path kills
+   them synchronously because AppKit may exit without unwinding Rust
+   destructors.
 
 34. **Git and Terminal are native services behind built-in plugins.** A
    compile-time `BuiltinPlugin` registers a `ServiceManifest` (capabilities,

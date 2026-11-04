@@ -19,7 +19,7 @@ use objc2::runtime::{AnyClass, AnyObject, Bool, Imp, NSObject, NSObjectProtocol,
 use objc2::{define_class, msg_send, sel, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSApplicationTerminateReply, NSDocumentController, NSEventModifierFlags, NSMenu,
-    NSMenuItem, NSScreen,
+    NSMenuItem, NSScreen, NSWindow,
 };
 use objc2_foundation::{
     ns_string, NSAppleEventDescriptor, NSAppleEventManager, NSArray, NSRect, NSString, NSURL,
@@ -52,6 +52,9 @@ thread_local! {
     static SET_DELEGATE_IMP: Cell<Option<Imp>> = const { Cell::new(None) };
     static WINDOW_CLOSE_IMP: Cell<Option<Imp>> = const { Cell::new(None) };
     static WINDOW_CLOSE_HOOKED: Cell<bool> = const { Cell::new(false) };
+    /// The AppKit window, retained by AppKit for the process lifetime. A raw
+    /// pointer avoids a thread-local destructor at process exit.
+    static MAIN_WINDOW: Cell<Option<*mut AnyObject>> = const { Cell::new(None) };
     static MENU_TARGET: RefCell<Option<ManuallyDrop<Retained<AppMenuTarget>>>> = const { RefCell::new(None) };
     static MAIN_MENU: RefCell<Option<ManuallyDrop<Retained<NSMenu>>>> = const { RefCell::new(None) };
     /// Cursor offset from the window frame origin while a custom header drag is
@@ -146,6 +149,20 @@ fn add_delegate_methods(class: &AnyClass) {
             let imp: Imp = std::mem::transmute(open_urls_imp as *const ());
             class_addMethod(class, sel!(application:openURLs:), imp, c"v@:@@".as_ptr());
         }
+        if !objc2::ffi::class_respondsToSelector(
+            class,
+            sel!(applicationShouldHandleReopen:hasVisibleWindows:),
+        )
+        .as_bool()
+        {
+            let imp: Imp = std::mem::transmute(reopen_imp as *const ());
+            class_addMethod(
+                class,
+                sel!(applicationShouldHandleReopen:hasVisibleWindows:),
+                imp,
+                c"c@:@B".as_ptr(),
+            );
+        }
     }
 }
 
@@ -178,7 +195,48 @@ pub fn install_dock() {
     };
     let class = AnyObject::class(delegate.as_ref());
     add_delegate_methods(class);
+    remember_window(&app);
     install_window_close_guard(&app);
+}
+
+fn remember_window(app: &NSApplication) {
+    if let Some(window) = app.keyWindow() {
+        MAIN_WINDOW.with(|slot| slot.set(Some(Retained::as_ptr(&window) as *mut AnyObject)));
+    }
+}
+
+fn main_window() -> Option<&'static NSWindow> {
+    MAIN_WINDOW
+        .with(Cell::get)
+        .map(|pointer| unsafe { &*(pointer as *const NSWindow) })
+}
+
+/// Close-to-hide: the window disappears but the app (and its buffers, LSP and
+/// PTYs) stays alive. Dock activation brings it back.
+pub fn hide_window() {
+    if let Some(window) = main_window() {
+        window.orderOut(None);
+    }
+}
+
+pub fn show_window() {
+    if let Some(window) = main_window() {
+        window.makeKeyAndOrderFront(None);
+        if let Some(mtm) = MainThreadMarker::new() {
+            NSApplication::sharedApplication(mtm).activate();
+        }
+        wake();
+    }
+}
+
+unsafe extern "C-unwind" fn reopen_imp(
+    _this: *mut AnyObject,
+    _cmd: Sel,
+    _sender: *mut NSApplication,
+    _has_visible_windows: Bool,
+) -> Bool {
+    show_window();
+    Bool::NO
 }
 
 /// Hooks winit's window delegate so a dirty window is not closed before the

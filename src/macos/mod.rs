@@ -7,8 +7,8 @@ mod imp;
 pub use fallback::*;
 #[cfg(target_os = "macos")]
 pub use imp::{
-    begin_window_drag, clear_system_recent, continue_window_drag, end_window_drag, install,
-    install_dock, minimize_window, note_recent, reply_quit, request_quit, set_dirty_count,
+    begin_window_drag, clear_system_recent, continue_window_drag, end_window_drag, hide_window,
+    install, install_dock, minimize_window, note_recent, reply_quit, request_quit, set_dirty_count,
     set_recent, toggle_zoom, window_drag_button_down, window_is_zoomed,
 };
 
@@ -32,6 +32,8 @@ mod fallback {
     pub fn continue_window_drag() {}
     pub fn end_window_drag() {}
     pub fn request_quit() {}
+    pub fn hide_window() {}
+    pub fn show_window() {}
     pub fn window_is_zoomed() -> bool {
         false
     }

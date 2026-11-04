@@ -95,7 +95,7 @@ the earliest of the status/hover/autocomplete/preview/poll deadlines.
 
 The quality pass adds tests for: keymap unbind not being resurrected by a
 fallback table, literal Ctrl chords on both platform paths, movement actions,
-the macOS dirty-window close predicate, native child cleanup on LSP shutdown,
+native child cleanup on LSP shutdown,
 terminal session tabs/close and scrollback clamping,
 CRLF save round-trips, undo/redo save-point cleanliness, divergent save-point
 invalidation, batched replace (one undo step), bounded find matches, terminal

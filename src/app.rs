@@ -485,7 +485,7 @@ impl EditorApp {
                         drop(state);
                         self.header_pressed = true;
                         match hit {
-                            ui::menu::HeaderHit::Close => self.request_quit(),
+                            ui::menu::HeaderHit::Close => crate::macos::hide_window(),
                             ui::menu::HeaderHit::Minimize => crate::macos::minimize_window(),
                             ui::menu::HeaderHit::Zoom => {
                                 crate::macos::toggle_zoom();

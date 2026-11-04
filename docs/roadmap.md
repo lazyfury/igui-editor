@@ -43,12 +43,12 @@ shortcuts now have one source, saves are atomic with EOL preservation, find and
 Replace All are bounded/batched, terminal clipboard commands are focus-aware,
 sidebar rows are cached and external URLs are scheme-restricted.
 
-Next candidates: Dock reopen, cross-file undo and incremental preview layout
-for very large documents.
+Next candidates: cross-file undo and incremental preview layout for very large
+documents.
 
 Notes:
 
-- Dock reopen is not implemented yet; the window close guard is in place.
+- The window closes to the Dock (close-to-hide) and Dock activation reopens it.
 - Only macOS has been exercised manually; the Linux (XDG portal) and Windows
   dialog paths are wired but untested.
 - The macOS sheet path is asynchronous by design (no nested modal loop, no
