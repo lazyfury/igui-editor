@@ -82,7 +82,7 @@ Read the minimum set; do not preload the whole tree.
 | Syntax highlighting | `src/syntax/`, `src/model/highlight.rs` | Language packs: `src/syntax/pack.rs`. |
 | Find / replace / project search | `src/model/find.rs`, `src/ui/find_bar.rs`, `src/model/search.rs`, `src/ui/project_search.rs` | `src/model/replace.rs` for files. |
 | LSP (Rust/Godot) | `src/model/lsp.rs`, `src/ui/lsp.rs` | [`docs/services.md`](docs/services.md). |
-| Terminal | `src/model/pty.rs`, `src/state/terminal.rs`, `src/ui/terminal.rs` | UTF-8 locale is enforced for the child shell. |
+| Terminal | `src/model/pty.rs`, `src/state/terminal.rs`, `src/ui/terminal.rs` | Login shell (`-l`), UTF-8 locale and augmented PATH are enforced for child processes. |
 | Git panel | `src/model/git.rs`, `src/ui/git.rs` | Service boundary in `docs/services.md`. |
 | Settings / theme / metrics | `src/settings.rs`, `src/theme.rs` | [`docs/design.md`](docs/design.md). |
 | Dialogs / macOS integration | `src/dialogs.rs`, `src/host.rs`, `src/macos/` | Async sheets only; no nested modal loops. |

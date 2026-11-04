@@ -60,6 +60,7 @@ mod kit;
 mod macos;
 mod model;
 mod native;
+mod process_env;
 mod services;
 mod state;
 mod ui;

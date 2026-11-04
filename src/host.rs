@@ -149,6 +149,9 @@ impl PlatformObserver for DropObserver {
 
 /// Builds the windowed app (also used by the self-check to prove the wiring).
 pub fn build(open: Option<PathBuf>, mode: Option<Mode>) -> App {
+    // Finder launches inherit almost no PATH; do this before any service
+    // spawns Git/LSP or the PTY shell.
+    crate::process_env::install();
     let session = Session::load(&session::path());
     let theme_mode = mode.unwrap_or(if session.is_dark() {
         Mode::Dark

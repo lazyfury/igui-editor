@@ -89,6 +89,12 @@ impl PtySession {
             .map_err(|error| format!("openpty: {error}"))?;
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
         let mut cmd = CommandBuilder::new(&shell);
+        // A login shell reads `/etc/zprofile` and `~/.zprofile`, which is where
+        // macOS path_helper, Homebrew and rustup put their PATH setup. Without
+        // `-l` a packaged app starts with the Finder environment and `cargo`
+        // is missing even though it works in Terminal.app.
+        #[cfg(unix)]
+        cmd.arg("-l");
         cmd.cwd(cwd);
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");

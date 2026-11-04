@@ -146,11 +146,12 @@ Symbols are transient LSP state, not saved to disk.
 
 Native PTY (`portable-pty`) + `vt100` screen, no WebView or JS. The panel sits
 below the editor with a draggable top handle (120–600 px, default 220 px,
-double-click resets). It starts
-`$SHELL`, supports ANSI/256-color cells, cursor, resize, plain text, arrows,
-Ctrl letters, Alt prefixes, application cursor mode (vim/less) and IME candidate
-placement at the terminal cursor. The terminal requests frames while a PTY is
-alive, so full-screen programs repaint without extra input.
+double-click resets). It starts a **login** `$SHELL` (`-l`), so
+`/etc/zprofile` and `~/.zprofile` run just as they do in Terminal.app, and
+supports ANSI/256-color cells, cursor, resize, plain text, arrows, Ctrl letters,
+Alt prefixes, application cursor mode (vim/less) and IME candidate placement at
+the terminal cursor. The terminal requests frames while a PTY is alive, so
+full-screen programs repaint without extra input.
 
 A macOS app launched from Finder inherits no `LANG`/`LC_*`. The PTY child would
 then run in the `C` locale, where zsh prints multibyte prompt text as
@@ -159,6 +160,12 @@ spawns the shell with a UTF-8 fallback (`en_US.UTF-8` on macOS, `C.UTF-8`
 elsewhere) when the effective locale is missing or not UTF-8, and removes an
 invalid `LC_ALL` override; a valid user locale is left untouched. This also keeps
 OSC title sequences out of the cell grid.
+
+The packaged app also augments the process `PATH` before starting services:
+inherited entries stay first, then Homebrew, MacPorts, standard system
+directories and `~/.cargo/bin`, `~/.local/bin`, `~/bin` are appended when they
+exist. This makes `cargo`, `rust-analyzer` and Homebrew tools discoverable from
+the terminal, LSP and Git even when the app was launched from Finder.
 
 `src/fonts.rs` is the project's font policy: the editor and terminal pick a
 **fixed-pitch** family at runtime (`Monaco` / `SF Mono` / `Menlo` /
