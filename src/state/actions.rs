@@ -258,6 +258,7 @@ impl AppState {
                     self.status("no line-comment marker for this document");
                 }
             }
+            Action::FormatDocument => self.format_active_document(),
             Action::QuickOpen => self.open_quick_open(),
             Action::ProjectSearch => self.open_project_search(),
             Action::LspHover => self.request_lsp_hover(),

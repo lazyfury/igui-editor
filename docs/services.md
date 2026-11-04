@@ -198,6 +198,14 @@ its own language-server binary.
   update for it again. When attached to a running Godot editor the class list
   still only refreshes when that editor rescans — normally when its window
   regains focus.
+- **Base-class panels**: the INHERITED / SIGNALS left-dock tabs
+  (`state/godot.rs`, `ui/godot.rs`) resolve the active script's parent chain
+  from `.godot/global_script_class_cache.cfg`, each `extends` header and the
+  `inherits` map in `gdscript/capabilities`, then read members from the
+  existing `documentSymbol` / `nativeSymbol` caches. Project-script symbols are
+  cached separately (`Session::base_symbols`) because the base file is usually
+  not an open tab. Native rows open the docs tab; project rows jump to the
+  declaration.
 - **Aggressive reload** (`Settings::lsp_reload`, settings row **Reload LSP on
   Change**, persisted): drop and restart every `ServerRescan` session after a
   structural change or an explicit save of one of its files. A restart is

@@ -23,8 +23,10 @@ pub const TAB_WIDTHS: [usize; 3] = [2, 4, 8];
 pub struct Settings {
     /// Editor font size in logical pixels.
     pub font_size: f32,
-    /// Indentation unit and the displayed width of a literal tab.
+    /// Indentation width: spaces per level, and the displayed width of a tab.
     pub tab_width: usize,
+    /// Indent with tabs instead of `tab_width` spaces.
+    pub indent_tabs: bool,
     /// Draw the line-number gutter.
     pub line_numbers: bool,
     /// Draw indent guides.
@@ -53,6 +55,7 @@ impl Default for Settings {
         Self {
             font_size: 13.0,
             tab_width: 4,
+            indent_tabs: false,
             line_numbers: true,
             indent_guides: true,
             syntax: true,
@@ -72,6 +75,7 @@ impl Settings {
         Self {
             font_size: clamp_font(self.font_size),
             tab_width: clamp_tab(self.tab_width),
+            indent_tabs: self.indent_tabs,
             line_numbers: self.line_numbers,
             indent_guides: self.indent_guides,
             syntax: self.syntax,
@@ -91,6 +95,16 @@ impl Settings {
             font,
             line_h: (font * 1.45).round().max(16.0),
             tab_w: clamp_tab(self.tab_width) as f32,
+        }
+    }
+
+    /// The indent used for new documents (files with existing indentation keep
+    /// what they already use).
+    pub fn indent_style(&self) -> crate::model::doc::IndentStyle {
+        if self.indent_tabs {
+            crate::model::doc::IndentStyle::Tabs
+        } else {
+            crate::model::doc::IndentStyle::Spaces(clamp_tab(self.tab_width) as u8)
         }
     }
 
@@ -153,6 +167,7 @@ pub fn clamp_tab(value: usize) -> usize {
 pub enum Row {
     Theme,
     FontSize,
+    IndentStyle,
     TabWidth,
     LineNumbers,
     IndentGuides,
@@ -166,9 +181,10 @@ pub enum Row {
     Reset,
 }
 
-pub const ROWS: [Row; 13] = [
+pub const ROWS: [Row; 14] = [
     Row::Theme,
     Row::FontSize,
+    Row::IndentStyle,
     Row::TabWidth,
     Row::LineNumbers,
     Row::IndentGuides,
@@ -187,7 +203,8 @@ impl Row {
         match self {
             Row::Theme => "Theme",
             Row::FontSize => "Font Size",
-            Row::TabWidth => "Tab Width",
+            Row::IndentStyle => "Indent Style",
+            Row::TabWidth => "Indent Width",
             Row::LineNumbers => "Line Numbers",
             Row::IndentGuides => "Indent Guides",
             Row::Syntax => "Syntax Highlight",
@@ -205,7 +222,8 @@ impl Row {
     pub const fn is_toggle(self) -> bool {
         matches!(
             self,
-            Row::LineNumbers
+            Row::IndentStyle
+                | Row::LineNumbers
                 | Row::IndentGuides
                 | Row::Syntax
                 | Row::LanguageIntelligence
@@ -226,6 +244,11 @@ mod tests {
         assert_eq!(metrics.font, 13.0);
         assert_eq!(metrics.line_h, 19.0);
         assert_eq!(metrics.tab_columns(), 4);
+        assert_eq!(
+            settings.indent_style(),
+            crate::model::doc::IndentStyle::Spaces(4)
+        );
+        assert!(!settings.indent_tabs);
     }
 
     #[test]
@@ -240,6 +263,8 @@ mod tests {
         assert!(ROWS.contains(&Row::LanguageIntelligence));
         assert!(ROWS.contains(&Row::TrustLocalServers));
         assert!(ROWS.contains(&Row::ReloadLsp));
+        assert!(ROWS.contains(&Row::IndentStyle));
+        assert!(Row::IndentStyle.is_toggle());
         assert!(Row::LanguageIntelligence.is_toggle());
         assert!(Row::TrustLocalServers.is_toggle());
         assert!(Row::ReloadLsp.is_toggle());

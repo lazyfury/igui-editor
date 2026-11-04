@@ -44,6 +44,15 @@ impl AppState {
         self.language_of_active().map(|provider| provider.name())
     }
 
+    /// Indentation for the active document: the file's own style, else the
+    /// editor setting (spaces by default).
+    pub(crate) fn active_indent_style(&self) -> crate::model::doc::IndentStyle {
+        self.ws
+            .active_doc()
+            .and_then(Document::detected_indent)
+            .unwrap_or_else(|| self.settings.indent_style())
+    }
+
     /// Sets (or clears with `None`) the active document's language override.
     pub fn set_language(&mut self, name: Option<String>) {
         let Some(doc) = self.ws.active_doc() else {
@@ -231,7 +240,14 @@ impl AppState {
         match row {
             Row::Theme => self.theme.name().to_string(),
             Row::FontSize => format!("{} px", self.settings.font_size as i32),
-            Row::TabWidth => format!("{} spaces", self.settings.tab_width),
+            Row::IndentStyle => {
+                if self.settings.indent_tabs {
+                    "TABS".into()
+                } else {
+                    "SPACES".into()
+                }
+            }
+            Row::TabWidth => format!("{}", self.settings.tab_width),
             Row::LineNumbers => on_off(self.settings.line_numbers),
             Row::IndentGuides => on_off(self.settings.indent_guides),
             Row::Syntax => on_off(self.settings.syntax),
@@ -257,6 +273,18 @@ impl AppState {
             Row::FontSize => {
                 self.settings.step_font(delta);
                 self.settings_changed();
+            }
+            Row::IndentStyle => {
+                self.settings.indent_tabs = !self.settings.indent_tabs;
+                self.settings_changed();
+                self.status(format!(
+                    "indent: {}",
+                    if self.settings.indent_tabs {
+                        "TABS"
+                    } else {
+                        "SPACES"
+                    }
+                ));
             }
             Row::TabWidth => {
                 self.settings.step_tab(delta);
@@ -353,6 +381,7 @@ impl AppState {
     pub(crate) fn settings_changed(&mut self) {
         self.session.font = self.settings.font_size;
         self.session.tab = self.settings.tab_width;
+        self.session.indent_tabs = self.settings.indent_tabs;
         self.session.line_numbers = self.settings.line_numbers;
         self.session.indent_guides = self.settings.indent_guides;
         self.session.syntax = self.settings.syntax;

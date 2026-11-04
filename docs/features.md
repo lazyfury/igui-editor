@@ -8,7 +8,7 @@ verification, see [design.md](design.md) and [verification.md](verification.md).
 The file tree marks modified/untracked files with a colored Git status letter
 (modified orange, added green, deleted/conflict red, renamed purple, untracked
 teal), and the footer shows `GIT <branch> ↑ahead ↓behind` on its left. The sidebar has
-`EXPLORER / GIT` tabs. GIT shows the repository branch,
+`EXPLORER / GIT / INHERITED / SIGNALS` tabs. GIT shows the repository branch,
 ahead/behind, and staged/changes/conflicts sections from `git status
 --porcelain=v2 -z`. Click a file for a read-only unified diff overlay; `Esc` or
 the overlay ✕ closes it. `+` / `−` stage or unstage a row, `Stage all` stages the
@@ -212,6 +212,33 @@ visible after you click back into Godot. For a hard guarantee enable
 Godot and restarts it after file changes and explicit saves instead of attaching
 to the editor.
 
+### INHERITED / SIGNALS panels
+
+Two left-dock tabs list the active GDScript's **base classes** (the script's
+own members stay in the right OUTLINE panel). **INHERITED** lists properties and
+`var`/`@export` variables, **SIGNALS** lists signals; each class in the chain is
+a collapsible group with a count badge (`INHERITED 7`, `SIGNALS 3`), direct
+parent first:
+
+```
+ENEMY                 12
+  speed               var Enemy.speed: int
+ENEMYBASE              4
+  base_hit            signal base_hit(damage)
+NODE2D                 23
+  position            var Node2D.position: Vector2
+```
+
+The chain comes from the project's `.godot/global_script_class_cache.cfg`
+(`class_name → path`), each script's `extends` header, and the native
+`inherits` map from `gdscript/capabilities`. Members are read from the existing
+LSP caches: `documentSymbol` for project scripts (works for files that are not
+open) and `textDocument/nativeSymbol` for native classes. Clicking a native
+member opens the read-only **GODOT DOCS** tab; clicking a project-script member
+opens that base script at its declaration. The panels refresh when the active
+tab, the class cache or the server changes, and a slow request never steals
+focus from the editor.
+
 ## Header panel groups
 
 The right side of the header is a compact row of icon buttons: **Git**, then
@@ -223,8 +250,8 @@ when the dock already shows another one, and closes the dock when the tab is
 already visible. The open project name sits next to the toggles and the active
 file label sits to its left; both truncate from the left when space runs out.
 The generic toggles remain in the View menu, and every panel is bindable through
-`keymaps.json` (`view.explorer`, `view.git`, `view.outline`, `view.terminal`,
-`view.problems`).
+`keymaps.json` (`view.explorer`, `view.git`, `view.inherited`, `view.signals`,
+`view.outline`, `view.terminal`, `view.problems`).
 
 Icons are Lucide SVGs vendored under `assets/icons/lucide` (ISC). They are
 compiled in, parsed once by the engine's `igui_svg` renderer and stroked by
@@ -433,7 +460,8 @@ setting is persisted in the session. Preview-only and Edit modes ignore it.
 |---|---|
 | Theme | Dark / Light |
 | Font Size | 11–18 px |
-| Tab Width | 2 / 4 / 8 |
+| Indent Style | Spaces / Tabs (default Spaces) |
+| Indent Width | 2 / 4 / 8 (spaces per level and tab display width) |
 | Line Numbers | on / off |
 | Indent Guides | on / off |
 | Syntax Highlight | on / off |
@@ -519,6 +547,24 @@ counter shows a trailing `+` when the cap is reached. **Replace** changes the
 current match; **Replace All** applies every non-overlapping match as one
 undoable batch (one undo step, one line-index rebuild).
 
+## Indentation and formatting
+
+Each document detects its own indentation from the first indented lines
+(leading tabs vs. spaces; the space width is the gcd of the indentation
+columns), so a Godot script generated with tabs keeps tabs when edited here.
+Files with no indentation use the **Indent Style** / **Indent Width** settings
+(default: four spaces). `Tab` / `Shift+Tab` indent and outdent with the detected
+unit, and in GDScript `Enter` after a block opener (`func`, `if`, `for`,
+`while`, `match`, a line ending in `:`) adds one level. Pure spaces are legal
+GDScript; mixing tabs and spaces is what the parser rejects, which is why the
+file's existing style wins over the setting.
+
+**Format Document** (`⌥⇧F`, Edit menu, or the `editor.format` keymap command)
+converts every line's leading indentation to the configured style and width as
+one undo step. It never reflows code, and lines inside a GDScript triple-quoted
+string are left untouched because their leading whitespace is content. The
+status bar reports `formatted: tabs` or `formatted: 4 spaces`.
+
 ## Soft wrap (`⌥Z`, View menu)
 
 Off by default and persisted in the session. Long logical lines are split into
@@ -574,7 +620,8 @@ remembered per document and the last ratio is persisted.
   original name/path and are marked dirty so the first save writes them back.
 - **Window state**: size, position and the maximized flag are persisted and
   restored (fullscreen is not persisted).
-- Session format is version 15 (v15 added `bottom_tab`; v14 split
+- Session format is version 15 (v15 added `bottom_tab` and
+  `indent_tabs`; v14 split
   `recent_project.*` / `recent_file.*`; v13 added `trust_local_servers`, v12
   added `window.max`, v10 added the current-tab/window geometry set, v9
   `outline_width`, v8 `outline`, v7 `keymap`, v6 `terminal_open`,

@@ -85,6 +85,8 @@ Read the minimum set; do not preload the whole tree.
 | Syntax highlighting | `src/syntax/`, `src/model/highlight.rs` | Language packs: `src/syntax/pack.rs`. |
 | Find / replace / project search | `src/model/find.rs`, `src/ui/find_bar.rs`, `src/model/search.rs`, `src/ui/project_search.rs` | `src/model/replace.rs` for files. |
 | LSP (Rust/Godot) | `src/model/lsp.rs`, `src/ui/lsp.rs` | `src/model/godot_profile.rs` for the headless rescan profile; [`docs/services.md`](docs/services.md). |
+| INHERITED / SIGNALS panels | `src/state/godot.rs`, `src/ui/godot.rs`, `src/model/godot.rs` | Class cache/`extends` chain + LSP native/member caches; [`docs/features.md`](docs/features.md). |
+| Indentation / Format Document | `src/model/doc.rs`, `src/model/godot.rs` | Per-file tabs/spaces detection, GDScript `:` newline, `editor.format`; [`docs/design.md`](docs/design.md). |
 | Terminal | `src/model/pty.rs`, `src/state/terminal.rs`, `src/ui/terminal.rs` | Login shell (`-l`), UTF-8 locale and augmented PATH are enforced for child processes. |
 | Git panel | `src/model/git.rs`, `src/ui/git.rs` | Service boundary in `docs/services.md`. |
 | Missing tool / install hint prompt | `src/state/tooling.rs`, `src/ui/tooling.rs`, `src/services/mod.rs` | Copy-only command, never auto-install; shared by every native service. |

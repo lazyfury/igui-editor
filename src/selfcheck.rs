@@ -2007,10 +2007,16 @@ fn check(dir: &Path) -> Result<(), String> {
             return Err("the editor did not draw its code face".into());
         }
     }
-    harness.key(Key::ArrowDown); // Tab Width
+    harness.key(Key::ArrowDown); // Font Size -> Indent Style
+    harness.key(Key::Enter);
+    if !harness.app.state().settings.indent_tabs || !harness.app.state().session.indent_tabs {
+        return Err("the settings panel did not switch to tab indentation".into());
+    }
+    harness.key(Key::Enter);
+    harness.key(Key::ArrowDown); // Indent Width
     harness.key(Key::ArrowRight);
     if harness.app.state().settings.tab_width != 8 {
-        return Err("the settings panel did not cycle the tab width".into());
+        return Err("the settings panel did not cycle the indent width".into());
     }
     // Back to 4 spaces for the indent-guide check (the fixture indents by 4).
     harness.key(Key::ArrowLeft);
@@ -3059,6 +3065,44 @@ fn check(dir: &Path) -> Result<(), String> {
         state.preview.cancel_rebuild();
         state.dirty = true;
     }
+    // GDScript indent wiring: a tab file stays tabs on Enter, and Format
+    // converts it to the configured four spaces.
+    {
+        let mut state = harness.app.state_mut();
+        state.settings.indent_tabs = true;
+        state.settings_changed();
+        state.ws.new_tab();
+        state.set_language(Some("gdscript".into()));
+        state.focus = Focus::Editor;
+    }
+    harness.type_text("func _ready():");
+    harness.key(Key::Enter);
+    harness.type_text("pass");
+    {
+        let state = harness.app.state();
+        let text = state.ws.active_doc().map(|doc| doc.text().to_string());
+        if text.as_deref() != Some("func _ready():\n\tpass") {
+            return Err(format!("GDScript Enter did not add a tab indent: {text:?}"));
+        }
+    }
+    {
+        let mut state = harness.app.state_mut();
+        state.settings.indent_tabs = false;
+        state.settings.tab_width = 4;
+        state.settings_changed();
+        state.run(Action::FormatDocument);
+    }
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        let text = state.ws.active_doc().map(|doc| doc.text().to_string());
+        if text.as_deref() != Some("func _ready():\n    pass") {
+            return Err(format!(
+                "Format Document did not convert the indent to four spaces: {text:?}"
+            ));
+        }
+    }
+
     // Async workers (git) answer on their own thread; give them a moment.
     let settle = std::time::Instant::now() + Duration::from_secs(2);
     while harness.app.needs_frame() && std::time::Instant::now() < settle {
@@ -5423,6 +5467,55 @@ while True:
             "capabilities": {"textDocumentSync": 1},
             "serverInfo": {"name": "godot-editor-fixture"},
         }})
+    elif method == "initialized":
+        send({"jsonrpc": "2.0", "method": "gdscript/capabilities", "params": {
+            "native_classes": [
+                {"name": "Node", "inherits": "Object"},
+                {"name": "Object", "inherits": ""},
+            ],
+        }})
+    elif method == "textDocument/nativeSymbol":
+        cls = params.get("native_class", "")
+        symbol = params.get("symbol_name", "")
+        if symbol:
+            send({"jsonrpc": "2.0", "id": request_id, "result": {
+                "name": symbol, "native_class": cls,
+                "detail": "%s.%s docs" % (cls, symbol),
+                "documentation": "Fixture docs for %s." % symbol,
+                "kind": 6, "children": [],
+            }})
+        elif cls == "Node":
+            send({"jsonrpc": "2.0", "id": request_id, "result": {
+                "name": "Node", "native_class": "Node",
+                "detail": "<Native> class Node extends Object",
+                "documentation": "Node fixture.",
+                "kind": 5,
+                "children": [
+                    {"name": "ready", "native_class": "Node",
+                     "detail": "func Node.ready() -> void", "documentation": "Ready.",
+                     "kind": 24, "children": []},
+                    {"name": "tree_entered", "native_class": "Node",
+                     "detail": "func Node.tree_entered() -> void", "documentation": "Entered.",
+                     "kind": 24, "children": []},
+                    {"name": "name", "native_class": "Node",
+                     "detail": "var Node.name: StringName", "documentation": "Name.",
+                     "kind": 7, "children": []},
+                ],
+            }})
+        elif cls == "Object":
+            send({"jsonrpc": "2.0", "id": request_id, "result": {
+                "name": "Object", "native_class": "Object",
+                "detail": "<Native> class Object",
+                "documentation": "Object fixture.",
+                "kind": 5,
+                "children": [
+                    {"name": "script_changed", "native_class": "Object",
+                     "detail": "func Object.script_changed() -> void",
+                     "documentation": "Script changed.", "kind": 24, "children": []},
+                ],
+            }})
+        else:
+            send({"jsonrpc": "2.0", "id": request_id, "result": None})
     elif method == "textDocument/didOpen":
         document = params["textDocument"]
         uri = document["uri"]
@@ -5702,6 +5795,76 @@ fn check_godot_attach(dir: &Path) -> Result<(), String> {
         if resent["text"].as_str() != Some(text.as_str()) {
             return Err("the re-parse did not carry the full document text".into());
         }
+
+        // Base-class panels: main.gd extends Node; the fixture answers
+        // `gdscript/capabilities` and `textDocument/nativeSymbol`.
+        harness
+            .app
+            .state_mut()
+            .dock_show(crate::state::Panel::Signals);
+        wait_for_lsp(&mut harness, |state| {
+            state.godot_signal_count() > 0
+                && state
+                    .godot
+                    .signals
+                    .hits
+                    .iter()
+                    .any(|(_, hit)| matches!(hit, crate::state::godot::PanelHit::Member { .. }))
+        })?;
+        let frame = harness.frame()?;
+        let painted = texts(&frame);
+        if !painted.iter().any(|text| text == "Node") || !painted.iter().any(|text| text == "ready")
+        {
+            return Err(format!(
+                "the SIGNALS panel did not paint the base class signals: {painted:?}"
+            ));
+        }
+        let member = harness
+            .app
+            .state()
+            .godot
+            .signals
+            .hits
+            .iter()
+            .find(|(_, hit)| matches!(hit, crate::state::godot::PanelHit::Member { .. }))
+            .map(|(rect, _)| rect.center())
+            .ok_or("the SIGNALS panel has no member hit target")?;
+        harness.click(member);
+        wait_for_lsp(&mut harness, |state| {
+            state.ws.tabs.iter().any(|doc| {
+                doc.view_key() == Some("godot-docs") && doc.text().contains("Fixture docs")
+            })
+        })?;
+        {
+            let state = harness.app.state();
+            let docs = state
+                .ws
+                .active_doc()
+                .filter(|doc| doc.view_key() == Some("godot-docs"))
+                .map(|doc| doc.text().to_string())
+                .ok_or("clicking a native signal did not open the docs tab")?;
+            if !docs.contains("GODOT DOCS") || !docs.contains("Node") {
+                return Err(format!(
+                    "the signal docs tab has the wrong content: {docs:?}"
+                ));
+            }
+        }
+
+        // Back to the script for the INHERITED panel.
+        harness.app.state_mut().open_path(script.clone());
+        harness
+            .app
+            .state_mut()
+            .dock_show(crate::state::Panel::Inherited);
+        wait_for_lsp(&mut harness, |state| state.godot_property_count() > 0)?;
+        let frame = harness.frame()?;
+        let painted = texts(&frame);
+        if !painted.iter().any(|text| text == "name") {
+            return Err(format!(
+                "the INHERITED panel did not paint the base class properties: {painted:?}"
+            ));
+        }
+        println!("selfcheck: Godot base-class panels ok");
         println!("selfcheck: Godot rescan instead of watched files ok");
         Ok(())
     });

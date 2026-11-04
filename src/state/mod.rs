@@ -48,7 +48,9 @@ mod actions;
 mod dock;
 mod files;
 mod find;
+mod format;
 mod git;
+pub(crate) mod godot;
 mod keymap;
 mod lsp;
 mod modal;
@@ -190,6 +192,7 @@ pub enum Action {
     DeleteWordBackward,
     DeleteWordForward,
     ToggleComment,
+    FormatDocument,
     /// Smart line start (`primary+left`), extending the selection when true.
     MoveLineStart(bool),
     /// Line end (`primary+right`), extending the selection when true.
@@ -252,6 +255,7 @@ impl Action {
             Action::DeleteWordBackward => "Delete Word Backward".into(),
             Action::DeleteWordForward => "Delete Word Forward".into(),
             Action::ToggleComment => "Toggle Comment".into(),
+            Action::FormatDocument => "Format Document".into(),
             Action::MoveLineStart(_) => "Go to Line Start".into(),
             Action::MoveLineEnd(_) => "Go to Line End".into(),
             Action::MoveDocStart(_) => "Go to Document Start".into(),
@@ -328,7 +332,8 @@ impl Action {
             | Action::MoveLineDown
             | Action::DeleteWordBackward
             | Action::DeleteWordForward
-            | Action::ToggleComment => doc.is_some_and(|doc| !doc.is_read_only()),
+            | Action::ToggleComment
+            | Action::FormatDocument => doc.is_some_and(|doc| !doc.is_read_only()),
             Action::MoveLineStart(_)
             | Action::MoveLineEnd(_)
             | Action::MoveDocStart(_)
@@ -413,6 +418,7 @@ pub fn items(menu: Menu, state: &AppState) -> Vec<Option<Action>> {
             None,
             Some(Action::SelectAll),
             None,
+            Some(Action::FormatDocument),
             Some(Action::Find),
             Some(Action::QuickOpen),
             Some(Action::ProjectSearch),
@@ -1245,6 +1251,8 @@ pub struct AppState {
     pub git: GitState,
     pub terminal: TerminalState,
     pub lsp: LspController,
+    /// Base-class members for the INHERITED / SIGNALS panels.
+    pub godot: godot::GodotUi,
     pub keymap: Keymap,
     keymap_pending: Vec<KeyChord>,
     keymap_pending_at: Instant,
@@ -1423,6 +1431,7 @@ impl AppState {
                 lsp.set_aggressive_reload(settings.lsp_reload);
                 lsp
             },
+            godot: godot::GodotUi::default(),
             keymap: Keymap::for_id(settings.keymap),
             keymap_pending: Vec::new(),
             keymap_pending_at: Instant::now(),
@@ -1584,6 +1593,7 @@ fn settings_from_session(session: &Session) -> Settings {
     Settings {
         font_size: session.font,
         tab_width: session.tab,
+        indent_tabs: session.indent_tabs,
         line_numbers: session.line_numbers,
         indent_guides: session.indent_guides,
         syntax: session.syntax,

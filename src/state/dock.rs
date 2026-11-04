@@ -48,6 +48,8 @@ impl DockId {
 pub enum Panel {
     Explorer,
     Git,
+    Inherited,
+    Signals,
     Outline,
     Terminal,
     Problems,
@@ -56,9 +58,11 @@ pub enum Panel {
 impl Panel {
     /// Header-button order. Panels of one dock stay contiguous so the header
     /// can group them; Git comes first so it is always reachable.
-    pub const ALL: [Panel; 5] = [
+    pub const ALL: [Panel; 7] = [
         Panel::Git,
         Panel::Explorer,
+        Panel::Inherited,
+        Panel::Signals,
         Panel::Outline,
         Panel::Terminal,
         Panel::Problems,
@@ -67,7 +71,12 @@ impl Panel {
     /// Tabs of `dock`, in strip order.
     pub const fn tabs_in(dock: DockId) -> &'static [Panel] {
         match dock {
-            DockId::Left => &[Panel::Explorer, Panel::Git],
+            DockId::Left => &[
+                Panel::Explorer,
+                Panel::Git,
+                Panel::Inherited,
+                Panel::Signals,
+            ],
             DockId::Right => &[Panel::Outline],
             // PROBLEMS comes first: diagnostics are the reason to look at the
             // bottom dock while a build/check is running; the shell is one tab away.
@@ -77,7 +86,7 @@ impl Panel {
 
     pub const fn dock(self) -> DockId {
         match self {
-            Panel::Explorer | Panel::Git => DockId::Left,
+            Panel::Explorer | Panel::Git | Panel::Inherited | Panel::Signals => DockId::Left,
             Panel::Outline => DockId::Right,
             Panel::Terminal | Panel::Problems => DockId::Bottom,
         }
@@ -88,6 +97,8 @@ impl Panel {
         match self {
             Panel::Explorer => "explorer",
             Panel::Git => "git",
+            Panel::Inherited => "inherited",
+            Panel::Signals => "signals",
             Panel::Outline => "outline",
             Panel::Terminal => "terminal",
             Panel::Problems => "problems",
@@ -106,6 +117,8 @@ impl Panel {
         match self {
             Panel::Explorer => Icon::PanelLeft,
             Panel::Git => Icon::GitBranch,
+            Panel::Inherited => Icon::ListTree,
+            Panel::Signals => Icon::Radio,
             Panel::Outline => Icon::PanelRight,
             Panel::Terminal => Icon::Terminal,
             Panel::Problems => Icon::CircleAlert,
@@ -116,6 +129,8 @@ impl Panel {
         match self {
             Panel::Explorer => "EXPLORER",
             Panel::Git => "GIT",
+            Panel::Inherited => "INHERITED",
+            Panel::Signals => "SIGNALS",
             Panel::Outline => "OUTLINE",
             Panel::Terminal => "TERMINAL",
             Panel::Problems => "PROBLEMS",
@@ -127,6 +142,8 @@ impl Panel {
         match self {
             Panel::Explorer => Some("explorer"),
             Panel::Git => Some("git"),
+            Panel::Inherited => Some("inherited"),
+            Panel::Signals => Some("signals"),
             Panel::Outline | Panel::Terminal | Panel::Problems => None,
         }
     }
@@ -148,6 +165,14 @@ impl Panel {
             Panel::Outline => {
                 let path = state.ws.active_doc()?.path()?;
                 let count = state.lsp.symbols_for(path).len();
+                (count > 0).then(|| count.to_string())
+            }
+            Panel::Inherited => {
+                let count = state.godot_property_count();
+                (count > 0).then(|| count.to_string())
+            }
+            Panel::Signals => {
+                let count = state.godot_signal_count();
                 (count > 0).then(|| count.to_string())
             }
             Panel::Explorer | Panel::Git | Panel::Terminal => None,

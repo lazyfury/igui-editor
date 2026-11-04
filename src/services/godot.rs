@@ -102,6 +102,17 @@ impl BuiltinPlugin for GodotLspPlugin {
     fn register(&self, host: &mut PluginHost) {
         host.service(self.manifest(), COMMANDS);
         host.language_server(godot_server());
+        // The left dock validates its persisted tab id against this registry.
+        host.sidebar_tab(super::SidebarContribution {
+            id: "inherited",
+            label: "INHERITED",
+            icon: "list-tree",
+        });
+        host.sidebar_tab(super::SidebarContribution {
+            id: "signals",
+            label: "SIGNALS",
+            icon: "radio",
+        });
     }
 }
 

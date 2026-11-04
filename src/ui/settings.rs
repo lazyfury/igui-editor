@@ -157,6 +157,7 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
             );
         } else {
             let on = match row {
+                Row::IndentStyle => state.settings.indent_tabs,
                 Row::LineNumbers => state.settings.line_numbers,
                 Row::IndentGuides => state.settings.indent_guides,
                 Row::Syntax => state.settings.syntax,

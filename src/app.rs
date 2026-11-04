@@ -355,6 +355,7 @@ impl EditorApp {
         self.state.borrow_mut().tick_external_changes();
         self.state.borrow_mut().tick_git();
         self.state.borrow_mut().tick_lsp();
+        self.state.borrow_mut().tick_godot_panel();
         self.state.borrow_mut().tick_auto_completion();
         self.state.borrow_mut().tick_hover();
         self.state.borrow_mut().tick_terminal();

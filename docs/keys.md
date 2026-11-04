@@ -32,8 +32,9 @@
 | `⇧⌘M` | cycle Editor → Split Preview → Preview Only |
 | `⇧⌘Y` | toggle editor/preview scroll sync |
 | `⌥Z` | toggle soft wrap |
-| `Tab` / `⇧Tab` | indent / outdent (block-aware) |
-| `Enter` | newline with the current indentation |
+| `Tab` / `⇧Tab` | indent / outdent with the file's detected unit (tabs or spaces) |
+| `Enter` | newline with the current indentation; GDScript adds a level after a block opener (`:`) |
+| `⌥⇧F` | Format Document: convert indentation to the configured style/width |
 | `⌘←` / `⌘→` | smart home / line end |
 | `⌘↑` / `⌘↓` | document start / end |
 | `⌥←` / `⌥→` | word left / right |

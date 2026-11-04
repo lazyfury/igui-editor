@@ -88,12 +88,12 @@ file.save, file.saveAs, file.open, file.openProject (alias file.openFolder),
 file.closeProject (alias file.closeFolder), file.closeTab
 edit.undo, edit.redo, edit.cut, edit.copy, edit.paste, edit.selectAll
 edit.cutLine, edit.copyLine, edit.deleteLine, edit.duplicateLine
-edit.moveLineUp, edit.moveLineDown, edit.toggleComment
+edit.moveLineUp, edit.moveLineDown, edit.toggleComment, editor.format
 motion.left, motion.right, motion.wordLeft, motion.wordRight
 motion.lineStart, motion.lineEnd, motion.docStart, motion.docEnd
 editor.find, editor.findNext, editor.findPrevious
 view.split, view.preview, view.softWrap, view.sidebar, view.explorer, view.git,
-view.outline, view.terminal, view.problems
+view.inherited, view.signals, view.outline, view.terminal, view.problems
 lsp.hover, lsp.completion, lsp.definition
 ```
 

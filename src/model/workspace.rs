@@ -162,6 +162,27 @@ impl Workspace {
         self.show_view_kind(ViewKind::Docs, key, name, text)
     }
 
+    /// Replaces an existing docs view without changing the active tab.
+    ///
+    /// A background documentation request must not steal focus if the user
+    /// switched to another tab while it was in flight.
+    pub fn update_docs_view(
+        &mut self,
+        key: &str,
+        name: impl Into<String>,
+        text: impl Into<String>,
+    ) -> Option<usize> {
+        let index = self
+            .tabs
+            .iter()
+            .position(|doc| doc.view_key() == Some(key))?;
+        if let Some(doc) = self.tabs.get_mut(index) {
+            doc.restore_view(text);
+            doc.set_name(name);
+        }
+        Some(index)
+    }
+
     fn show_view_kind(
         &mut self,
         kind: ViewKind,

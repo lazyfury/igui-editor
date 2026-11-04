@@ -110,6 +110,10 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
             let mut state = state.borrow_mut();
             if state.sidebar_tab == "git" {
                 crate::ui::git::scroll(&mut state, delta.y);
+            } else if state.sidebar_tab == "inherited" {
+                crate::ui::godot::scroll(&mut state, delta.y, crate::ui::godot::Mode::Inherited);
+            } else if state.sidebar_tab == "signals" {
+                crate::ui::godot::scroll(&mut state, delta.y, crate::ui::godot::Mode::Signals);
             } else {
                 let row_h = state.theme.m.row_h;
                 let content = state.ws.tree.rows().len() as f32 * row_h;
@@ -156,6 +160,14 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
 
     if state.sidebar_tab == "git" {
         crate::ui::git::paint_sidebar(state, env, rect);
+        return;
+    }
+    if state.sidebar_tab == "inherited" {
+        crate::ui::godot::paint(state, env, rect, crate::ui::godot::Mode::Inherited);
+        return;
+    }
+    if state.sidebar_tab == "signals" {
+        crate::ui::godot::paint(state, env, rect, crate::ui::godot::Mode::Signals);
         return;
     }
 
@@ -322,6 +334,14 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
 fn click(state: &mut AppState, pos: Vec2) {
     if state.sidebar_tab == "git" {
         crate::ui::git::click(state, pos);
+        return;
+    }
+    if state.sidebar_tab == "inherited" {
+        crate::ui::godot::click(state, pos, crate::ui::godot::Mode::Inherited);
+        return;
+    }
+    if state.sidebar_tab == "signals" {
+        crate::ui::godot::click(state, pos, crate::ui::godot::Mode::Signals);
         return;
     }
     let view = state.sidebar.rect;

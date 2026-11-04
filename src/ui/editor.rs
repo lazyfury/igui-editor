@@ -159,6 +159,8 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
                 igui_ui::request_paint(tree);
                 return EventResult::Handled;
             }
+            let indent = state.active_indent_style();
+            let gdscript = state.language_name() == Some("gdscript");
             let Some(doc) = state.ws.active_doc_mut() else {
                 return EventResult::Ignored;
             };
@@ -176,7 +178,9 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
                     true
                 }
                 Key::Enter => {
-                    doc.insert_newline();
+                    let extra =
+                        gdscript && crate::model::godot::opens_block(doc.line_before_caret());
+                    doc.insert_newline(extra, indent);
                     true
                 }
                 Key::Space => {
@@ -185,9 +189,9 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
                 }
                 Key::Tab => {
                     if shift {
-                        doc.outdent();
+                        doc.outdent(indent);
                     } else {
-                        doc.indent();
+                        doc.indent(indent);
                     }
                     true
                 }

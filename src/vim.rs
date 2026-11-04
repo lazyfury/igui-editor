@@ -234,20 +234,25 @@ pub fn handle_key(state: &mut AppState, key: Key, modifiers: Modifiers) -> bool 
                 true
             }
             Some('o') if !upper => {
+                let indent = state.active_indent_style();
+                let gdscript = state.language_name() == Some("gdscript");
                 if let Some(doc) = state.ws.active_doc_mut() {
                     doc.move_end(false);
-                    doc.insert_newline();
+                    let extra =
+                        gdscript && crate::model::godot::opens_block(doc.line_before_caret());
+                    doc.insert_newline(extra, indent);
                 }
                 state.vim.enter_insert();
                 state.dirty = true;
                 true
             }
             Some('o') if upper => {
+                let indent = state.active_indent_style();
                 if let Some(doc) = state.ws.active_doc_mut() {
                     let line = doc.line_of(doc.caret());
                     let start = doc.line_start(line);
                     doc.set_caret(start);
-                    doc.insert_newline();
+                    doc.insert_newline(false, indent);
                 }
                 state.vim.enter_insert();
                 state.dirty = true;

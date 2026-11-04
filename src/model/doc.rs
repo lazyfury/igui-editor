@@ -18,8 +18,67 @@ use std::path::{Path, PathBuf};
 
 use super::{fsutil, grapheme};
 
-/// Indentation inserted by Tab (and used for auto-indent on Enter).
-pub const INDENT: &str = "    ";
+/// How a document indents a new block level.
+///
+/// Detection is per file so an existing Godot script keeps its tabs (mixing
+/// tabs and spaces is what GDScript rejects). The setting only supplies the
+/// default for files with no indentation yet and the target of
+/// [`Document::format_indentation`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum IndentStyle {
+    Tabs,
+    Spaces(u8),
+}
+
+impl IndentStyle {
+    /// One indentation unit (a tab or `width` spaces).
+    pub fn unit(self) -> String {
+        match self {
+            IndentStyle::Tabs => "\t".into(),
+            IndentStyle::Spaces(width) => " ".repeat(width.max(1) as usize),
+        }
+    }
+
+    /// Indentation actually used by `text`, or `None` when no line is indented.
+    ///
+    /// Tabs win ties; the space width is the gcd of the leading-space counts,
+    /// which recovers 2/4/8 even when every line is indented two or three
+    /// levels deep.
+    pub fn detect(text: &str) -> Option<Self> {
+        let mut tabs = 0usize;
+        let mut spaces = 0usize;
+        let mut width = 0usize;
+        for line in text.lines() {
+            let ws_len = line.len() - line.trim_start_matches([' ', '\t']).len();
+            if ws_len == 0 || line[ws_len..].trim().is_empty() {
+                continue;
+            }
+            let ws = &line[..ws_len];
+            if ws.starts_with('\t') {
+                tabs += 1;
+            } else {
+                spaces += 1;
+                width = gcd(width, ws_len);
+            }
+        }
+        if tabs == 0 && spaces == 0 {
+            return None;
+        }
+        if tabs >= spaces {
+            return Some(IndentStyle::Tabs);
+        }
+        let width = if (2..=8).contains(&width) { width } else { 4 };
+        Some(IndentStyle::Spaces(width as u8))
+    }
+}
+
+fn gcd(a: usize, b: usize) -> usize {
+    if b == 0 {
+        a
+    } else {
+        gcd(b, a % b)
+    }
+}
 
 /// Caret plus the other end of the selection.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -195,6 +254,8 @@ pub struct Document {
     view_key: Option<String>,
     view_kind: Option<ViewKind>,
     preview_start: Option<usize>,
+    /// Indentation detected from the file, if it has any indented line.
+    indent: Option<IndentStyle>,
 }
 
 impl Document {
@@ -220,6 +281,7 @@ impl Document {
             view_key: None,
             view_kind: None,
             preview_start: None,
+            indent: None,
         }
     }
 
@@ -253,9 +315,11 @@ impl Document {
             view_key: None,
             view_kind: None,
             preview_start: None,
+            indent: None,
         };
         doc.caret = floor_boundary(&doc.text, caret);
         doc.anchor = floor_boundary(&doc.text, anchor);
+        doc.indent = IndentStyle::detect(&doc.text);
         doc.rebuild_lines();
         doc
     }
@@ -272,6 +336,7 @@ impl Document {
         self.rev += 1;
         self.edit_span = None;
         self.undo = UndoStack::default();
+        self.indent = IndentStyle::detect(&self.text);
         self.rebuild_lines();
     }
 
@@ -305,7 +370,9 @@ impl Document {
             view_key: None,
             view_kind: None,
             preview_start: None,
+            indent: None,
         };
+        doc.indent = IndentStyle::detect(&doc.text);
         doc.rebuild_lines();
         Ok(doc)
     }
@@ -395,6 +462,7 @@ impl Document {
         self.rev += 1;
         self.edit_span = None;
         self.undo = UndoStack::default();
+        self.indent = IndentStyle::detect(&self.text);
         self.rebuild_lines();
     }
 
@@ -426,6 +494,22 @@ impl Document {
 
     pub fn line_ending(&self) -> LineEnding {
         self.eol
+    }
+
+    /// Indentation detected from the file content, if any.
+    pub fn detected_indent(&self) -> Option<IndentStyle> {
+        self.indent
+    }
+
+    /// Records the document's indentation after an explicit conversion.
+    pub fn set_indent_style(&mut self, style: IndentStyle) {
+        self.indent = Some(style);
+    }
+
+    /// Text of the current line before the caret (for block-indent rules).
+    pub fn line_before_caret(&self) -> &str {
+        let line = self.line_of(self.caret);
+        &self.text[self.line_start(line)..self.caret.min(self.line_end(line))]
     }
 
     /// Points the buffer at `path` (Save As) and renames it.
@@ -920,10 +1004,16 @@ impl Document {
         let single = insert.chars().count() == 1 && !insert.contains('\n');
         let kind = if single { Kind::Type } else { Kind::Other };
         self.replace(start, end, &insert, kind);
+        if self.indent.is_none() && insert.contains('\n') {
+            self.indent = IndentStyle::detect(&self.text);
+        }
     }
 
     /// Enter: insert a newline plus the current line's leading whitespace.
-    pub fn insert_newline(&mut self) {
+    ///
+    /// `extra` adds one more level (a GDScript block opener such as a line
+    /// ending in `:`); it is ignored for a caret inside the indentation itself.
+    pub fn insert_newline(&mut self, extra: bool, style: IndentStyle) {
         if self.read_only {
             return;
         }
@@ -934,8 +1024,16 @@ impl Document {
             .chars()
             .take_while(|ch| *ch == ' ' || *ch == '\t')
             .collect();
-        let insert = format!("\n{indent}");
+        let extra = if extra && start >= self.line_start(line) + indent.len() {
+            style.unit()
+        } else {
+            String::new()
+        };
+        let insert = format!("\n{indent}{extra}");
         self.replace(start, end, &insert, Kind::Other);
+        if self.indent.is_none() {
+            self.indent = IndentStyle::detect(&self.text);
+        }
     }
 
     pub fn backspace(&mut self) {
@@ -980,14 +1078,15 @@ impl Document {
         true
     }
 
-    /// Tab: indent every selected line by [`INDENT`], or insert one unit.
-    pub fn indent(&mut self) {
+    /// Tab: indent every selected line by `style`, or insert one unit.
+    pub fn indent(&mut self, style: IndentStyle) {
         if self.read_only {
             return;
         }
+        let unit = style.unit();
         let Some((start, end)) = self.selection() else {
             let (start, end) = (self.caret, self.caret);
-            self.replace(start, end, INDENT, Kind::Other);
+            self.replace(start, end, &unit, Kind::Other);
             return;
         };
         let first = self.line_of(start);
@@ -996,15 +1095,15 @@ impl Document {
         let block_start = starts[0];
         let block_end = self.line_end(last);
         let block = self.text[block_start..block_end].to_string();
-        let mut out = String::with_capacity(block.len() + INDENT.len() * starts.len());
+        let mut out = String::with_capacity(block.len() + unit.len() * starts.len());
         for (index, line) in block.split('\n').enumerate() {
             if index > 0 {
                 out.push('\n');
             }
-            out.push_str(INDENT);
+            out.push_str(&unit);
             out.push_str(line);
         }
-        let deltas: Vec<isize> = starts.iter().map(|_| INDENT.len() as isize).collect();
+        let deltas: Vec<isize> = starts.iter().map(|_| unit.len() as isize).collect();
         let caret = remap(self.caret, &starts, &deltas);
         let anchor = remap(self.anchor, &starts, &deltas);
         self.replace_with(
@@ -1017,7 +1116,7 @@ impl Document {
     }
 
     /// Shift+Tab: remove one indentation unit from every selected line.
-    pub fn outdent(&mut self) {
+    pub fn outdent(&mut self, style: IndentStyle) {
         if self.read_only {
             return;
         }
@@ -1028,13 +1127,17 @@ impl Document {
         let block_start = starts[0];
         let block_end = self.line_end(last);
         let block = self.text[block_start..block_end].to_string();
+        let width = match style {
+            IndentStyle::Tabs => 1,
+            IndentStyle::Spaces(width) => width.max(1) as usize,
+        };
         let mut out = String::with_capacity(block.len());
         let mut deltas: Vec<isize> = Vec::with_capacity(starts.len());
         for (index, line) in block.split('\n').enumerate() {
             if index > 0 {
                 out.push('\n');
             }
-            let cut = leading_indent(line);
+            let cut = leading_indent(line, width);
             deltas.push(-(cut as isize));
             out.push_str(&line[cut..]);
         }
@@ -1050,6 +1153,98 @@ impl Document {
             Kind::Other,
             Cursor { caret, anchor },
         );
+    }
+
+    /// Normalizes the leading indentation of every code line to `target`.
+    ///
+    /// Lines inside a GDScript triple-quoted string are left untouched (their
+    /// leading whitespace is string content). This is the manual `Format
+    /// Document` path: it only converts the indentation unit, which is exactly
+    /// what fixes a tab/spaces mix without touching code.
+    pub fn format_indentation(
+        &mut self,
+        target: IndentStyle,
+        source_tab_width: usize,
+        gdscript: bool,
+    ) -> bool {
+        if self.read_only || self.text.is_empty() {
+            self.indent = Some(target);
+            return false;
+        }
+        let tab_width = source_tab_width.max(1);
+        let width = match target {
+            IndentStyle::Tabs => tab_width,
+            IndentStyle::Spaces(width) => width.max(1) as usize,
+        };
+        let mut out = String::with_capacity(self.text.len());
+        let mut multiline: Option<&'static str> = None;
+        for (index, line) in self.text.split('\n').enumerate() {
+            if index > 0 {
+                out.push('\n');
+            }
+            if let Some(delimiter) = multiline {
+                // Inside a triple-quoted string: leading whitespace is content.
+                out.push_str(line);
+                if line.contains(delimiter) {
+                    multiline = None;
+                }
+                continue;
+            }
+            let opens = if gdscript {
+                gdscript_multiline_opens(line)
+            } else {
+                None
+            };
+            let ws_len = line.len() - line.trim_start_matches([' ', '\t']).len();
+            let columns = indentation_columns(&line[..ws_len], tab_width);
+            let converted = match target {
+                IndentStyle::Tabs => format!(
+                    "{}{}",
+                    "\t".repeat(columns / width),
+                    " ".repeat(columns % width)
+                ),
+                IndentStyle::Spaces(_) => " ".repeat(columns),
+            };
+            out.push_str(&converted);
+            out.push_str(&line[ws_len..]);
+            if let Some(delimiter) = opens {
+                multiline = Some(delimiter);
+            }
+        }
+        if out == self.text {
+            self.indent = Some(target);
+            return false;
+        }
+        // Keep the caret on the same line at the same content column.
+        let (caret_line, caret_col) = self.line_col();
+        let old_lead = leading_indent(self.line(caret_line), width);
+        let new_lines: Vec<&str> = out.split('\n').collect();
+        let new_line = new_lines.get(caret_line).copied().unwrap_or_default();
+        let new_lead = leading_indent(new_line, width);
+        let new_col = caret_col
+            .saturating_sub(old_lead)
+            .saturating_add(new_lead)
+            .min(new_line.len());
+        let line_start = new_lines
+            .iter()
+            .take(caret_line)
+            .map(|line| line.len() + 1)
+            .sum::<usize>();
+        let caret = (line_start + new_col).min(out.len());
+        let anchor = if self.anchor == self.caret {
+            caret
+        } else {
+            self.anchor.min(out.len())
+        };
+        self.replace_with(
+            0,
+            self.text.len(),
+            &out,
+            Kind::Other,
+            Cursor { caret, anchor },
+        );
+        self.indent = Some(target);
+        true
     }
 
     pub fn undo(&mut self) -> bool {
@@ -1354,15 +1549,39 @@ fn sanitize(text: &str) -> String {
         .collect()
 }
 
-/// Number of bytes of leading indentation (one tab, or up to four spaces).
-fn leading_indent(line: &str) -> usize {
+/// Number of bytes of one indentation unit at the start of `line`.
+fn leading_indent(line: &str, width: usize) -> usize {
     if line.starts_with('\t') {
         return 1;
     }
     line.bytes()
-        .take(4)
+        .take(width)
         .take_while(|byte| *byte == b' ')
         .count()
+}
+
+/// Visual columns of leading whitespace (tabs use the configured width).
+fn indentation_columns(whitespace: &str, tab_width: usize) -> usize {
+    whitespace
+        .bytes()
+        .map(|byte| if byte == b'\t' { tab_width } else { 1 })
+        .sum()
+}
+
+/// Delimiter of a GDScript triple-quoted string opened on `line`.
+fn gdscript_multiline_opens(line: &str) -> Option<&'static str> {
+    let code = line.split('#').next().unwrap_or(line);
+    let triple = code.find("\"\"\"");
+    let single = code.find("'''");
+    let delimiter = match (triple, single) {
+        (Some(a), Some(b)) if a < b => "\"\"\"",
+        (Some(_), Some(_)) => "'''",
+        (Some(_), None) => "\"\"\"",
+        (None, Some(_)) => "'''",
+        (None, None) => return None,
+    };
+    // An even count means the string opens and closes on this line.
+    (code.matches(delimiter).count() % 2 == 1).then_some(delimiter)
 }
 
 fn floor_boundary(text: &str, byte: usize) -> usize {
@@ -1470,7 +1689,7 @@ mod tests {
     fn newline_and_indent_are_undo_steps_of_their_own() {
         let mut doc = doc("    fn main() {");
         doc.set_caret(doc.text().len());
-        doc.insert_newline();
+        doc.insert_newline(false, IndentStyle::Spaces(4));
         assert_eq!(doc.text(), "    fn main() {\n    ");
         doc.insert_text("x");
         assert_eq!(doc.text(), "    fn main() {\n    x");
@@ -1483,7 +1702,7 @@ mod tests {
         let mut doc = doc("a\nb\nc");
         doc.anchor = 0;
         doc.caret = doc.text().len();
-        doc.indent();
+        doc.indent(IndentStyle::Spaces(4));
         assert_eq!(doc.text(), "    a\n    b\n    c");
         assert!(doc.undo());
         assert_eq!(doc.text(), "a\nb\nc");
@@ -1493,8 +1712,74 @@ mod tests {
     fn outdent_removes_up_to_four_spaces() {
         let mut doc = doc("      a\n  b");
         doc.select_all();
-        doc.outdent();
+        doc.outdent(IndentStyle::Spaces(4));
         assert_eq!(doc.text(), "  a\nb");
+    }
+
+    #[test]
+    fn tab_documents_indent_with_tabs() {
+        let mut doc = doc("\tfunc _ready():\n\t\tpass\n");
+        assert_eq!(doc.detected_indent(), Some(IndentStyle::Tabs));
+        doc.select_all();
+        doc.indent(IndentStyle::Tabs);
+        assert_eq!(doc.text(), "\t\tfunc _ready():\n\t\t\tpass\n");
+        doc.outdent(IndentStyle::Tabs);
+        assert_eq!(doc.text(), "\tfunc _ready():\n\t\tpass\n");
+    }
+
+    #[test]
+    fn newline_after_a_block_opener_adds_one_level() {
+        let mut doc = doc("\tfunc _ready():");
+        doc.set_caret(doc.text().len());
+        doc.insert_newline(true, IndentStyle::Tabs);
+        assert_eq!(doc.text(), "\tfunc _ready():\n\t\t");
+        doc.insert_text("pass");
+        assert_eq!(doc.line_before_caret(), "\t\tpass");
+    }
+
+    #[test]
+    fn indent_detection_recovers_tabs_and_space_widths() {
+        assert_eq!(
+            IndentStyle::detect("\tfunc f():\n\t\tpass\n"),
+            Some(IndentStyle::Tabs)
+        );
+        assert_eq!(
+            IndentStyle::detect("func f():\n    pass\n"),
+            Some(IndentStyle::Spaces(4))
+        );
+        assert_eq!(
+            IndentStyle::detect("a\n  b\n    c\n"),
+            Some(IndentStyle::Spaces(2))
+        );
+        assert_eq!(
+            IndentStyle::detect("a\n        b\n"),
+            Some(IndentStyle::Spaces(8))
+        );
+        assert_eq!(IndentStyle::detect("no indentation\n"), None);
+    }
+
+    #[test]
+    fn format_converts_indentation_without_touching_code() {
+        let mut tabbed = doc("func f():\n\tif true:\n\t\tpass\n");
+        assert!(tabbed.format_indentation(IndentStyle::Spaces(4), 4, true));
+        assert_eq!(tabbed.text(), "func f():\n    if true:\n        pass\n");
+        assert_eq!(tabbed.detected_indent(), Some(IndentStyle::Spaces(4)));
+        assert!(tabbed.undo());
+        assert_eq!(tabbed.text(), "func f():\n\tif true:\n\t\tpass\n");
+
+        let mut spaced = doc("func f():\n    pass\n");
+        assert!(spaced.format_indentation(IndentStyle::Tabs, 4, true));
+        assert_eq!(spaced.text(), "func f():\n\tpass\n");
+    }
+
+    #[test]
+    fn format_leaves_multiline_string_content_alone() {
+        let mut doc = doc("func f():\n\tvar text = \"\"\"\n    keep me\n\t\"\"\"\n\tpass\n");
+        assert!(doc.format_indentation(IndentStyle::Spaces(4), 4, true));
+        assert_eq!(
+            doc.text(),
+            "func f():\n    var text = \"\"\"\n    keep me\n\t\"\"\"\n    pass\n"
+        );
     }
 
     #[test]

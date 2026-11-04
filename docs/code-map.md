@@ -17,6 +17,7 @@ src/
   model/lsp.rs        stdio/TCP JSON-RPC client, per-root sessions, diagnostics,
                       hover/completion, monorepo root selection, native Godot symbols
   model/godot_profile.rs  private headless-Godot editor profile (unfocused rescan)
+  model/godot.rs      script headers, global class cache, GDScript block rules
   model/bbcode.rs     Godot BBCode -> text spans + clickable references
   model/docs.rs       native symbol -> docs view text + link ranges
   services/lsp.rs     built-in Rust language-server spec (rust-analyzer)
@@ -40,6 +41,7 @@ src/
   macos/              Apple Event open, Dock menu, recent + quit guard
   services/           native service registry + built-in plugin descriptors
   ui/git.rs           GIT sidebar tab + diff overlay + commit prompt
+  ui/godot.rs         INHERITED / SIGNALS sidebar panels (base-class members)
   ui/lsp.rs           hover card + completion list overlays
   ui/dock.rs          shared dock tab strip (layout, paint, hit tests, close)
   ui/problems.rs      bottom-dock PROBLEMS list (workspace diagnostics, jump)
@@ -56,6 +58,7 @@ src/
   state/actions.rs    command dispatch (menus, shortcuts, keymap actions)
   state/{tabs,files,find,modal,workspace}.rs  document lifecycle and dialogs
   state/{terminal,git,lsp,search}.rs  native services and workers
+  state/godot.rs      base-class chain + INHERITED / SIGNALS panel state
   state/tooling.rs    missing-tool prompt state, LSP on/off entry point
   state/dock.rs       dock/panel table, open state, tab commands, badges
   state/{settings,view,reliability,services,new_file,quick_open}.rs

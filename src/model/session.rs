@@ -45,8 +45,10 @@ pub struct Session {
     pub active_tab: Option<PathBuf>,
     /// Editor font size.
     pub font: f32,
-    /// Tab width in spaces.
+    /// Indent width in columns (spaces per level, width of a tab).
     pub tab: usize,
+    /// Indent new code with tabs instead of spaces.
+    pub indent_tabs: bool,
     pub line_numbers: bool,
     pub indent_guides: bool,
     pub syntax: bool,
@@ -104,6 +106,7 @@ impl Default for Session {
             active_tab: None,
             font: 13.0,
             tab: 4,
+            indent_tabs: false,
             line_numbers: true,
             indent_guides: true,
             syntax: true,
@@ -168,6 +171,7 @@ impl Session {
                 "active" => session.active_tab = Some(PathBuf::from(value)),
                 "font" => session.font = value.parse().unwrap_or(session.font),
                 "tab" => session.tab = value.parse().unwrap_or(session.tab),
+                "indent_tabs" => session.indent_tabs = value == "1",
                 "gutter" | "line_numbers" => session.line_numbers = value == "1",
                 "guides" | "indent_guides" => session.indent_guides = value == "1",
                 "highlight" | "syntax" => session.syntax = value == "1",
@@ -266,6 +270,7 @@ impl Session {
         }
         out.push_str(&format!("font={}\n", self.font));
         out.push_str(&format!("tab={}\n", self.tab));
+        out.push_str(&format!("indent_tabs={}\n", u8::from(self.indent_tabs)));
         out.push_str(&format!("gutter={}\n", u8::from(self.line_numbers)));
         out.push_str(&format!("guides={}\n", u8::from(self.indent_guides)));
         out.push_str(&format!("syntax={}\n", u8::from(self.syntax)));
@@ -451,6 +456,7 @@ mod tests {
             active_tab: Some(PathBuf::from("/tmp/a=b.rs")),
             font: 15.0,
             tab: 2,
+            indent_tabs: true,
             line_numbers: false,
             indent_guides: false,
             syntax: false,
