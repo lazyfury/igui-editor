@@ -215,8 +215,10 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    revision, width, font and tab width. The editor paints/hit-tests/scrolls by
    visual row, while the document stays line/column based (status Ln/Col stays
    logical). Gutter labels and current-line fill follow the row spans; horizontal
-   scroll is suppressed; wrap turns off above 2 MB / 20k lines. Wrapping is at
-   character boundaries, not words.
+   scroll is suppressed; wrap turns off above 2 MB / 20k lines. Wrapping
+   prefers whitespace boundaries (trailing separators stay on the previous
+   row), keeps leading indentation with the first word and falls back to
+   character boundaries for a token wider than the viewport.
 
 30. **The macOS bridge is a request queue, not a second app.** Native callbacks
    (Finder, Dock, quit) push `NativeRequest` values and wake the window; the
@@ -408,8 +410,8 @@ terminal sessions, selection/copy, scrollback.
 
 Next candidates: terminal multiple sessions/selection/scrollback, Git
 discard/branch/network operations, native close-guard/Dock-reopen polish,
-cross-file undo, incremental preview layout for very large documents,
-word-boundary wrapping and grapheme-aware editing.
+cross-file undo, incremental preview layout for very large documents and
+grapheme-aware editing.
 
 ## Non-goals for the editor core
 

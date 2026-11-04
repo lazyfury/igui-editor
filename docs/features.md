@@ -433,11 +433,13 @@ undoable batch (one undo step, one line-index rebuild).
 
 Off by default and persisted in the session. Long logical lines are split into
 display rows inside the editor; only the editor changes — preview and split
-layout are untouched. The status-bar `Ln/Col` stays logical, `↑`/`↓` and clicks
-use visual rows, and the gutter numbers only appear on a line's first row.
-Horizontal scrolling is suppressed while wrapped. Soft wrap is disabled above
-2 MB / 20k lines (the toggle reports why). The last horizontal scroll offset is
-restored when wrap is turned off.
+layout are untouched. Rows prefer whitespace boundaries, keep trailing
+separators on the previous row and preserve leading indentation; a token wider
+than the viewport falls back to character boundaries. The status-bar `Ln/Col`
+stays logical, `↑`/`↓` and clicks use visual rows, and the gutter numbers only
+appear on a line's first row. Horizontal scrolling is suppressed while wrapped.
+Soft wrap is disabled above 2 MB / 20k lines (the toggle reports why). The last
+horizontal scroll offset is restored when wrap is turned off.
 
 ## External file changes
 

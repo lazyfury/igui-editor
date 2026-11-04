@@ -145,28 +145,64 @@ impl WrapLayout {
             let mut col = 0;
             let mut byte = 0;
             let mut used = 0.0_f32;
+            let mut has_content = false;
+            // (end column, end byte, width after the break) for the last
+            // whitespace seen after actual content. Breaking there keeps words
+            // intact instead of cutting them at the viewport edge.
+            let mut last_break: Option<(usize, usize, f32)> = None;
+
             for ch in text.chars() {
                 let advance = if ch == '\t' {
                     fonts::advance(measurer, ' ', font, family) * tab as f32
                 } else {
                     fonts::advance(measurer, ch, font, family)
                 };
+                let whitespace = ch.is_whitespace();
+                let len = ch.len_utf8();
                 if col > start_col && used + advance > width {
+                    let (break_col, break_byte, break_used) = if whitespace {
+                        // Keep the trailing space in the previous row: a row
+                        // starting with the separator would waste a line.
+                        (col + 1, byte + len, used + advance)
+                    } else if let Some(breakpoint) = last_break {
+                        breakpoint
+                    } else {
+                        // A single token wider than the viewport: fall back to
+                        // a character boundary.
+                        (col, byte, used)
+                    };
                     rows.push(Row {
                         line,
                         start_col,
-                        end_col: col,
+                        end_col: break_col,
                         start_byte,
-                        end_byte: byte,
+                        end_byte: break_byte,
                         first: start_col == 0,
                     });
-                    start_col = col;
-                    start_byte = byte;
-                    used = 0.0;
+                    let carried = used - break_used;
+                    start_col = break_col;
+                    start_byte = break_byte;
+                    used = carried;
+                    has_content = carried > 0.0;
+                    last_break = None;
+                    if whitespace && break_col == col + 1 {
+                        // The overflowing whitespace belongs to the row we
+                        // just emitted, so do not process it again.
+                        col += 1;
+                        byte += len;
+                        continue;
+                    }
                 }
                 used += advance;
                 col += 1;
-                byte += ch.len_utf8();
+                byte += len;
+                if whitespace {
+                    if has_content && used <= width {
+                        last_break = Some((col, byte, used));
+                    }
+                } else {
+                    has_content = true;
+                }
             }
             rows.push(Row {
                 line,
@@ -254,6 +290,19 @@ mod tests {
 
     use super::*;
 
+    /// Every character is exactly 10 px wide, so wrap widths are predictable.
+    struct Fixed;
+
+    impl TextMeasurer for Fixed {
+        fn advance(&self, _ch: char, _font_size: f32) -> f32 {
+            10.0
+        }
+
+        fn line_height(&self, _font_size: f32) -> f32 {
+            20.0
+        }
+    }
+
     fn doc(text: &str) -> Document {
         let dir: PathBuf = std::env::temp_dir().join(format!(
             "igui-editor-wrap-{}-{}",
@@ -267,6 +316,41 @@ mod tests {
         let doc = Document::open(1, &path).unwrap();
         let _ = fs::remove_dir_all(dir);
         doc
+    }
+
+    #[test]
+    fn wraps_at_spaces_without_starting_a_row_with_a_separator() {
+        let doc = doc("alpha beta gamma");
+        let wrap = WrapLayout::build(&doc, 50.0, 13.0, 4, None, &Fixed);
+        let rows = wrap.rows();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(&doc.text()[rows[0].start_byte..rows[0].end_byte], "alpha ");
+        assert_eq!(&doc.text()[rows[1].start_byte..rows[1].end_byte], "beta ");
+        assert_eq!(&doc.text()[rows[2].start_byte..rows[2].end_byte], "gamma");
+        assert!(rows[1].start_col > 0);
+    }
+
+    #[test]
+    fn long_words_fall_back_to_character_boundaries() {
+        let doc = doc("abcdefghij");
+        let wrap = WrapLayout::build(&doc, 50.0, 13.0, 4, None, &Fixed);
+        let rows = wrap.rows();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(&doc.text()[rows[0].start_byte..rows[0].end_byte], "abcde");
+        assert_eq!(&doc.text()[rows[1].start_byte..rows[1].end_byte], "fghij");
+    }
+
+    #[test]
+    fn leading_indentation_stays_with_the_first_word() {
+        let doc = doc("    alpha beta");
+        let wrap = WrapLayout::build(&doc, 100.0, 13.0, 4, None, &Fixed);
+        let rows = wrap.rows();
+        assert!(rows[0].start_col == 0);
+        assert_eq!(
+            &doc.text()[rows[0].start_byte..rows[0].end_byte],
+            "    alpha "
+        );
+        assert_eq!(&doc.text()[rows[1].start_byte..rows[1].end_byte], "beta");
     }
 
     #[test]

@@ -124,6 +124,23 @@ Acceptance:
   backspace, undo and redo.
 - The editor/self-check pipeline remains green.
 
+### Task 2: word-boundary soft wrap (done)
+
+- [x] Break at the last whitespace after real content; keep the separator on
+      the previous row so the next row starts with a word.
+- [x] Preserve leading indentation and fall back to character boundaries for
+      unbreakable long tokens.
+- [x] Tests: word wrapping, long-token fallback, indentation, visual row
+      mapping.
+- [x] `scripts/check.sh` passes with 237 unit tests + 2 doc tests.
+
+Acceptance:
+
+- A wrapped line does not start with a separator unless the logical line itself
+  starts with whitespace.
+- Long unbreakable tokens still split instead of overflowing.
+- Caret/click visual row mapping remains consistent.
+
 ## Deferred to the next feature slice
 
 These are intentionally not part of this plan's implementation phases:
@@ -133,7 +150,7 @@ These are intentionally not part of this plan's implementation phases:
 - Workspace Trust / repo-local language-server confirmation.
 - CI workflow with a pinned sibling `igui` checkout.
 - Incremental line index and incremental Markdown preview layout.
-- Word-boundary soft wrap and grapheme-aware caret movement.
+- Grapheme-aware caret movement.
 
 ## Progress log
 
@@ -147,6 +164,7 @@ These are intentionally not part of this plan's implementation phases:
 | Session 1 | 5 UI/URL | done | Sidebar row cache, URL scheme allowlist, Windows non-shell opener. |
 | Session 1 | 6 docs | done | Docs updated; final `scripts/check.sh` passed with 232 unit tests + 2 doc tests. |
 | Session 2 | Follow-up 1 | done | Incremental line index; 234 unit tests; typing bench 1.41 → 1.04 ms/frame. |
+| Session 2 | Follow-up 2 | done | Word-boundary soft wrap; 237 unit tests; selfcheck green. |
 
 ## Final acceptance checklist
 

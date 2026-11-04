@@ -46,7 +46,7 @@ sidebar rows are cached and external URLs are scheme-restricted.
 Next candidates: window-close guard + Dock reopen, terminal multiple
 sessions/selection/scrollback, workspace trust for repo-local language servers,
 CI with a pinned sibling `igui` checkout, cross-file undo, incremental preview
-layout for very large documents, and word-boundary/grapheme-aware editing.
+layout for very large documents and grapheme-aware editing.
 
 Notes:
 
@@ -64,8 +64,9 @@ Notes:
 - Quick Open builds its index when opened (no filesystem watcher), so files
   created while it is closed appear on the next open. Open files are polled for
   external changes, but the sidebar/search index is not automatically refreshed.
-- Soft wrap breaks at character boundaries, not words, and uses a full-layout
-  cache; it is intentionally disabled for very large files.
+- Soft wrap prefers word boundaries and falls back to character boundaries for
+  long tokens; it uses a full-layout cache and is intentionally disabled for
+  very large files.
 
 Known engine limitation: `igui_core::Key` has no `PageUp` / `PageDown`, so page
 scrolling is not bound yet (`Document::page` is implemented and tested, waiting
