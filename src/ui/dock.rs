@@ -22,9 +22,9 @@ use crate::ui::icon;
 /// Height of every dock header (and therefore of the tab strip).
 pub const HEADER_H: f32 = 28.0;
 /// Left/right padding inside a tab.
-const TAB_PAD: f32 = 8.0;
+pub(crate) const TAB_PAD: f32 = 8.0;
 /// Gap between a tab's icon and its label.
-const ICON_GAP: f32 = 5.0;
+pub(crate) const ICON_GAP: f32 = 5.0;
 /// Gap between a tab's label and its badge.
 const BADGE_GAP: f32 = 6.0;
 /// Width of the header's close-button hit target.

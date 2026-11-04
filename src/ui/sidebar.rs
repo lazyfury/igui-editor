@@ -253,13 +253,8 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                 expanded: row.expanded,
             }
         } else {
-            let active = state
-                .ws
-                .active_doc()
-                .and_then(|doc| doc.path())
-                .is_some_and(|path| path == row.path);
-            crate::ui::tree::Marker::Dot {
-                color: if active { p.accent } else { p.faint },
+            crate::ui::tree::Marker::File {
+                kind: crate::model::fileicon::kind_for(&row.path),
             }
         };
         let git = if row.is_dir {

@@ -7,6 +7,7 @@ pub mod bbcode;
 pub mod brackets;
 pub mod doc;
 pub mod docs;
+pub mod fileicon;
 pub mod find;
 pub mod fs_tree;
 pub(crate) mod fsutil;

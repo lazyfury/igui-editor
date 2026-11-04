@@ -170,6 +170,75 @@ impl Drop for EnvGuard {
     }
 }
 
+/// Explorer file-type icons: every file row paints Material-icon-theme artwork
+/// in the sidebar, so the Markdown brand fill (and a run of fill spans) must
+/// appear inside the sidebar rectangle.
+fn check_file_type_icons(harness: &Harness, frame: &RecordedFrame) -> Result<(), String> {
+    let sidebar = harness.app.state().sidebar.rect;
+    let markdown = igui_core::Color::from_rgba8(0x42, 0xa5, 0xf5, 0xff).to_rgba8();
+    let mut spans = 0usize;
+    let mut brand = false;
+    for command in frame.commands() {
+        let DrawCommand::FillRect { rect, paint } = command else {
+            continue;
+        };
+        if !sidebar.contains(rect.center()) {
+            continue;
+        }
+        spans += 1;
+        brand |= paint.color.to_rgba8() == markdown;
+    }
+    if !brand {
+        return Err("the Explorer did not paint the Markdown file-type icon".into());
+    }
+    if spans < 20 {
+        return Err(format!(
+            "the Explorer file-type icons painted only {spans} fill spans"
+        ));
+    }
+
+    // Depth-0 markers share the EXPLORER tab's icon column.
+    let (tab_icon_center, row_center, rust) = {
+        let state = harness.app.state();
+        let tab = state.dock_hits[crate::state::DockId::Left.index()]
+            .iter()
+            .find(|(panel, _)| *panel == Panel::Explorer)
+            .map(|(_, rect)| *rect)
+            .ok_or("the EXPLORER tab recorded no hit rect")?;
+        let rows = state.ws.tree.rows();
+        let index = rows
+            .iter()
+            .position(|row| row.name == "main.rs" && row.depth == 0)
+            .ok_or("main.rs is not a depth-0 sidebar row")?;
+        let row_h = state.theme.m.row_h;
+        (
+            tab.left() + crate::ui::dock::TAB_PAD + crate::ui::icon::SMALL * 0.5,
+            state.sidebar.rect.top() + index as f32 * row_h + row_h * 0.5,
+            igui_core::Color::from_rgba8(0xff, 0x70, 0x43, 0xff).to_rgba8(),
+        )
+    };
+    let (mut icon_left, mut icon_right) = (f32::MAX, f32::MIN);
+    for command in frame.commands() {
+        let DrawCommand::FillRect { rect, paint } = command else {
+            continue;
+        };
+        if paint.color.to_rgba8() == rust && (rect.center().y - row_center).abs() <= 12.0 {
+            icon_left = icon_left.min(rect.left());
+            icon_right = icon_right.max(rect.right());
+        }
+    }
+    if icon_left > icon_right {
+        return Err("the Rust file-type icon was not painted in its row".into());
+    }
+    let icon_center = (icon_left + icon_right) * 0.5;
+    if (icon_center - tab_icon_center).abs() > 0.75 {
+        return Err(format!(
+            "file-type icons are off the EXPLORER icon column (icon {icon_center}, tab {tab_icon_center})"
+        ));
+    }
+    Ok(())
+}
+
 /// Header panel group: one recorded hit per panel, icon strokes in the header
 /// band, and a click toggles the dock without starting a window drag.
 fn check_header_panels(harness: &mut Harness, frame: &RecordedFrame) -> Result<(), String> {
@@ -536,6 +605,7 @@ fn check(dir: &Path) -> Result<(), String> {
     expect(&painted, "main.rs", "active tab / status file")?;
     expect(&painted, "EXPLORER", "sidebar header")?;
     expect(&painted, "notes.md", "sidebar rows")?;
+    check_file_type_icons(&harness, &frame)?;
     check_header_panels(&mut harness, &frame)?;
     check_footer_controls(&mut harness, &frame)?;
     if !frame

@@ -303,7 +303,12 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    network, build step or texture atlas. The engine's `igui_svg` crate parses the
    subset into flattened polylines and strokes them (round caps/joins included);
    `ui::icon` only caches the parsed documents and paints them in the active
-   palette color, so icons stay crisp at any DPI. `state::dock` is the single
+   palette color, so icons stay crisp at any DPI. Explorer rows use the Material
+   Icon Theme artwork (`assets/icons/material`, MIT) instead: those files are
+   filled silhouettes, so `ui::fileicon` feeds them through the same parser as a
+   flattener and rasterizes each fill into horizontal `FillRect` spans (four
+   sub-rows per pixel, exact x edges) with the artwork's own colors — still no
+   texture, parser or dependency of our own. `state::dock` is the single
    table for docked panels: dock, icon, label, command, open state and badge.
    The header's right side lays those panels out with Git first, then the left,
    right and bottom dock toggles, with the project name beside them and
