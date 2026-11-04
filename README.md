@@ -49,10 +49,14 @@ Start here; load only the document you need.
 - Rust **1.85+** with Cargo.
 - A sibling [`igui`](https://github.com/lazyfury/igui) checkout, because
   `Cargo.toml` uses `../igui/...` path dependencies.
-- `rust-analyzer` for Rust LSP features (optional; install with
-  `rustup component add rust-analyzer`).
-- Godot 4 for GDScript LSP (optional; `IGUI_EDITOR_GODOT` overrides the default
-  macOS path; a `project.godot` marks the root).
+- Language servers are optional and installed separately; the editor shows a
+  copyable install command when one is missing:
+  `rust-analyzer` (`rustup component add rust-analyzer`), `gopls`
+  (`go install golang.org/x/tools/gopls@latest`),
+  `typescript-language-server` + `typescript` (`npm install -g …`), `clangd`
+  (`brew install llvm` or the Xcode toolchain), `pyright`
+  (`npm install -g pyright`), and Godot 4 for GDScript
+  (`IGUI_EDITOR_GODOT` overrides the default macOS path).
 - macOS is the primary, manually tested platform. Linux/Windows host paths are
   compiled but not release-tested here.
 
@@ -136,9 +140,9 @@ reproduce them.
   search and replace-in-files with confirmation and conflict checks.
 - **Markdown** — edit/split/preview-only per document; headings, inline styles,
   nested lists/quotes, code blocks, tables with alignment, scroll sync.
-- **Language** — Rust/C/C++/JS/TS/Go/GDScript/JSON/TOML/Markdown highlighting,
-  data-only JSON language packs, Rust `rust-analyzer` and Godot GDScript LSP
-  (diagnostics, hover, completion, definition, symbols).
+- **Language** — Rust/C/C++/JS/TS/Go/GDScript/Python/JSON/TOML/Markdown
+  highlighting, data-only JSON language packs, and LSP for Rust/Go/TS/JS/C/C++/
+  Python/GDScript (diagnostics, hover, completion, definition, symbols).
 - **Navigation** — file tree, Quick Open, outline, tab drag/reorder and context
   menu, project search.
 - **Native** — Git panel (status/diff/stage/commit), PTY terminal, native macOS

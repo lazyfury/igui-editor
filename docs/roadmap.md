@@ -34,6 +34,10 @@ Delivered (M12): generic LSP stdio/TCP client + Rust `rust-analyzer` and Godot
 GDScript plugins (diagnostics, hover, completion, definition and symbols), plus
 data-only language-pack language-server specs.
 
+Delivered (M13): Go/TypeScript/C-C++/Python language servers with monorepo root
+selection, a shared copy-only tooling prompt, and LSP start/stop in the footer
+and settings.
+
 Next candidates: native macOS top menu bar (Window/Services/Help), window-close
 guard + Dock reopen, code-plugin loading (dylib/wasm), per-hit replace and
 cross-file undo, incremental preview layout for very large documents, and

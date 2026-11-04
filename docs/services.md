@@ -1,8 +1,8 @@
 # Native services and built-in plugins
 
 Status: Git status/diff/stage/unstage/commit, the first native PTY terminal slice,
-Rust LSP (rust-analyzer), and Godot GDScript LSP (TCP) are implemented. Extension
-host remains deferred.
+and LSP for Rust, Go, TypeScript/JavaScript, C/C++, Python and Godot GDScript are
+implemented. Extension host remains deferred.
 
 ## Intent
 
@@ -102,26 +102,60 @@ same service.
 2. Terminal service + panel.
 3. Extension host (deferred): JSON-RPC/WASM mapping of the same capabilities.
 
-## LSP service (Rust + Godot)
+## LSP service (Rust, Go, TS/JS, C/C++, Python, Godot)
 
-Status: Rust (`rust-analyzer`) and Godot GDScript diagnostics, hover, completion,
-definition and document symbols are implemented. The client is language-agnostic;
-the built-in plugins register declarative `LanguageServerSpec` values.
+Status: diagnostics, hover, completion, definition, document symbols and
+semantic tokens are implemented for every built-in spec. The client is
+language-agnostic; each plugin registers a declarative `LanguageServerSpec`.
 
 ```text
 PluginHost
  └─ language_server(LanguageServerSpec)
-       id, language, extensions, project_markers,
-       command / command_env, args, transport, port_arg
+       id, language, extensions, language_ids,
+       project_markers, workspace_markers, loose_files,
+       command / command_env, args, transport, port_arg, install
 ```
 
-- **Process**: one JSON-RPC child per project root, lazily started when an owned
-  file is active and a `project_markers` file exists (`Cargo.toml` for Rust,
-  `project.godot` for Godot). Rust uses the child's stdio. Godot is launched
-  headless with a fresh loopback port, then the client connects over TCP (the
-  connection is established on a background thread, so startup never blocks a
-  frame). Frames are read/written on threads; `stderr` is discarded.
-- **Sync**: full-text `didOpen` / `didChange` / `didClose`; edits are debounced
+### Built-in servers
+
+| Spec | Command (`IGUI_EDITOR_*`) | Transport | Project markers | Workspace markers |
+|---|---|---|---|---|
+| `rust` | `rust-analyzer` (`…_RUST_ANALYZER`) | stdio | `Cargo.toml` | `Cargo.lock`, `rust-toolchain.toml` |
+| `go` | `gopls` (`…_GOPLS`) | stdio | `go.mod` | `go.work` |
+| `typescript` | `typescript-language-server --stdio` (`…_TS_SERVER`) | stdio | `package.json`, `tsconfig.json`, `jsconfig.json` | `pnpm-workspace.yaml`, `lerna.json`, `nx.json`, `turbo.json`, `rush.json`, `tsconfig.base.json` |
+| `clangd` | `clangd` (`…_CLANGD`) | stdio | `compile_commands.json`, `CMakeLists.txt`, `.clangd`, `.git` | `.clangd`, `.git` |
+| `python` | `pyright-langserver --stdio` (`…_PYRIGHT`) | stdio | `pyproject.toml`, `setup.py`, `setup.cfg`, `requirements.txt`, `.git` | `pyrightconfig.json` |
+| `gdscript` | Godot editor (`…_GODOT`) | TCP | `project.godot` | — |
+
+- `language_ids` maps extensions to LSP `languageId`: `.tsx → typescriptreact`,
+  `.jsx → javascriptreact`, `.h → c`, `.hpp → cpp`, everything else falls back
+  to `language`. `didOpen` uses the per-file value.
+- `loose_files` lets a server start outside a project (TypeScript, clangd,
+  Python); Rust/Go/Godot keep the old “project required” rule.
+- **Root choice**: the outermost workspace marker wins, then the nearest project
+  marker, then (loose-file specs) the open folder or the file's folder. Markers
+  are searched above the open folder as well, so opening one file inside a
+  monorepo still finds `go.work`/`pnpm-workspace.yaml`. Roots are cached per
+  `(spec, file)` and invalidated when the file is activated or the folder
+  changes; `node_modules/.bin`, `~/go/bin`, pnpm/npm global bins, Homebrew LLVM
+  and the Xcode toolchain are searched for commands.
+- **Sessions**: one JSON-RPC child per `(spec, project root)`. Up to four live
+  sessions are kept (LRU, 10 idle minutes), and every open document is synced to
+  the session that owns its root. Switching tabs between languages reuses the
+  child instead of restarting it; diagnostics/semantic tokens/symbols are keyed
+  by path, so background tabs keep their state.
+- **Enable/disable**: `Settings::lsp` (settings row **Language Intelligence** and
+  the footer `LSP` dot) stops every child and clears transient state; re-enabling
+  starts the active project lazily. Persisted in the session (format v12).
+- **Missing tools**: a spawn error with `ErrorKind::NotFound` opens the shared
+  tooling prompt (`state/tooling.rs` + `ui/tooling.rs`) with the spec's
+  `ToolInstall` hint. It offers **COPY COMMAND**, **RETRY** and **CLOSE** only —
+  the editor never installs or executes the hint. The same prompt is generic and
+  reusable by future native services.
+- **Process**: shell-free `Command` with argument vectors; `stderr` discarded;
+  `PATH` augmented for Finder launches. Godot is launched headless with a fresh
+  loopback port and the client connects on a background thread.
+- **Sync**: full-text `didOpen`/`didChange`/`didClose`; edits are debounced
   (140 ms) and use LSP UTF-16 positions.
 - **Server requests**: `workspace/configuration`, `workspace/workspaceFolders`,
   `client/registerCapability` and progress requests are answered defensively so
@@ -148,12 +182,6 @@ PluginHost
   server-aware variable/parameter/field/type colors. Document symbols feed the
   right outline panel. Hover and completion are transient overlays. Nothing is
   persisted.
-- **Rust spec**: command `rust-analyzer`, overridable with
-  `IGUI_EDITOR_RUST_ANALYZER`; stdio transport; arguments are passed directly,
-  never through a shell.
-- **Godot spec**: command `/Applications/Godot.app/Contents/MacOS/Godot` on
-  macOS (or `godot` elsewhere), overridable with `IGUI_EDITOR_GODOT`; TCP
-  transport with `--lsp-port <dynamic>`; the process is killed with the client.
 
 Capabilities:
 
@@ -176,8 +204,16 @@ lsp.symbols
   "language": "lua",
   "extensions": ["lua"],
   "project_markers": ["stylua.toml"],
+  "workspace_markers": [],
+  "language_ids": {},
+  "loose_files": false,
   "command": "lua-language-server",
-  "args": ["--stdio"]
+  "args": ["--stdio"],
+  "install": {
+    "tool": "lua-language-server",
+    "language": "Lua",
+    "command": "brew install lua-language-server"
+  }
 }
 ```
 

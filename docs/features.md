@@ -34,20 +34,47 @@ state machine for the common motions and operators. See
 ## Language intelligence (LSP)
 
 The editor talks to language servers over native JSON-RPC — no WebView, no JS
-bridge. Two built-in servers are registered:
+bridge. Six built-in servers are registered:
 
-- **Rust** — opening a `.rs` file inside a directory with a `Cargo.toml` lazily
-  starts `rust-analyzer` from `PATH` (or the path in
-  `IGUI_EDITOR_RUST_ANALYZER`) over stdio.
-- **Godot GDScript** — opening a `.gd` file inside a directory with a
-  `project.godot` lazily starts the Godot editor's GDScript language server
-  over loopback TCP. On macOS the default executable is
+- **Rust** — `rust-analyzer` over stdio, rooted at the nearest `Cargo.toml`
+  (workspace root when `Cargo.lock`/`rust-toolchain.toml` exists).
+- **Go** — `gopls` over stdio, rooted at `go.work` or the nearest `go.mod`.
+- **TypeScript / JavaScript** — `typescript-language-server --stdio`, rooted at
+  a workspace marker (`pnpm-workspace.yaml`, `lerna.json`, `nx.json`, …) or the
+  nearest `package.json`/`tsconfig.json`; `.tsx`/`.jsx` are sent as
+  `typescriptreact`/`javascriptreact`.
+- **C / C++** — `clangd` over stdio, rooted at `compile_commands.json` /
+  `CMakeLists.txt` / `.clangd` / the repository root; `.h` is `c`, other
+  headers and sources are `cpp`.
+- **Python** — `pyright-langserver --stdio`, rooted at `pyrightconfig.json`, a
+  Python project marker or the file's folder (loose files work).
+- **Godot GDScript** — the Godot editor's GDScript server over loopback TCP.
+  On macOS the default executable is
   `/Applications/Godot.app/Contents/MacOS/Godot`; set `IGUI_EDITOR_GODOT` to
   use a different install. Godot runs headless (`--headless --editor --path .`)
   and is stopped when the editor releases the project.
 
-Install the servers separately; there is no server for loose files or
-non-project buffers.
+Each spec declares `IGUI_EDITOR_*` overrides (`IGUI_EDITOR_GOPLS`,
+`IGUI_EDITOR_TS_SERVER`, `IGUI_EDITOR_CLANGD`, `IGUI_EDITOR_PYRIGHT`,
+`IGUI_EDITOR_RUST_ANALYZER`, `IGUI_EDITOR_GODOT`). Servers are installed
+separately; the editor never installs them itself. When an executable is
+missing, a copy-only prompt names the tool and shows the install command
+(e.g. `go install golang.org/x/tools/gopls@latest`) with **COPY COMMAND**,
+**RETRY** and **CLOSE**; nothing is executed automatically.
+
+**Roots and monorepos.** Workspace-level markers win over package markers, so
+`go.work`, `pnpm-workspace.yaml`, `Cargo.lock` and `rust-toolchain.toml` keep a
+repository on one server instead of one per package. Markers are searched above
+the open folder too, so opening a single file inside a monorepo still finds the
+workspace root. Servers without markers fall back to the open folder (or the
+file's folder) only where the spec allows loose files.
+
+**Lifecycle.** One server runs per `(language, project root)`; up to four are
+kept (least-recently-active evicted after 10 idle minutes), so switching tabs
+between Rust, TypeScript and Python does not restart them. The footer `LSP`
+chip has a small on/off dot: stopping kills every child and clears
+diagnostics/semantic tokens/outline. The same switch is the
+**Language Intelligence** settings row, persisted in the session.
 
 - Diagnostics are painted as severity-colored underlines and a full-height
   gutter severity rail. The footer chip is colored by the worst severity and
@@ -102,11 +129,12 @@ non-project buffers.
   LSP UTF-16 columns. Diagnostics/hover/completion are transient UI state and
   are not persisted.
 
-Both servers are declarative [`LanguageServerSpec`](../src/services/mod.rs) values;
-Rust uses stdio and Godot uses TCP. Data-only language packs under
-`<config>/languages/*.json` can contribute one too; the generic client, owned
-spec shape and capability ids are ready for a future external extension host.
-Native plugins are still compile-time (no dylib ABI).
+All servers are declarative [`LanguageServerSpec`](../src/services/mod.rs) values;
+only Godot uses TCP, the rest use stdio. Data-only language packs under
+`<config>/languages/*.json` can contribute one too (including extension →
+language-id maps and an install hint); the generic client, owned spec shape and
+capability ids are ready for a future external extension host. Native plugins
+are still compile-time (no dylib ABI).
 
 ```json
 {
@@ -228,8 +256,8 @@ contents do not. Multiple sessions are a follow-up.
 
 ## Syntax highlighting
 
-Built-in providers: **Rust, C, C++, JavaScript, TypeScript, Go, GDScript, JSON,
-TOML, Markdown**. Highlighting is line based with carried state (block comments,
+Built-in providers: **Rust, C, C++, JavaScript, TypeScript, Go, GDScript,
+Python, JSON, TOML, Markdown**. Highlighting is line based with carried state (block comments,
 raw/template strings, fences), so multi-line constructs color correctly. The
 cache re-tokenizes from the first edited line and stops when the carried state
 converges, budgeted per frame.
@@ -322,6 +350,7 @@ setting is persisted in the session. Preview-only and Edit modes ignore it.
 | Keymap | VS Code / JetBrains / Vim |
 | Autosave | on / off |
 | Sidebar Width | 180–420 px |
+| Language Intelligence | on / off (start/stop all language servers) |
 | Reset to Defaults | — |
 
 Changes apply immediately and are stored in the session file. `↑↓` select,

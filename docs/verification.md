@@ -66,7 +66,13 @@ on the existing winit delegate.
 LSP checks: a scripted stdio language server is launched through the real
 client; diagnostics appear under the changed line and in the footer, `F1` paints
 a hover card, `⌘I`/`Ctrl+I` opens a completion list and inserts the selected
-item, and `F12` jumps to the returned definition.
+item, and `F12` jumps to the returned definition. A second scripted server
+checks a `go.work` monorepo: one `initialize`, two `didOpen`s with the `go`
+language id, both modules' diagnostics alive at once, the footer dot stopping
+every child (`LSP OFF`, diagnostics cleared) and the settings row restarting it.
+A missing clangd executable checks the copy-only tooling prompt: install hint,
+painted title/button, COPY confirmation, RETRY re-arming the start, and `Esc`
+dismissal.
 
 M6 checks: tab drag-reorder and the right-click Close menu, soft-wrap layout
 (long-line split, wrapped click / Up / Down, `⌥Z`), clean/dirty external reload

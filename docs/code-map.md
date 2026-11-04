@@ -14,17 +14,21 @@ src/
   keymap.rs           chord parser, profiles, user override resolver
   vim.rs              Normal/Insert/Visual key handling (Vim profile)
   syntax/pack.rs      declarative JSON language packs
-  model/lsp.rs        stdio/TCP JSON-RPC client, diagnostics, hover/completion,
-                      native Godot symbols
+  model/lsp.rs        stdio/TCP JSON-RPC client, per-root sessions, diagnostics,
+                      hover/completion, monorepo root selection, native Godot symbols
   model/bbcode.rs     Godot BBCode -> text spans + clickable references
   model/docs.rs       native symbol -> docs view text + link ranges
   services/lsp.rs     built-in Rust language-server spec (rust-analyzer)
+  services/go.rs      built-in Go language-server spec (gopls)
+  services/typescript.rs  built-in TS/JS language-server spec
+  services/clang.rs   built-in C/C++ language-server spec (clangd)
+  services/python.rs  built-in Python language-server spec (pyright)
   services/godot.rs   built-in Godot GDScript language-server spec (TCP)
   model/recovery.rs   crash snapshots (txt + metadata)
   model/replace.rs    replace-in-files planning/apply (conflict + open skip)
   model/fs_tree.rs    lazy sidebar tree (dirs first, hidden entries skipped)
   model/markdown.rs   Markdown event stream -> flat block model
-  model/session.rs    key=value session file (atomic write, escaping, v10)
+  model/session.rs    key=value session file (atomic write, escaping, v12)
   model/workspace.rs  tabs + file IO (open/save/move/close folder)
   model/wrap.rs       soft-wrap display rows + visual row/column mapping
   dialogs.rs          `Dialogs` trait + scripted test double
@@ -35,6 +39,7 @@ src/
   ui/git.rs           GIT sidebar tab + diff overlay + commit prompt
   ui/lsp.rs           hover card + completion list overlays
   ui/problems.rs      severity-colored PROBLEMS popup and diagnostic hover
+  ui/tooling.rs       missing-tool prompt (copy-only install command)
   ui/docs_view.rs     dedicated read-only docs tab view (wrap + link hit-test)
   ui/outline.rs       right document-symbol outline
   ui/tree.rs          shared Explorer/outline tree row renderer
@@ -46,6 +51,7 @@ src/
   state/actions.rs    command dispatch (menus, shortcuts, keymap actions)
   state/{tabs,files,find,modal,workspace}.rs  document lifecycle and dialogs
   state/{terminal,git,lsp,search}.rs  native services and workers
+  state/tooling.rs    missing-tool prompt state, LSP on/off entry point
   state/{settings,view,reliability,services,new_file,quick_open}.rs
                       settings, layout, autosave/recovery and prompt state
   state/schedule.rs   time-based wakeup deadlines (status/hover/autosave/poll)
