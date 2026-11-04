@@ -145,7 +145,11 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         "no matches".to_string()
     } else {
         let current = state.find.current.map_or(0, |index| index + 1);
-        format!("{current} / {}", state.find.matches.len())
+        if state.find.truncated {
+            format!("{current} / {}+", state.find.matches.len())
+        } else {
+            format!("{current} / {}", state.find.matches.len())
+        }
     };
     let count_x = word_rect.right() + 10.0;
     kit::text(

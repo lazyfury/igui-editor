@@ -8,6 +8,10 @@
 //! Pure logic: no UI, no document ownership — callers pass `&str` and get byte
 //! ranges back.
 
+/// Matches retained by a single find pass. The UI reports truncation instead
+/// of freezing or exhausting memory on a pathological query.
+pub const MAX_MATCHES: usize = 10_000;
+
 /// One search configuration.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Matcher {
@@ -16,22 +20,39 @@ pub struct Matcher {
     pub whole_word: bool,
 }
 
-/// All matches of `matcher.query` in `text`, as byte ranges.
+/// All matches of `matcher.query` in `text`, capped at [`MAX_MATCHES`].
 pub fn find_all(text: &str, matcher: &Matcher) -> Vec<(usize, usize)> {
+    find_all_capped(text, matcher).0
+}
+
+/// All matches plus whether the cap was reached.
+///
+/// The scan keeps only two boundary iterators, so a large document no longer
+/// allocates a `usize` per character just to find matches.
+pub fn find_all_capped(text: &str, matcher: &Matcher) -> (Vec<(usize, usize)>, bool) {
     if matcher.query.is_empty() || text.is_empty() {
-        return Vec::new();
+        return (Vec::new(), false);
     }
     let query_chars = matcher.query.chars().count();
-    // Character boundaries, so a match never splits a UTF-8 sequence.
-    let mut boundaries: Vec<usize> = text.char_indices().map(|(index, _)| index).collect();
-    boundaries.push(text.len());
+    let boundaries = || {
+        text.char_indices()
+            .map(|(index, _)| index)
+            .chain(std::iter::once(text.len()))
+    };
+    let starts = boundaries();
+    let mut ends = boundaries();
+    for _ in 0..query_chars {
+        if ends.next().is_none() {
+            return (Vec::new(), false);
+        }
+    }
 
     let mut matches = Vec::new();
-    for (index, &start) in boundaries.iter().enumerate() {
+    for start in starts {
         if start == text.len() {
             break;
         }
-        let Some(&end) = boundaries.get(index + query_chars) else {
+        let Some(end) = ends.next() else {
             break;
         };
         let candidate = &text[start..end];
@@ -45,9 +66,12 @@ pub fn find_all(text: &str, matcher: &Matcher) -> Vec<(usize, usize)> {
                 continue;
             }
         }
+        if matches.len() >= MAX_MATCHES {
+            return (matches, true);
+        }
         matches.push((start, end));
     }
-    matches
+    (matches, false)
 }
 
 fn eq_ignore_case(a: &str, b: &str, case_sensitive: bool) -> bool {
@@ -130,6 +154,22 @@ mod tests {
         assert_eq!(matches.len(), 1);
         let (start, end) = matches[0];
         assert_eq!(&text[start..end], "世界");
+    }
+
+    #[test]
+    fn caps_pathological_matches() {
+        let text = "a".repeat(MAX_MATCHES + 5);
+        let (matches, truncated) = find_all_capped(&text, &matcher("a"));
+        assert_eq!(matches.len(), MAX_MATCHES);
+        assert!(truncated);
+    }
+
+    #[test]
+    fn exact_cap_is_not_reported_as_truncated() {
+        let text = "a".repeat(MAX_MATCHES);
+        let (matches, truncated) = find_all_capped(&text, &matcher("a"));
+        assert_eq!(matches.len(), MAX_MATCHES);
+        assert!(!truncated);
     }
 
     #[test]

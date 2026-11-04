@@ -8,6 +8,32 @@ impl AppState {
     /// Runs `action` and reports the outcome in the status bar.
     pub fn run(&mut self, action: Action) {
         self.tab_menu = None;
+        // Clipboard and history belong to the focused surface. This keeps
+        // Cmd/Ctrl+C/V/A/Z from silently editing the document while the
+        // terminal owns input.
+        if self.focus == Focus::Terminal {
+            match &action {
+                Action::Paste => {
+                    match self.get_clipboard() {
+                        Some(text) => {
+                            self.terminal_write(text.as_bytes());
+                            self.status("pasted into terminal");
+                        }
+                        None => self.error("clipboard is empty"),
+                    }
+                    return;
+                }
+                Action::Cut | Action::Copy | Action::SelectAll => {
+                    self.status("terminal selection is not implemented");
+                    return;
+                }
+                Action::Undo | Action::Redo => {
+                    self.status("undo/redo is editor-only while the terminal has focus");
+                    return;
+                }
+                _ => {}
+            }
+        }
         if self.ws.active_doc().is_some_and(|doc| doc.is_read_only())
             && matches!(
                 action,
@@ -178,6 +204,34 @@ impl AppState {
                 }
                 self.find.dirty = true;
             }
+            Action::MoveLineStart(select) => {
+                if let Some(doc) = self.ws.active_doc_mut() {
+                    doc.move_home(select);
+                }
+                self.editor.reveal = true;
+                self.find.dirty = true;
+            }
+            Action::MoveLineEnd(select) => {
+                if let Some(doc) = self.ws.active_doc_mut() {
+                    doc.move_end(select);
+                }
+                self.editor.reveal = true;
+                self.find.dirty = true;
+            }
+            Action::MoveDocStart(select) => {
+                if let Some(doc) = self.ws.active_doc_mut() {
+                    doc.move_doc_start(select);
+                }
+                self.editor.reveal = true;
+                self.find.dirty = true;
+            }
+            Action::MoveDocEnd(select) => {
+                if let Some(doc) = self.ws.active_doc_mut() {
+                    doc.move_doc_end(select);
+                }
+                self.editor.reveal = true;
+                self.find.dirty = true;
+            }
             Action::ToggleComment => {
                 if let Some(marker) = self.comment_marker() {
                     if let Some(doc) = self.ws.active_doc_mut() {
@@ -209,6 +263,7 @@ impl AppState {
                 self.config_dirty = true;
                 self.needs_rebuild = true;
             }
+            Action::ShowPanel(panel) => self.toggle_panel(panel),
             Action::ToggleTheme => {
                 self.theme.toggle();
                 self.session.theme = match self.theme.mode {

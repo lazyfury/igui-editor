@@ -13,7 +13,10 @@
 //!   Consecutive single-character typing / backspace / delete coalesce into one
 //!   entry.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
+
+use super::fsutil;
 
 /// Indentation inserted by Tab (and used for auto-indent on Enter).
 pub const INDENT: &str = "    ";
@@ -109,6 +112,56 @@ pub enum ViewKind {
     Docs,
 }
 
+/// Line ending used by the file on disk.
+///
+/// The in-memory buffer is always LF; the original style is restored on save so
+/// editing a CRLF file does not rewrite every line.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum LineEnding {
+    #[default]
+    Lf,
+    Crlf,
+}
+
+impl LineEnding {
+    pub fn detect(text: &str) -> Self {
+        let bytes = text.as_bytes();
+        for (index, byte) in bytes.iter().enumerate() {
+            if *byte == b'\n' {
+                return if index > 0 && bytes[index - 1] == b'\r' {
+                    Self::Crlf
+                } else {
+                    Self::Lf
+                };
+            }
+        }
+        Self::Lf
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Lf => "lf",
+            Self::Crlf => "crlf",
+        }
+    }
+
+    pub fn from_name(value: &str) -> Self {
+        if value.eq_ignore_ascii_case("crlf") {
+            Self::Crlf
+        } else {
+            Self::Lf
+        }
+    }
+
+    fn render(self, text: &str) -> Cow<'_, str> {
+        match self {
+            Self::Lf => Cow::Borrowed(text),
+            Self::Crlf if text.contains('\n') => Cow::Owned(text.replace('\n', "\r\n")),
+            Self::Crlf => Cow::Borrowed(text),
+        }
+    }
+}
+
 /// One open file (or an untitled buffer).
 #[derive(Clone, Debug)]
 pub struct Document {
@@ -123,6 +176,11 @@ pub struct Document {
     /// Byte offset of every line start; `line_count() == line_starts.len()`.
     line_starts: Vec<usize>,
     dirty: bool,
+    /// Undo cursor at the last successful save. `None` means the buffer has
+    /// never been saved (or a recovered snapshot replaced the buffer).
+    saved_cursor: Option<usize>,
+    /// Line ending used when writing the file back to disk.
+    eol: LineEnding,
     /// Bumped by every text mutation (edit / undo / redo); caches keyed by it
     /// (find matches, Markdown layout, highlighting) know when to rebuild.
     rev: u64,
@@ -151,6 +209,8 @@ impl Document {
             anchor: 0,
             line_starts: vec![0],
             dirty: false,
+            saved_cursor: Some(0),
+            eol: LineEnding::Lf,
             rev: 0,
             edit_span: None,
             undo: UndoStack::default(),
@@ -171,6 +231,7 @@ impl Document {
         text: String,
         caret: usize,
         anchor: usize,
+        eol: LineEnding,
     ) -> Self {
         let mut doc = Self {
             id,
@@ -181,6 +242,8 @@ impl Document {
             anchor: 0,
             line_starts: Vec::new(),
             dirty: true,
+            saved_cursor: None,
+            eol,
             rev: 1,
             edit_span: None,
             undo: UndoStack::default(),
@@ -199,11 +262,13 @@ impl Document {
 
     /// Replaces this buffer's content with a recovery snapshot (used when the
     /// same file is already open as a clean tab).
-    pub fn restore_snapshot(&mut self, text: String, caret: usize, anchor: usize) {
+    pub fn restore_snapshot(&mut self, text: String, caret: usize, anchor: usize, eol: LineEnding) {
         self.text = text;
         self.caret = floor_boundary(&self.text, caret);
         self.anchor = floor_boundary(&self.text, anchor);
+        self.eol = eol;
         self.dirty = true;
+        self.saved_cursor = None;
         self.rev += 1;
         self.edit_span = None;
         self.undo = UndoStack::default();
@@ -214,6 +279,7 @@ impl Document {
     pub fn open(id: u64, path: impl Into<PathBuf>) -> std::io::Result<Self> {
         let path = path.into();
         let raw = std::fs::read_to_string(&path)?;
+        let eol = LineEnding::detect(&raw);
         let text = normalize(&raw);
         let name = path
             .file_name()
@@ -228,6 +294,8 @@ impl Document {
             anchor: 0,
             line_starts: Vec::new(),
             dirty: false,
+            saved_cursor: Some(0),
+            eol,
             rev: 0,
             edit_span: None,
             undo: UndoStack::default(),
@@ -323,6 +391,7 @@ impl Document {
         self.caret = 0;
         self.anchor = 0;
         self.dirty = false;
+        self.saved_cursor = Some(0);
         self.rev += 1;
         self.edit_span = None;
         self.undo = UndoStack::default();
@@ -355,6 +424,10 @@ impl Document {
         self.dirty
     }
 
+    pub fn line_ending(&self) -> LineEnding {
+        self.eol
+    }
+
     /// Points the buffer at `path` (Save As) and renames it.
     pub fn set_path(&mut self, path: PathBuf) {
         self.name = path
@@ -373,6 +446,42 @@ impl Document {
         true
     }
 
+    /// Replaces several non-overlapping ranges with the same text as one
+    /// undoable edit. Ranges must be sorted, in bounds and on char boundaries.
+    pub fn replace_ranges(&mut self, ranges: &[(usize, usize)], text: &str) -> usize {
+        if self.read_only || ranges.is_empty() {
+            return 0;
+        }
+        let mut last_end = 0;
+        for &(start, end) in ranges {
+            if start < last_end
+                || start > end
+                || end > self.text.len()
+                || !self.text.is_char_boundary(start)
+                || !self.text.is_char_boundary(end)
+            {
+                return 0;
+            }
+            last_end = end;
+        }
+        let start = ranges[0].0;
+        let end = ranges[ranges.len() - 1].1;
+        let mut replacement = String::with_capacity(end - start + text.len());
+        let mut cursor = start;
+        for &(from, to) in ranges {
+            replacement.push_str(&self.text[cursor..from]);
+            replacement.push_str(text);
+            cursor = to;
+        }
+        replacement.push_str(&self.text[cursor..end]);
+        let after = Cursor {
+            caret: ranges[0].0 + text.len(),
+            anchor: ranges[0].0 + text.len(),
+        };
+        self.replace_with(start, end, &replacement, Kind::Other, after);
+        ranges.len()
+    }
+
     /// Reloads the buffer from disk after an external change, dropping undo
     /// history and preserving the caret/scroll where still valid.
     pub fn reload(&mut self) -> std::io::Result<()> {
@@ -383,10 +492,12 @@ impl Document {
             ));
         };
         let raw = std::fs::read_to_string(path)?;
+        self.eol = LineEnding::detect(&raw);
         self.text = normalize(&raw);
         self.caret = floor_boundary(&self.text, self.caret.min(self.text.len()));
         self.anchor = floor_boundary(&self.text, self.anchor.min(self.text.len()));
         self.dirty = false;
+        self.saved_cursor = Some(0);
         self.rev += 1;
         self.edit_span = None;
         self.undo = UndoStack::default();
@@ -405,11 +516,16 @@ impl Document {
         let Some(path) = self.path.clone() else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
-                "untitled buffer has no path (Save As is not implemented yet)",
+                "untitled buffer has no path; use Save As",
             ));
         };
-        std::fs::write(&path, &self.text)?;
+        let permissions = std::fs::metadata(&path)
+            .ok()
+            .map(|metadata| metadata.permissions());
+        let rendered = self.eol.render(&self.text);
+        fsutil::atomic_write(&path, rendered.as_bytes(), permissions)?;
         self.dirty = false;
+        self.saved_cursor = Some(self.undo.cursor);
         Ok(())
     }
 
@@ -951,7 +1067,7 @@ impl Document {
         self.caret = edit.before.caret.min(self.text.len());
         self.anchor = edit.before.anchor.min(self.text.len());
         self.rebuild_lines();
-        self.dirty = true;
+        self.dirty = self.saved_cursor != Some(self.undo.cursor);
         self.rev += 1;
         true
     }
@@ -969,9 +1085,9 @@ impl Document {
         self.caret = edit.after.caret.min(self.text.len());
         self.anchor = edit.after.anchor.min(self.text.len());
         self.rebuild_lines();
-        self.dirty = true;
-        self.rev += 1;
         self.undo.cursor += 1;
+        self.dirty = self.saved_cursor != Some(self.undo.cursor);
+        self.rev += 1;
         true
     }
 
@@ -1121,6 +1237,14 @@ impl Document {
         self.anchor = floor_boundary(&self.text, after.anchor);
         self.rebuild_lines();
         self.rev += 1;
+        // A new edit truncates the redo history at `undo.cursor`; if the save
+        // point lived in that truncated branch it can no longer be reached.
+        if self
+            .saved_cursor
+            .is_some_and(|saved| saved > self.undo.cursor)
+        {
+            self.saved_cursor = None;
+        }
         self.undo.push(Edit {
             start,
             removed,
@@ -1507,6 +1631,94 @@ mod tests {
         assert_eq!(doc.current_line_text().as_deref(), Some("one\n"));
         doc.set_caret(doc.byte_at(1, 0));
         assert_eq!(doc.current_line_text().as_deref(), Some("two"));
+    }
+
+    #[test]
+    fn batched_replace_is_one_undo_step() {
+        let mut doc = doc("hello hello hello");
+        let ranges = [(0, 5), (6, 11), (12, 17)];
+        assert_eq!(doc.replace_ranges(&ranges, "bye"), 3);
+        assert_eq!(doc.text(), "bye bye bye");
+        doc.undo();
+        assert_eq!(doc.text(), "hello hello hello");
+        doc.redo();
+        assert_eq!(doc.text(), "bye bye bye");
+    }
+
+    #[test]
+    fn batched_replace_rejects_overlapping_ranges() {
+        let mut doc = doc("hello hello");
+        assert_eq!(doc.replace_ranges(&[(0, 5), (4, 9)], "bye"), 0);
+        assert_eq!(doc.text(), "hello hello");
+    }
+
+    #[test]
+    fn save_preserves_crlf_line_endings() {
+        let dir = std::env::temp_dir().join(format!("igui-editor-crlf-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("crlf.txt");
+        std::fs::write(&path, b"one\r\ntwo\r\n").unwrap();
+
+        let mut doc = Document::open(1, &path).unwrap();
+        assert_eq!(doc.line_ending(), LineEnding::Crlf);
+        assert_eq!(doc.text(), "one\ntwo\n");
+        doc.set_caret(doc.text().len());
+        doc.insert_text("three\n");
+        doc.save().unwrap();
+
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(raw, "one\r\ntwo\r\nthree\r\n");
+        assert!(!raw.replace("\r\n", "").contains('\n'));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn undo_to_the_save_point_clears_dirty() {
+        let path =
+            std::env::temp_dir().join(format!("igui-editor-save-point-{}.txt", std::process::id()));
+        std::fs::write(&path, "base").unwrap();
+        let mut doc = Document::open(1, &path).unwrap();
+        doc.set_caret(doc.text().len());
+        doc.insert_text("x");
+        assert!(doc.is_dirty());
+        doc.undo();
+        assert!(!doc.is_dirty(), "undo to the opened content is clean");
+        doc.redo();
+        assert!(doc.is_dirty(), "redo leaves the save point");
+        doc.undo();
+        assert!(!doc.is_dirty());
+
+        doc.insert_text("x");
+        doc.save().unwrap();
+        assert!(!doc.is_dirty());
+        doc.undo();
+        assert!(doc.is_dirty(), "undoing past the save point is dirty");
+        doc.redo();
+        assert!(!doc.is_dirty(), "redo back to the save point is clean");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn divergent_edit_invalidates_the_save_point() {
+        let path = std::env::temp_dir().join(format!(
+            "igui-editor-save-branch-{}.txt",
+            std::process::id()
+        ));
+        std::fs::write(&path, "base").unwrap();
+        let mut doc = Document::open(1, &path).unwrap();
+        doc.set_caret(doc.text().len());
+        doc.insert_text("x");
+        doc.save().unwrap();
+        doc.undo();
+        doc.insert_text("y");
+        assert!(doc.is_dirty());
+        doc.undo();
+        assert!(
+            doc.is_dirty(),
+            "discarding the saved branch must not make the old base clean"
+        );
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

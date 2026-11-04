@@ -17,6 +17,7 @@ Progressive disclosure: read the smallest document that answers your question.
 | macOS packaging/signing | [packaging.md](packaging.md) |
 | Milestones and gaps | [roadmap.md](roadmap.md) |
 | Review/optimization log | [review.md](review.md) |
+| Current improvement work plan | [improvement-plan.md](improvement-plan.md) |
 
 ## Maintenance rules
 

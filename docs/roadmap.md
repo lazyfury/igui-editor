@@ -38,15 +38,20 @@ Delivered (M13): Go/TypeScript/C-C++/Python language servers with monorepo root
 selection, a shared copy-only tooling prompt, and LSP start/stop in the footer
 and settings.
 
-Next candidates: native macOS top menu bar (Window/Services/Help), window-close
-guard + Dock reopen, code-plugin loading (dylib/wasm), per-hit replace and
-cross-file undo, incremental preview layout for very large documents, and
-word-boundary wrapping.
+Quality pass (see [improvement-plan.md](improvement-plan.md)): keyboard
+shortcuts now have one source, saves are atomic with EOL preservation, find and
+Replace All are bounded/batched, terminal clipboard commands are focus-aware,
+sidebar rows are cached and external URLs are scheme-restricted.
+
+Next candidates: window-close guard + Dock reopen, terminal multiple
+sessions/selection/scrollback, workspace trust for repo-local language servers,
+CI with a pinned sibling `igui` checkout, cross-file undo, incremental preview
+layout for very large documents, and word-boundary/grapheme-aware editing.
 
 Notes:
 
-- Native macOS top menu, a close-window dirty guard and Dock reopen are not
-  implemented yet; closing the window still follows winit's event-loop exit.
+- A close-window dirty guard and Dock reopen are not implemented yet; closing
+  the window still follows winit's event-loop exit.
 - Only macOS has been exercised manually; the Linux (XDG portal) and Windows
   dialog paths are wired but untested.
 - The macOS sheet path is asynchronous by design (no nested modal loop, no

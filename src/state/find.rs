@@ -31,6 +31,7 @@ impl AppState {
         self.find.open = false;
         self.find.preedit = None;
         self.find.matches.clear();
+        self.find.truncated = false;
         self.find.current = None;
         self.focus = Focus::Editor;
         self.needs_rebuild = true;
@@ -59,11 +60,13 @@ impl AppState {
             case_sensitive: self.find.case_sensitive,
             whole_word: self.find.whole_word,
         };
-        self.find.matches = self
+        let (matches, truncated) = self
             .ws
             .active_doc()
-            .map(|doc| find_all(doc.text(), &matcher))
+            .map(|doc| crate::model::find::find_all_capped(doc.text(), &matcher))
             .unwrap_or_default();
+        self.find.matches = matches;
+        self.find.truncated = truncated;
         self.find.rev = rev;
         self.find.dirty = false;
         if self.find.matches.is_empty() {
@@ -168,16 +171,20 @@ impl AppState {
         let Some(doc) = self.ws.active_doc_mut() else {
             return;
         };
-        let mut replaced = 0;
-        for (start, end) in chosen.iter().rev() {
-            if doc.replace_range(*start, *end, &replacement) {
-                replaced += 1;
-            }
-        }
+        let replaced = chosen.len();
+        let capped = self.find.truncated;
+        doc.replace_ranges(&chosen, &replacement);
         self.find.dirty = true;
         self.find.current = None;
         self.refresh_find();
-        self.status(format!("replaced {replaced}"));
+        if capped {
+            self.status(format!(
+                "replaced {replaced} (capped at {})",
+                crate::model::find::MAX_MATCHES
+            ));
+        } else {
+            self.status(format!("replaced {replaced}"));
+        }
         self.dirty = true;
     }
 }

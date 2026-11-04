@@ -198,6 +198,7 @@ impl Workspace {
             entry.text.clone(),
             entry.caret,
             entry.anchor,
+            entry.eol,
         );
         self.tabs.push(doc);
         self.active = self.tabs.len() - 1;

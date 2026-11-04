@@ -8,6 +8,20 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use super::doc::LineEnding;
+use super::fsutil;
+
+/// Borrowed values written into one recovery snapshot.
+#[derive(Clone, Copy, Debug)]
+pub struct Snapshot<'a> {
+    pub name: &'a str,
+    pub path: Option<&'a Path>,
+    pub text: &'a str,
+    pub caret: usize,
+    pub anchor: usize,
+    pub eol: LineEnding,
+}
+
 /// One recoverable buffer.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RecoveryEntry {
@@ -17,6 +31,7 @@ pub struct RecoveryEntry {
     pub text: String,
     pub caret: usize,
     pub anchor: usize,
+    pub eol: LineEnding,
 }
 
 /// Snapshot directory under the app config.
@@ -31,31 +46,24 @@ impl RecoveryStore {
     }
 
     /// Writes (or replaces) one snapshot.
-    pub fn save(
-        &self,
-        id: u64,
-        name: &str,
-        path: Option<&Path>,
-        text: &str,
-        caret: usize,
-        anchor: usize,
-    ) -> io::Result<()> {
+    pub fn save(&self, id: u64, snapshot: Snapshot<'_>) -> io::Result<()> {
         fs::create_dir_all(&self.dir)?;
         let text_path = self.dir.join(format!("{id}.txt"));
         let meta_path = self.dir.join(format!("{id}.meta"));
-        let text_tmp = self.dir.join(format!("{id}.txt.tmp"));
-        let meta_tmp = self.dir.join(format!("{id}.meta.tmp"));
         let meta = format!(
-            "name={}\npath={}\ncaret={caret}\nanchor={anchor}\n",
-            escape(name),
-            path.map(|path| escape(&path.to_string_lossy()))
-                .unwrap_or_default()
+            "name={}\npath={}\ncaret={}\nanchor={}\neol={}\n",
+            escape(snapshot.name),
+            snapshot
+                .path
+                .map(|path| escape(&path.to_string_lossy()))
+                .unwrap_or_default(),
+            snapshot.caret,
+            snapshot.anchor,
+            snapshot.eol.as_str()
         );
         // Write-then-rename so a crash mid-snapshot cannot truncate the text.
-        fs::write(&text_tmp, text)?;
-        fs::rename(&text_tmp, &text_path)?;
-        fs::write(&meta_tmp, meta)?;
-        fs::rename(&meta_tmp, &meta_path)
+        fsutil::atomic_write(&text_path, snapshot.text.as_bytes(), None)?;
+        fsutil::atomic_write(&meta_path, meta.as_bytes(), None)
     }
 
     /// Removes one snapshot (both files).
@@ -99,6 +107,7 @@ impl RecoveryStore {
                 let mut path_buf = None;
                 let mut caret = 0usize;
                 let mut anchor = 0usize;
+                let mut eol = LineEnding::Lf;
                 for line in meta.lines() {
                     let Some((key, value)) = line.split_once('=') else {
                         continue;
@@ -109,6 +118,7 @@ impl RecoveryStore {
                         "path" if !value.is_empty() => path_buf = Some(PathBuf::from(value)),
                         "caret" => caret = value.parse().unwrap_or(0),
                         "anchor" => anchor = value.parse().unwrap_or(0),
+                        "eol" => eol = LineEnding::from_name(&value),
                         _ => {}
                     }
                 }
@@ -122,6 +132,7 @@ impl RecoveryStore {
                     text,
                     caret,
                     anchor,
+                    eol,
                 })
             })
             .collect();
@@ -188,11 +199,14 @@ mod tests {
         store
             .save(
                 7,
-                "note.md",
-                Some(Path::new("/tmp/a b/note.md")),
-                "line one\n中文\tline three\n",
-                5,
-                2,
+                Snapshot {
+                    name: "note.md",
+                    path: Some(Path::new("/tmp/a b/note.md")),
+                    text: "line one\n中文\tline three\n",
+                    caret: 5,
+                    anchor: 2,
+                    eol: LineEnding::Crlf,
+                },
             )
             .unwrap();
         let entries = store.list();
@@ -204,6 +218,7 @@ mod tests {
         assert_eq!(entry.text, "line one\n中文\tline three\n");
         assert_eq!(entry.caret, 5);
         assert_eq!(entry.anchor, 2);
+        assert_eq!(entry.eol, LineEnding::Crlf);
 
         store.remove(7);
         assert!(store.list().is_empty());
@@ -213,8 +228,32 @@ mod tests {
     fn clears_all_snapshots() {
         let dir = temp("clear");
         let store = RecoveryStore::new(&dir);
-        store.save(1, "a", None, "a", 0, 0).unwrap();
-        store.save(2, "b", None, "b", 1, 1).unwrap();
+        store
+            .save(
+                1,
+                Snapshot {
+                    name: "a",
+                    path: None,
+                    text: "a",
+                    caret: 0,
+                    anchor: 0,
+                    eol: LineEnding::Lf,
+                },
+            )
+            .unwrap();
+        store
+            .save(
+                2,
+                Snapshot {
+                    name: "b",
+                    path: None,
+                    text: "b",
+                    caret: 1,
+                    anchor: 1,
+                    eol: LineEnding::Lf,
+                },
+            )
+            .unwrap();
         assert_eq!(store.list().len(), 2);
         store.clear();
         assert!(store.list().is_empty());

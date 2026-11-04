@@ -27,6 +27,7 @@ src/
   model/recovery.rs   crash snapshots (txt + metadata)
   model/replace.rs    replace-in-files planning/apply (conflict + open skip)
   model/fs_tree.rs    lazy sidebar tree (dirs first, hidden entries skipped)
+  model/fsutil.rs     atomic temp+fsync+rename writer shared by model IO
   model/markdown.rs   Markdown event stream -> flat block model
   model/session.rs    key=value session file (atomic write, escaping, v12)
   model/workspace.rs  tabs + file IO (open/save/move/close folder)
@@ -43,6 +44,7 @@ src/
   ui/docs_view.rs     dedicated read-only docs tab view (wrap + link hit-test)
   ui/outline.rs       right document-symbol outline
   ui/tree.rs          shared Explorer/outline tree row renderer
+  ui/icon.rs          embedded Lucide icons, cached igui_svg documents + painter
   ui/tree_menu.rs     file-tree context menu
   ui/settings.rs      settings + Keymap row
   ui/terminal.rs      vt100 cell renderer + terminal key encoding
@@ -52,6 +54,7 @@ src/
   state/{tabs,files,find,modal,workspace}.rs  document lifecycle and dialogs
   state/{terminal,git,lsp,search}.rs  native services and workers
   state/tooling.rs    missing-tool prompt state, LSP on/off entry point
+  state/panels.rs     header panel table, dock groups and toggle commands
   state/{settings,view,reliability,services,new_file,quick_open}.rs
                       settings, layout, autosave/recovery and prompt state
   state/schedule.rs   time-based wakeup deadlines (status/hover/autosave/poll)
@@ -78,6 +81,7 @@ src/
   bench.rs            benchmark entry points (`--features bench`)
 benches/
   markdown.rs         Markdown parse/layout/paint/typing benchmark
+assets/icons/lucide/  vendored Lucide SVGs (ISC), embedded via include_str!
 docs/                 progressive-disclosure documentation (see docs/README.md)
 AGENTS.md             agent rules, file routing, mandatory checks
 packaging/

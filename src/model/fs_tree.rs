@@ -32,6 +32,9 @@ struct FsNode {
 pub struct FsTree {
     pub root: PathBuf,
     nodes: Vec<FsNode>,
+    /// Flattened visible rows, rebuilt only when the tree changes. Paint and
+    /// hit-testing borrow this slice instead of cloning the whole tree.
+    flat: Vec<Row>,
     /// `read_dir` failure on the root, surfaced in the sidebar.
     pub error: Option<String>,
 }
@@ -42,6 +45,7 @@ impl FsTree {
         Self {
             root: PathBuf::new(),
             nodes: Vec::new(),
+            flat: Vec::new(),
             error: None,
         }
     }
@@ -51,6 +55,7 @@ impl FsTree {
         let mut tree = Self {
             root,
             nodes: Vec::new(),
+            flat: Vec::new(),
             error: None,
         };
         tree.reload();
@@ -69,11 +74,16 @@ impl FsTree {
                 self.error = Some(error);
             }
         }
+        self.rebuild_flat();
     }
 
     /// Expands or collapses the directory at `path`.
     pub fn toggle(&mut self, path: &Path) -> bool {
-        toggle_in(&mut self.nodes, path)
+        let changed = toggle_in(&mut self.nodes, path);
+        if changed {
+            self.rebuild_flat();
+        }
+        changed
     }
 
     /// Expands every directory between the root and `path` so it is visible.
@@ -81,14 +91,22 @@ impl FsTree {
         if !path.starts_with(&self.root) {
             return false;
         }
-        expand_ancestors(&mut self.nodes, path)
+        let changed = expand_ancestors(&mut self.nodes, path);
+        if changed {
+            self.rebuild_flat();
+        }
+        changed
     }
 
     /// Every visible row, in paint/hit-test order.
-    pub fn rows(&self) -> Vec<Row> {
-        let mut rows = Vec::new();
-        flatten(&self.nodes, &mut rows);
-        rows
+    pub fn rows(&self) -> &[Row] {
+        &self.flat
+    }
+
+    fn rebuild_flat(&mut self) {
+        self.flat.clear();
+        let Self { nodes, flat, .. } = self;
+        flatten(nodes, flat);
     }
 }
 
@@ -203,7 +221,7 @@ mod tests {
     fn dirs_sort_before_files_and_hidden_entries_are_skipped() {
         let dir = temp_dir("sort");
         let tree = FsTree::new(&dir);
-        let names: Vec<String> = tree.rows().into_iter().map(|row| row.name).collect();
+        let names: Vec<String> = tree.rows().iter().map(|row| row.name.clone()).collect();
         assert_eq!(names, ["src", "a.md", "b.txt"]);
         let _ = fs::remove_dir_all(dir);
     }

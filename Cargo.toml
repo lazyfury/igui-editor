@@ -42,6 +42,9 @@ igui_render = { path = "../igui/crates/core/igui_render" }
 igui_scene = { path = "../igui/crates/core/igui_scene" }
 igui_ui = { path = "../igui/crates/core/igui_ui" }
 igui_font = { path = "../igui/crates/assets/igui_font" }
+# Lucide-style SVG icons: the engine flattens paths and strokes them into the
+# existing draw list, so the app needs no parser, texture or extra dependency.
+igui_svg = { path = "../igui/crates/assets/igui_svg" }
 # Application runtime + native platform plugins.
 igui_app = { path = "../igui/crates/app/igui_app" }
 igui_winit = { path = "../igui/crates/window/igui_winit" }

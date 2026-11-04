@@ -79,6 +79,9 @@ pub struct CommandSpec {
 pub struct SidebarContribution {
     pub id: &'static str,
     pub label: &'static str,
+    /// Semantic Lucide name resolved by `ui::icon`; unknown names paint text
+    /// only, so data-only contributions keep working.
+    pub icon: &'static str,
 }
 
 /// Copy-paste installation hint shown when a language server executable is
@@ -244,6 +247,7 @@ pub fn install_builtins() -> ServiceRegistry {
     registry.sidebar_tabs.push(SidebarContribution {
         id: "explorer",
         label: "EXPLORER",
+        icon: "files",
     });
     let plugin = git::GitPlugin;
     let terminal = terminal::TerminalPlugin;

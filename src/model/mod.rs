@@ -9,6 +9,7 @@ pub mod doc;
 pub mod docs;
 pub mod find;
 pub mod fs_tree;
+pub(crate) mod fsutil;
 pub mod fuzzy;
 pub mod git;
 pub mod highlight;

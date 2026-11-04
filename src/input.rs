@@ -16,9 +16,13 @@
 use igui_core::{EventResult, Key, Modifiers};
 
 use crate::keymap::KeymapId;
-use crate::state::{Action, AppState, Focus, Modal, ModalButton};
+use crate::state::{AppState, Focus, Modal, ModalButton};
 
 /// App-wide commands. `Some` means the key was consumed.
+///
+/// Dispatch is intentionally delegated to [`crate::keymap`] only: there is no
+/// second hard-coded shortcut table here, so profile overrides and menu hints
+/// always describe the same behavior.
 pub fn shortcut(state: &mut AppState, key: Key, modifiers: Modifiers) -> Option<EventResult> {
     if state.focus == Focus::Editor
         && state.settings.keymap == KeymapId::Vim
@@ -29,126 +33,9 @@ pub fn shortcut(state: &mut AppState, key: Key, modifiers: Modifiers) -> Option<
     {
         return Some(EventResult::Handled);
     }
-    if state.keymap_key(key, modifiers) {
-        return Some(EventResult::Handled);
-    }
-    // Option/Alt+Z is the soft-wrap toggle (not a Cmd/Ctrl accelerator).
-    if modifiers.alt && !modifiers.meta && !modifiers.ctrl {
-        if state.focus == Focus::Editor
-            && matches!(key, Key::Character(ch) if ch.eq_ignore_ascii_case(&'z'))
-        {
-            state.run(Action::ToggleSoftWrap);
-            return Some(EventResult::Handled);
-        }
-        return None;
-    }
-    if !(modifiers.meta || modifiers.ctrl) {
-        return None;
-    }
-    let shift = modifiers.shift;
-    let action = match key {
-        Key::Character(ch) => match ch.to_ascii_lowercase() {
-            'n' => {
-                if shift {
-                    Action::NewFile
-                } else {
-                    Action::New
-                }
-            }
-            'o' => {
-                if shift {
-                    Action::OpenFolder
-                } else {
-                    Action::Open
-                }
-            }
-            's' => {
-                if shift {
-                    Action::SaveAs
-                } else {
-                    Action::Save
-                }
-            }
-            'w' => Action::CloseTab,
-            'z' => {
-                if shift {
-                    Action::Redo
-                } else {
-                    Action::Undo
-                }
-            }
-            'x' => Action::Cut,
-            'c' => Action::Copy,
-            'v' => Action::Paste,
-            'a' => Action::SelectAll,
-            ',' => {
-                state.toggle_settings();
-                return Some(EventResult::Handled);
-            }
-            'p' => {
-                state.open_quick_open();
-                return Some(EventResult::Handled);
-            }
-            'f' => {
-                if shift {
-                    state.open_project_search();
-                    return Some(EventResult::Handled);
-                }
-                let replace = modifiers.alt;
-                if state.find.open {
-                    state.focus = if replace { Focus::Replace } else { Focus::Find };
-                    state.dirty = true;
-                } else {
-                    state.open_find(replace);
-                }
-                return Some(EventResult::Handled);
-            }
-            'i' => Action::LspCompletion,
-            'b' => Action::ToggleSidebar,
-            'l' => Action::ToggleTheme,
-            'm' => Action::SetView(state.view_of_active().next()),
-            'y' => Action::ToggleScrollSync,
-            '`' => Action::ToggleTerminal,
-            'g' => {
-                if state.find.open {
-                    state.find_step(if shift { -1 } else { 1 });
-                } else {
-                    state.open_find(false);
-                }
-                return Some(EventResult::Handled);
-            }
-            _ => return None,
-        },
-        Key::ArrowLeft | Key::ArrowRight => {
-            let Some(doc) = state.ws.active_doc_mut() else {
-                return Some(EventResult::Handled);
-            };
-            if matches!(key, Key::ArrowLeft) {
-                doc.move_home(shift);
-            } else {
-                doc.move_end(shift);
-            }
-            state.editor.reveal = true;
-            state.dirty = true;
-            return Some(EventResult::Handled);
-        }
-        Key::ArrowUp | Key::ArrowDown => {
-            let Some(doc) = state.ws.active_doc_mut() else {
-                return Some(EventResult::Handled);
-            };
-            if matches!(key, Key::ArrowUp) {
-                doc.move_doc_start(shift);
-            } else {
-                doc.move_doc_end(shift);
-            }
-            state.editor.reveal = true;
-            state.dirty = true;
-            return Some(EventResult::Handled);
-        }
-        _ => return None,
-    };
-    state.run(action);
-    Some(EventResult::Handled)
+    state
+        .keymap_key(key, modifiers)
+        .then_some(EventResult::Handled)
 }
 
 /// Keys while a find/replace field has focus.

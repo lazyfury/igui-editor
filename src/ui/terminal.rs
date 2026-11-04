@@ -9,6 +9,7 @@ use igui_ui::{Container, PaintEnv, PointerPhase, TextMeasurer};
 
 use crate::kit::{self, RectExt};
 use crate::state::{AppState, Focus};
+use crate::ui::icon::{self, Icon};
 
 pub const HEIGHT: f32 = 220.0;
 const HEADER: f32 = 28.0;
@@ -183,10 +184,23 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     let p = theme.p;
     let focused = state.focus == Focus::Terminal;
     kit::fill(env.ctx, rect, p.bg);
+    let icon_rect = Rect::from_min_size(
+        Vec2::new(
+            rect.left() + 10.0,
+            rect.top() + (HEADER - icon::SMALL) * 0.5,
+        ),
+        Size::new(icon::SMALL, icon::SMALL),
+    );
+    icon::paint(
+        env.ctx,
+        Icon::Terminal,
+        icon_rect,
+        if focused { p.accent } else { p.faint },
+    );
     kit::text(
         env.ctx,
         "TERMINAL",
-        rect.left() + 10.0,
+        rect.left() + 10.0 + icon::SMALL + 5.0,
         rect.top() + 18.0,
         m.font_small,
         if focused { p.accent } else { p.faint },

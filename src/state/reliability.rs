@@ -63,11 +63,14 @@ impl AppState {
             if doc.is_dirty() {
                 let _ = self.recovery.save(
                     doc.id(),
-                    doc.name(),
-                    doc.path(),
-                    doc.text(),
-                    doc.caret(),
-                    doc.anchor(),
+                    crate::model::recovery::Snapshot {
+                        name: doc.name(),
+                        path: doc.path(),
+                        text: doc.text(),
+                        caret: doc.caret(),
+                        anchor: doc.anchor(),
+                        eol: doc.line_ending(),
+                    },
                 );
             } else {
                 self.recovery.remove(doc.id());
@@ -100,7 +103,12 @@ impl AppState {
                 });
                 if let Some(index) = existing {
                     if let Some(doc) = self.ws.tabs.get_mut(index) {
-                        doc.restore_snapshot(entry.text.clone(), entry.caret, entry.anchor);
+                        doc.restore_snapshot(
+                            entry.text.clone(),
+                            entry.caret,
+                            entry.anchor,
+                            entry.eol,
+                        );
                     }
                     last = Some(index);
                 } else {

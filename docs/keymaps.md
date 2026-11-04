@@ -29,21 +29,23 @@ remaining scope.
 
 ### Gaps and rough edges
 
-- Global/editor commands have one binding table, but overlay keys (find, quick
-  open, completion, modal) are still hand-written modules that run before the
-  keymap; they are not representable in a profile yet.
-- `modifiers.meta || modifiers.ctrl` is used as "primary". That is Mac-oriented:
-  VS Code on Windows/Linux uses Ctrl+Left/Right for word movement, while the
-  current global path maps Ctrl/Cmd+Left/Right to line start/end.
+- Global/editor commands have one binding table and no fallback table. Overlay
+  keys (find, quick open, completion, modal) are still hand-written modules that
+  run before the keymap; they are not representable in a profile yet.
+- `primary` is Meta on macOS and Ctrl elsewhere. On Linux/Windows a literal
+  `ctrl+…` binding normalizes to the same host bit; on macOS Ctrl stays distinct.
+  Ctrl+Left/Right still map to line start/end rather than word movement on
+  Linux/Windows (a future platform-specific profile refinement).
 - Overlay key handling is hand-written (find, quick open, project search,
   completion, modal, confirm dialogs). The precedence is correct, but not
   reusable by a keymap profile.
 - No modal editor state. A real Vim profile needs Normal/Visual/Insert,
   operators and counts; mapping `dd` to "delete line" alone would be misleading.
-- No `PageUp`/`PageDown` in `igui_core::Key` (the model has `Document::page`), no
-  word-delete command, no duplicate/move-line command, no comment toggle, no
-  multi-cursor or column selection.
-- Bindings are not persisted and there is no "Keymap" settings row.
+- No `PageUp`/`PageDown` in `igui_core::Key` (the model has `Document::page`),
+  and no multi-cursor or column selection.
+- Word-delete, duplicate/move-line and comment-toggle commands are implemented.
+- The active profile persists in the session, and the Settings panel exposes the
+  Keymap row. Per-chord overrides live in `<config>/keymaps.json`.
 - Printable characters must never be intercepted in Insert mode; Space/Tab are
   named keys while other text arrives as `TextInput`. A keymap layer must keep
   this distinction.
@@ -89,7 +91,8 @@ edit.moveLineUp, edit.moveLineDown, edit.toggleComment
 motion.left, motion.right, motion.wordLeft, motion.wordRight
 motion.lineStart, motion.lineEnd, motion.docStart, motion.docEnd
 editor.find, editor.findNext, editor.findPrevious
-view.split, view.preview, view.softWrap, view.sidebar, view.terminal
+view.split, view.preview, view.softWrap, view.sidebar, view.explorer, view.git,
+view.outline, view.terminal
 lsp.hover, lsp.completion, lsp.definition
 ```
 
@@ -202,7 +205,8 @@ schema:
 ## Implementation status
 
 1. **Inventory + command ids** — done in `keymap.rs` and the expanded `Action`
-   set; global and editor keys route through it.
+   set; global and editor keys route through it, with the old input fallback
+   removed.
 2. **Resolver + VS Code profile** — done; tests cover primary/Cmd/Ctrl,
    profile bindings and user overrides.
 3. **Settings/session** — done: Keymap row, session `keymap=`, and

@@ -89,6 +89,13 @@ Unit tests additionally cover the frame wake path: PTY output invokes the wake
 callback, `FrameClock` fires once per deadline, and `AppState::next_wake` picks
 the earliest of the status/hover/autocomplete/preview/poll deadlines.
 
+The quality pass adds tests for: keymap unbind not being resurrected by a
+fallback table, literal Ctrl chords on both platform paths, movement actions,
+CRLF save round-trips, undo/redo save-point cleanliness, divergent save-point
+invalidation, batched replace (one undo step), bounded find matches, terminal
+focus keeping clipboard/history out of the editor document, sidebar row-cache
+invalidation and external-URL scheme rejection.
+
 No OS capture of any kind is used. Native AppKit menus and the borderless
 window chrome are a manual smoke-test item; the headless check covers the
 custom header hit rectangles, hover feedback and double-click routing but cannot

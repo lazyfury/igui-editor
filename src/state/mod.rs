@@ -18,7 +18,7 @@ use igui_ui::{Clipboard, TextEdit};
 use crate::keymap::{KeyChord, Keymap, KeymapId, Resolution, Scope};
 use crate::model::brackets::match_bracket;
 use crate::model::doc::Document;
-use crate::model::find::{find_all, Matcher};
+use crate::model::find::Matcher;
 use crate::model::git::{
     GitCommit, GitCommitDetail, GitDiff, GitEvent, GitRequest, GitWorker, RepoStatus,
 };
@@ -52,6 +52,7 @@ mod keymap;
 mod lsp;
 mod modal;
 mod new_file;
+mod panels;
 mod quick_open;
 mod reliability;
 mod search;
@@ -62,6 +63,8 @@ mod terminal;
 mod tooling;
 mod view;
 mod workspace;
+
+pub use panels::{Panel, PanelGroup};
 
 pub const MAX_RECENT: usize = 8;
 
@@ -183,6 +186,14 @@ pub enum Action {
     DeleteWordBackward,
     DeleteWordForward,
     ToggleComment,
+    /// Smart line start (`primary+left`), extending the selection when true.
+    MoveLineStart(bool),
+    /// Line end (`primary+right`), extending the selection when true.
+    MoveLineEnd(bool),
+    /// Document start (`primary+up`), extending the selection when true.
+    MoveDocStart(bool),
+    /// Document end (`primary+down`), extending the selection when true.
+    MoveDocEnd(bool),
     LspHover,
     LspCompletion,
     LspDefinition,
@@ -190,6 +201,8 @@ pub enum Action {
     Settings,
     ToggleSidebar,
     ToggleOutline,
+    /// Toggles one chrome panel (header icon buttons).
+    ShowPanel(Panel),
     ToggleTheme,
     SetView(ViewMode),
     ToggleScrollSync,
@@ -234,6 +247,10 @@ impl Action {
             Action::DeleteWordBackward => "Delete Word Backward".into(),
             Action::DeleteWordForward => "Delete Word Forward".into(),
             Action::ToggleComment => "Toggle Comment".into(),
+            Action::MoveLineStart(_) => "Go to Line Start".into(),
+            Action::MoveLineEnd(_) => "Go to Line End".into(),
+            Action::MoveDocStart(_) => "Go to Document Start".into(),
+            Action::MoveDocEnd(_) => "Go to Document End".into(),
             Action::LspHover => "Show Hover".into(),
             Action::LspCompletion => "Complete".into(),
             Action::LspDefinition => "Go to Definition".into(),
@@ -241,6 +258,7 @@ impl Action {
             Action::Settings => "Settings…".into(),
             Action::ToggleSidebar => "Toggle Sidebar".into(),
             Action::ToggleOutline => "Outline".into(),
+            Action::ShowPanel(panel) => format!("Toggle {} Panel", panel.label()),
             Action::ToggleTheme => "Toggle Theme".into(),
             Action::SetView(mode) => mode.label().into(),
             Action::ToggleScrollSync => "Sync Scroll".into(),
@@ -270,6 +288,7 @@ impl Action {
             | Action::OpenFolder
             | Action::ToggleSidebar
             | Action::ToggleOutline
+            | Action::ShowPanel(_)
             | Action::ToggleTheme
             | Action::Find
             | Action::FindReplace
@@ -298,6 +317,10 @@ impl Action {
             | Action::DeleteWordBackward
             | Action::DeleteWordForward
             | Action::ToggleComment => doc.is_some_and(|doc| !doc.is_read_only()),
+            Action::MoveLineStart(_)
+            | Action::MoveLineEnd(_)
+            | Action::MoveDocStart(_)
+            | Action::MoveDocEnd(_) => doc.is_some(),
             Action::LspHover | Action::LspCompletion | Action::LspDefinition => doc
                 .and_then(|doc| doc.path())
                 .is_some_and(|path| state.lsp.supports(path)),
@@ -320,6 +343,7 @@ impl Action {
             Action::SetView(mode) => *mode == state.view_of_active(),
             Action::ToggleScrollSync => state.sync_scroll,
             Action::ToggleOutline => state.show_outline,
+            Action::ShowPanel(panel) => panel.is_open(state),
             Action::ToggleSoftWrap => state.session.soft_wrap,
             Action::ToggleTerminal => state.terminal.open,
             Action::SetLanguage(None) => state.language_override_of_active().is_none(),
@@ -442,6 +466,8 @@ pub struct FindState {
     pub case_sensitive: bool,
     pub whole_word: bool,
     pub matches: Vec<(usize, usize)>,
+    /// The match list hit [`crate::model::find::MAX_MATCHES`].
+    pub truncated: bool,
     pub current: Option<usize>,
     /// Set when the query or the document changed since the last match pass.
     pub dirty: bool,
@@ -461,6 +487,7 @@ impl Default for FindState {
             case_sensitive: false,
             whole_word: false,
             matches: Vec::new(),
+            truncated: false,
             current: None,
             dirty: false,
             rev: u64::MAX,
@@ -1011,6 +1038,10 @@ pub struct AppState {
     pub menu_open: Option<Menu>,
     pub menubar_hover: Option<Menu>,
     pub menubar_hits: Vec<(Menu, Rect)>,
+    /// Header panel buttons, recorded in paint and used for hit-testing.
+    pub panel_hits: Vec<(Panel, Rect)>,
+    /// Header panel button under the pointer.
+    pub panel_hover: Option<Panel>,
     /// Native-style window chrome painted by the header.
     pub header_close: Rect,
     pub header_minimize: Rect,
@@ -1178,6 +1209,8 @@ impl AppState {
             menu_open: None,
             menubar_hover: None,
             menubar_hits: Vec::new(),
+            panel_hits: Vec::new(),
+            panel_hover: None,
             header_close: Rect::ZERO,
             header_minimize: Rect::ZERO,
             header_zoom: Rect::ZERO,
@@ -1421,6 +1454,52 @@ mod tests {
         assert_eq!(state.ws.active, 2, "out-of-range slots are no-ops");
         state.run(Action::SelectTab(0));
         assert_eq!(state.ws.active, 2, "slot 0 is ignored, not an underflow");
+    }
+
+    #[test]
+    fn unbinding_a_chord_is_not_resurrected_by_input() {
+        let mut state = state_with_tabs(1);
+        state.keymap.apply_overrides(&serde_json::json!({
+            "bindings": { "global": { "primary+s": null } }
+        }));
+        let primary = if cfg!(target_os = "macos") {
+            igui_core::Modifiers {
+                meta: true,
+                ..igui_core::Modifiers::NONE
+            }
+        } else {
+            igui_core::Modifiers {
+                ctrl: true,
+                ..igui_core::Modifiers::NONE
+            }
+        };
+        assert_eq!(
+            crate::input::shortcut(&mut state, Key::Character('s'), primary),
+            None
+        );
+    }
+
+    #[test]
+    fn terminal_focus_keeps_clipboard_commands_out_of_the_document() {
+        let mut state = state_with_tabs(1);
+        state.ws.active_doc_mut().unwrap().insert_text("editor");
+        state.clipboard = Some(std::rc::Rc::new(std::cell::RefCell::new(
+            igui_ui::MemoryClipboard::default(),
+        )));
+        state.set_clipboard("shell text");
+        state.focus = Focus::Terminal;
+
+        state.run(Action::Paste);
+        assert_eq!(state.ws.active_doc().unwrap().text(), "editor");
+        assert!(state
+            .message()
+            .is_some_and(|(text, _)| text.contains("terminal")));
+
+        state.run(Action::Cut);
+        state.run(Action::Copy);
+        state.run(Action::SelectAll);
+        assert_eq!(state.ws.active_doc().unwrap().text(), "editor");
+        assert!(!state.ws.active_doc().unwrap().has_selection());
     }
 
     #[test]

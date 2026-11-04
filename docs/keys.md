@@ -65,6 +65,8 @@ Keymap profiles:
 Overrides can be added in `<config>/keymaps.json` (read at startup), using
 command ids such as `edit.deleteLine`, `edit.duplicateLine` or `file.save`.
 The selected built-in profile supplies the base bindings; null removes one.
+On Linux/Windows a literal `ctrl+…` override normalizes to the same host bit as
+`primary+…`; on macOS Ctrl remains a distinct modifier.
 
 Find bar: query and replacement fields, `Aa` (case) and `W` (whole word)
 toggles, `Replace` / `Replace All`, match counter, prev/next/close. All matches

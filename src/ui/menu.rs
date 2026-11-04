@@ -13,13 +13,80 @@ use igui_scene::SceneTree;
 use igui_ui::{Container, PaintEnv, TextMeasurer};
 
 use crate::kit::{self, RectExt};
-use crate::state::{self, Action, AppState, HeaderButton, Menu};
+use crate::state::{self, Action, AppState, HeaderButton, Menu, Panel, PanelGroup};
+use crate::ui::icon;
 
 /// Drop-down geometry.
 pub const POPUP_W: f32 = 300.0;
 pub const ITEM_H: f32 = 28.0;
 pub const SEP_H: f32 = 9.0;
 pub const POPUP_PAD: f32 = 6.0;
+
+/// Header panel buttons: square icon targets grouped by dock edge.
+const PANEL_BUTTON: f32 = 24.0;
+const PANEL_GAP: f32 = 2.0;
+const PANEL_GROUP_GAP: f32 = 10.0;
+const PANEL_INSET: f32 = 10.0;
+
+/// One layout function for the header's panel buttons. Paint records the rects
+/// in `AppState::panel_hits`; hit-testing reads those recorded rects.
+pub fn panel_buttons(rect: Rect) -> Vec<(Panel, PanelGroup, Rect)> {
+    let mut groups = 0usize;
+    let mut previous = None;
+    for panel in Panel::ALL {
+        let group = panel.group();
+        if previous != Some(group) {
+            groups += 1;
+            previous = Some(group);
+        }
+    }
+    let count = Panel::ALL.len();
+    let total = count as f32 * PANEL_BUTTON
+        + count.saturating_sub(groups) as f32 * PANEL_GAP
+        + groups.saturating_sub(1) as f32 * PANEL_GROUP_GAP;
+    let mut x = (rect.right() - PANEL_INSET - total).max(rect.left() + PANEL_INSET);
+    let top = rect.center().y - PANEL_BUTTON * 0.5;
+
+    let mut out = Vec::with_capacity(count);
+    let mut previous = None;
+    for panel in Panel::ALL {
+        let group = panel.group();
+        if let Some(previous) = previous {
+            x += if previous == group {
+                PANEL_GAP
+            } else {
+                PANEL_GROUP_GAP
+            };
+        }
+        let button = Rect::from_min_size(Vec2::new(x, top), Size::new(PANEL_BUTTON, PANEL_BUTTON));
+        out.push((panel, group, button));
+        x += PANEL_BUTTON;
+        previous = Some(group);
+    }
+    out
+}
+
+/// Panel button under `pos` (geometry recorded by the last paint).
+pub fn panel_at(state: &AppState, pos: Vec2) -> Option<Panel> {
+    state
+        .panel_hits
+        .iter()
+        .find(|(_, rect)| rect.contains(pos))
+        .map(|(panel, _)| *panel)
+}
+
+/// Runs the panel button under `pos`. Returns whether it handled the press.
+pub fn handle_panel_click(state: &mut AppState, pos: Vec2) -> bool {
+    let Some(panel) = panel_at(state, pos) else {
+        return false;
+    };
+    state.panel_hover = Some(panel);
+    state.menu_open = None;
+    state.menu_hover = None;
+    state.run(panel.action());
+    state.dirty = true;
+    true
+}
 
 pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>) -> NodeId {
     let id = kit::node(tree, parent, "menubar");
@@ -173,8 +240,61 @@ fn paint_bar(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         }
     }
 
-    // Right side: the active file, dim, clamped to the remaining width.
-    let right = rect.right() - 10.0;
+    // Right side: grouped panel toggles, then the active file label.
+    state.panel_hits.clear();
+    let buttons = panel_buttons(rect);
+    let mut previous_group = None;
+    for (panel, group, button) in buttons {
+        if let Some(previous) = previous_group {
+            if previous != group {
+                let x = button.left() - PANEL_GROUP_GAP * 0.5;
+                kit::vline(
+                    env.ctx,
+                    x,
+                    rect.center().y - 7.0,
+                    rect.center().y + 7.0,
+                    p.border,
+                );
+            }
+        }
+        let active = panel.is_open(state);
+        let hovered = state.panel_hover == Some(panel);
+        if active {
+            kit::fill(env.ctx, button, p.active);
+        } else if hovered {
+            kit::fill(env.ctx, button, p.hover);
+        }
+        let color = if active {
+            p.accent
+        } else if hovered {
+            p.text
+        } else {
+            p.dim
+        };
+        icon::paint(
+            env.ctx,
+            panel.icon(),
+            Rect::from_min_size(
+                Vec2::new(
+                    button.center().x - icon::HEADER * 0.5,
+                    button.center().y - icon::HEADER * 0.5,
+                ),
+                Size::new(icon::HEADER, icon::HEADER),
+            ),
+            color,
+        );
+        state.panel_hits.push((panel, button));
+        previous_group = Some(group);
+    }
+
+    let right = state
+        .panel_hits
+        .first()
+        .map(|(_, button)| button.left() - 12.0)
+        .unwrap_or(rect.right() - PANEL_INSET);
+    let max_label = (right - rect.left() - 16.0)
+        .min(rect.width() * 0.5)
+        .max(0.0);
     let label = match state.ws.active_doc() {
         Some(doc) => {
             let path = doc
@@ -186,16 +306,18 @@ fn paint_bar(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         }
         None => "no document open".to_string(),
     };
-    let label = kit::truncate_left(measurer, &label, m.font_small, rect.width() * 0.5);
-    kit::text_right(
-        env.ctx,
-        measurer,
-        &label,
-        right,
-        baseline,
-        m.font_small,
-        p.faint,
-    );
+    if max_label > 0.0 {
+        let label = kit::truncate_left(measurer, &label, m.font_small, max_label);
+        kit::text_right(
+            env.ctx,
+            measurer,
+            &label,
+            right,
+            baseline,
+            m.font_small,
+            p.faint,
+        );
+    }
 }
 
 /// What a press/double-click in the custom macOS header means.

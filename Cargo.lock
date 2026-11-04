@@ -1093,6 +1093,7 @@ dependencies = [
  "igui_profile",
  "igui_render",
  "igui_scene",
+ "igui_svg",
  "igui_ui",
  "igui_winit",
  "objc2 0.6.5",
@@ -1180,6 +1181,14 @@ dependencies = [
 
 [[package]]
 name = "igui_scene"
+version = "0.6.0"
+dependencies = [
+ "igui_core",
+ "igui_render",
+]
+
+[[package]]
+name = "igui_svg"
 version = "0.6.0"
 dependencies = [
  "igui_core",

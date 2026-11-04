@@ -75,6 +75,7 @@ Read the minimum set; do not preload the whole tree.
 | Text buffer, caret, selection, undo | `src/model/doc.rs` | Tests at the bottom of the file. |
 | Tabs, files, save/open, folder | `src/model/workspace.rs`, `src/state/files.rs` | `src/state/tabs.rs` for lifecycle. |
 | Editor painting / gutter / IME | `src/ui/editor.rs`, `src/kit.rs` | `src/fonts.rs` for family policy. |
+| Icons / header panel toggles / dock grouping | `src/ui/icon.rs`, `assets/icons/README.md`, `src/ui/menu.rs`, `src/state/panels.rs` | Vendored Lucide SVGs; render through engine `igui_svg`, never fetch at build time. |
 | App shell / input precedence | `src/app.rs`, `src/input.rs` | `src/state/mod.rs` for `Action`; `src/wake.rs` for frame scheduling/wakeups. |
 | Commands / shortcuts / profiles | `src/keymap.rs`, `src/state/actions.rs` | [`docs/keymaps.md`](docs/keymaps.md), [`docs/keys.md`](docs/keys.md). |
 | Shared state / a domain method | `src/state/mod.rs` + matching `src/state/*.rs` | Keep the struct in `mod.rs`; put impls in the domain file. Time-based wakeups live in `src/state/schedule.rs`. |

@@ -52,6 +52,7 @@ impl BuiltinPlugin for GitPlugin {
         host.sidebar_tab(SidebarContribution {
             id: "git",
             label: "GIT",
+            icon: "git-branch",
         });
     }
 }

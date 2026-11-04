@@ -166,6 +166,25 @@ diagnostics, hover, completion, definition and document symbols; semantic
 tokens are not provided by Godot, so the syntax palette remains in charge of
 token colors.
 
+## Header panel groups
+
+The right side of the header is a compact row of icon buttons, grouped by the
+edge each panel is docked to: **left** (Explorer, Git), **right** (Outline) and
+**bottom** (Terminal). Hairlines separate the groups and the active panel gets
+an accent underline, so the current dock layout is readable without opening a
+menu. Clicking a button toggles that panel; clicking Explorer or Git while the
+left dock shows the other tab switches tabs instead of closing the dock. The
+active file label sits to their left and truncates from the left when space runs
+out. The generic toggles remain in the View menu, and every panel is
+bindable through `keymaps.json` (`view.explorer`, `view.git`, `view.outline`,
+`view.terminal`).
+
+Icons are Lucide SVGs vendored under `assets/icons/lucide` (ISC). They are
+compiled in, parsed once by the engine's `igui_svg` renderer and stroked by
+`src/ui/icon.rs` (including Lucide's round caps/joins), so they scale with DPI,
+follow the active palette and need no texture atlas or runtime asset files. The Explorer/Git tabs, the Outline header
+and the Terminal header use the same icon set.
+
 ## Outline (`⌘⌥O`, View → Outline)
 
 The right sidebar shows LSP document symbols (`textDocument/documentSymbol`) for
@@ -324,8 +343,9 @@ The `⇧⌘F` panel has a replace row. `Replace all in files` plans the change a
 asks for confirmation, then rewrites files atomically:
 
 - re-matches each file's **current** text (never stale offsets);
-- skips files open in a tab, changed since the search (length/mtime), binaries
-  and files over 1 MB;
+- skips files open in a tab, changed since the search (length/mtime), binaries,
+  files over 1 MB and files with more than 10,000 matches (reported, not partially
+  rewritten);
 - caps at 200 files per run; failures are listed, the rest still applies;
 - there is no cross-file undo — commit or back up first.
 
@@ -401,6 +421,14 @@ and reveals it. The query is debounced (120 ms) and a new query cancels the old
 worker. The replace row and **Replace all in files** flow are described under
 [Replace in files](#replace-in-files).
 
+## Find and replace (`⌘F` / `⌥⌘F`)
+
+The find bar matches the active buffer with case/whole-word toggles, tints every
+match and steps with `⌘G` / `⇧⌘G`. The match list is capped at 10,000 and the
+counter shows a trailing `+` when the cap is reached. **Replace** changes the
+current match; **Replace All** applies every non-overlapping match as one
+undoable batch (one undo step, one line-index rebuild).
+
 ## Soft wrap (`⌥Z`, View menu)
 
 Off by default and persisted in the session. Long logical lines are split into
@@ -428,14 +456,16 @@ remembered per document and the last ratio is persisted.
 ## Autosave, recovery and window state
 
 - **Autosave** (settings row, default on): dirty files with a path are written
-  after 2 s without edits.
+  after 2 s without edits. Saves/autosaves use temp + fsync + rename (Unix) or
+  remove + rename (Windows), preserve the original permissions and restore the
+  file's LF/CRLF style.
 - **Crash recovery**: dirty buffers (including untitled ones) are snapshotted
   under `<config>/recovery/` after the same idle delay. On the next launch a
   modal offers **Restore All** or **Discard All**; restored buffers keep their
   original name/path and are marked dirty so the first save writes them back.
 - **Window state**: size, position and the maximized flag are persisted and
   restored (fullscreen is not persisted).
-- Session format is version 11 (`window.max` stores maximize state; v10 added
+- Session format is version 12 (`window.max` stores maximize state; v10 added
   the current-tab/window geometry set, v9 `outline_width`, v8 `outline`, v7
   `keymap`, v6 `terminal_open`, `terminal_height`, v5 `sidebar_tab`, v4
   `soft_wrap`); older files still load

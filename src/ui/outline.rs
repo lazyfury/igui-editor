@@ -12,6 +12,7 @@ use igui_ui::{Container, PaintEnv, PointerPhase};
 
 use crate::kit::{self, RectExt};
 use crate::state::{AppState, Focus};
+use crate::ui::icon::{self, Icon};
 
 pub const DEFAULT_WIDTH: f32 = 224.0;
 pub const MIN_WIDTH: f32 = 160.0;
@@ -141,10 +142,18 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         header.bottom(),
         p.border,
     );
+    let icon_rect = Rect::from_min_size(
+        Vec2::new(
+            rect.left() + crate::ui::tree::PAD,
+            header.center().y - icon::SMALL * 0.5,
+        ),
+        Size::new(icon::SMALL, icon::SMALL),
+    );
+    icon::paint(env.ctx, Icon::ListTree, icon_rect, p.dim);
     kit::text(
         env.ctx,
         "OUTLINE",
-        rect.left() + crate::ui::tree::PAD,
+        rect.left() + crate::ui::tree::PAD + icon::SMALL + 5.0,
         header.bottom() - 9.0,
         m.font_small,
         p.dim,

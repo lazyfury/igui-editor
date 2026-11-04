@@ -10,7 +10,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use super::find::{find_all, Matcher};
+use super::find::{find_all_capped, Matcher, MAX_MATCHES};
+use super::fsutil;
 use super::search::MAX_FILE_BYTES;
 
 /// Files replaced in one run.
@@ -70,7 +71,14 @@ pub fn plan(
             errors.push(format!("{}: not UTF-8 text", path.display()));
             continue;
         };
-        let ranges = find_all(&text, matcher);
+        let (ranges, truncated) = find_all_capped(&text, matcher);
+        if truncated {
+            errors.push(format!(
+                "{}: more than {MAX_MATCHES} matches (skipped)",
+                path.display()
+            ));
+            continue;
+        }
         if ranges.is_empty() {
             continue;
         }
@@ -116,34 +124,15 @@ pub fn apply(plans: Vec<PlannedFile>) -> AppliedReplace {
             ));
             continue;
         }
-        let mut tmp_name = plan.path.as_os_str().to_owned();
-        tmp_name.push(".igui-replace.tmp");
-        let tmp = PathBuf::from(tmp_name);
-        match fs::write(&tmp, &plan.new_text) {
+        let permissions = fs::metadata(&plan.path).ok().map(|meta| meta.permissions());
+        match fsutil::atomic_write(&plan.path, plan.new_text.as_bytes(), permissions) {
             Ok(()) => {
-                // Best-effort: keep the original permissions.
-                if let Ok(meta) = fs::metadata(&plan.path) {
-                    let _ = fs::set_permissions(&tmp, meta.permissions());
-                }
-                match fs::rename(&tmp, &plan.path) {
-                    Ok(()) => {
-                        applied.files += 1;
-                        applied.occurrences += plan.count;
-                    }
-                    Err(error) => {
-                        let _ = fs::remove_file(&tmp);
-                        applied
-                            .errors
-                            .push(format!("{}: {error}", plan.path.display()));
-                    }
-                }
+                applied.files += 1;
+                applied.occurrences += plan.count;
             }
-            Err(error) => {
-                let _ = fs::remove_file(&tmp);
-                applied
-                    .errors
-                    .push(format!("{}: {error}", plan.path.display()));
-            }
+            Err(error) => applied
+                .errors
+                .push(format!("{}: {error}", plan.path.display())),
         }
     }
     applied
@@ -210,6 +199,18 @@ mod tests {
         assert_eq!(applied.files, 0);
         assert!(!applied.errors.is_empty());
         assert_eq!(fs::read_to_string(&a).unwrap(), "hello changed\n");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn skips_files_over_the_match_cap_instead_of_partially_replacing() {
+        let dir = temp("cap");
+        let a = dir.join("a.txt");
+        fs::write(&a, "a".repeat(MAX_MATCHES + 1)).unwrap();
+        let (plans, errors) = plan(vec![a.clone()], &matcher("a"), "b", |_| false);
+        assert!(plans.is_empty());
+        assert!(errors.iter().any(|error| error.contains("matches")));
+        assert_eq!(fs::read_to_string(&a).unwrap(), "a".repeat(MAX_MATCHES + 1));
         let _ = fs::remove_dir_all(dir);
     }
 

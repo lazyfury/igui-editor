@@ -10,7 +10,7 @@
 
 use igui_core::{Key, Modifiers};
 
-use crate::state::Action;
+use crate::state::{Action, Panel};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum KeymapId {
@@ -101,7 +101,15 @@ impl KeyChord {
         {
             match part.to_ascii_lowercase().as_str() {
                 "primary" | "cmd" | "command" => primary = true,
-                "ctrl" | "control" => ctrl = true,
+                // On non-macOS `primary` is Ctrl, so a literal `ctrl+` chord
+                // normalizes to the same host bit. On macOS Ctrl is distinct.
+                "ctrl" | "control" => {
+                    if cfg!(target_os = "macos") {
+                        ctrl = true;
+                    } else {
+                        primary = true;
+                    }
+                }
                 "alt" | "option" | "opt" => alt = true,
                 "shift" => shift = true,
                 "meta" | "super" | "win" => meta = true,
@@ -297,6 +305,7 @@ impl Keymap {
             bindings: Vec::new(),
         };
         keymap.add_global();
+        keymap.add_movement();
         match id {
             KeymapId::VsCode => keymap.add_vscode(),
             KeymapId::JetBrains => keymap.add_ide(),
@@ -374,6 +383,35 @@ impl Keymap {
             self.bind(Scope::Global, "primary+tab", Action::NextTab);
             self.bind(Scope::Global, "primary+shift+tab", Action::PreviousTab);
         }
+    }
+
+    /// Movement chords shared by every profile. Editor-scoped so they cannot
+    /// move the document while a field or the terminal owns focus.
+    fn add_movement(&mut self) {
+        self.bind(Scope::Editor, "primary+left", Action::MoveLineStart(false));
+        self.bind(Scope::Editor, "primary+right", Action::MoveLineEnd(false));
+        self.bind(Scope::Editor, "primary+up", Action::MoveDocStart(false));
+        self.bind(Scope::Editor, "primary+down", Action::MoveDocEnd(false));
+        self.bind(
+            Scope::Editor,
+            "primary+shift+left",
+            Action::MoveLineStart(true),
+        );
+        self.bind(
+            Scope::Editor,
+            "primary+shift+right",
+            Action::MoveLineEnd(true),
+        );
+        self.bind(
+            Scope::Editor,
+            "primary+shift+up",
+            Action::MoveDocStart(true),
+        );
+        self.bind(
+            Scope::Editor,
+            "primary+shift+down",
+            Action::MoveDocEnd(true),
+        );
     }
 
     fn add_vscode(&mut self) {
@@ -533,6 +571,10 @@ fn action_from_id(id: &str) -> Option<Action> {
         "edit.deleteWordBackward" | "deleteWordBackward" => Action::DeleteWordBackward,
         "edit.deleteWordForward" | "deleteWordForward" => Action::DeleteWordForward,
         "edit.toggleComment" | "toggleComment" => Action::ToggleComment,
+        "motion.lineStart" => Action::MoveLineStart(false),
+        "motion.lineEnd" => Action::MoveLineEnd(false),
+        "motion.docStart" => Action::MoveDocStart(false),
+        "motion.docEnd" => Action::MoveDocEnd(false),
         "find.find" => Action::Find,
         "find.replace" => Action::FindReplace,
         "find.next" => Action::FindNext,
@@ -541,6 +583,8 @@ fn action_from_id(id: &str) -> Option<Action> {
         "projectSearch" => Action::ProjectSearch,
         "view.cycle" => Action::CycleView,
         "view.sidebar" => Action::ToggleSidebar,
+        "view.explorer" => Action::ShowPanel(Panel::Explorer),
+        "view.git" => Action::ShowPanel(Panel::Git),
         "view.outline" => Action::ToggleOutline,
         "view.theme" => Action::ToggleTheme,
         "view.scrollSync" => Action::ToggleScrollSync,
@@ -605,6 +649,55 @@ mod tests {
         );
         assert_eq!(mac, other);
         assert!(mac.primary);
+    }
+
+    #[test]
+    fn literal_ctrl_resolves_on_every_platform() {
+        let macos = cfg!(target_os = "macos");
+        let ctrl_space = KeyChord::from_event(
+            Key::Space,
+            Modifiers {
+                ctrl: true,
+                ..Modifiers::NONE
+            },
+            macos,
+        );
+        assert_eq!(KeyChord::parse("ctrl+space"), Some(ctrl_space));
+        assert_eq!(
+            Keymap::for_id(KeymapId::VsCode).resolve(Scope::Editor, &[ctrl_space]),
+            Resolution::Command(Action::LspCompletion)
+        );
+
+        let ctrl_backtick = KeyChord::from_event(
+            Key::Character('`'),
+            Modifiers {
+                ctrl: true,
+                ..Modifiers::NONE
+            },
+            macos,
+        );
+        assert_eq!(KeyChord::parse("ctrl+`"), Some(ctrl_backtick));
+        assert_eq!(
+            Keymap::for_id(KeymapId::VsCode).resolve(Scope::Global, &[ctrl_backtick]),
+            Resolution::Command(Action::ToggleTerminal)
+        );
+    }
+
+    #[test]
+    fn movement_chords_are_editor_scoped_and_select_with_shift() {
+        let keymap = Keymap::for_id(KeymapId::VsCode);
+        assert_eq!(
+            keymap.resolve(Scope::Editor, &[chord("primary+left")]),
+            Resolution::Command(Action::MoveLineStart(false))
+        );
+        assert_eq!(
+            keymap.resolve(Scope::Editor, &[chord("primary+shift+down")]),
+            Resolution::Command(Action::MoveDocEnd(true))
+        );
+        assert_eq!(
+            keymap.resolve(Scope::Terminal, &[chord("primary+left")]),
+            Resolution::None
+        );
     }
 
     #[test]

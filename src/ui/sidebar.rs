@@ -14,6 +14,7 @@ use igui_ui::{Container, PaintEnv, PointerPhase};
 use crate::kit::{self, RectExt};
 use crate::state::AppState;
 use crate::theme::Theme;
+use crate::ui::icon::{self, Icon};
 
 pub const HEADER_H: f32 = 28.0;
 
@@ -153,7 +154,10 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     let mut tab_x = rect.left() + 8.0;
     let tabs = state.sidebar_tabs().to_vec();
     for tab in tabs {
-        let width = kit::width(measurer, tab.label, m.font_small) + 16.0;
+        let icon = Icon::from_name(tab.icon);
+        let icon_size = icon::SMALL;
+        let icon_span = if icon.is_some() { icon_size + 5.0 } else { 0.0 };
+        let width = kit::width(measurer, tab.label, m.font_small) + 16.0 + icon_span;
         let hit = Rect::from_min_size(
             Vec2::new(tab_x, header.top()),
             Size::new(width, header.height()),
@@ -168,14 +172,17 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                 p.accent,
             );
         }
-        kit::text(
-            env.ctx,
-            tab.label,
-            hit.left() + 8.0,
-            baseline,
-            m.font_small,
-            if active { p.text } else { p.faint },
-        );
+        let color = if active { p.text } else { p.faint };
+        let mut x = hit.left() + 8.0;
+        if let Some(icon) = icon {
+            let box_rect = Rect::from_min_size(
+                Vec2::new(x, header.center().y - icon_size * 0.5),
+                Size::new(icon_size, icon_size),
+            );
+            icon::paint(env.ctx, icon, box_rect, color);
+            x += icon_span;
+        }
+        kit::text(env.ctx, tab.label, x, baseline, m.font_small, color);
         state.sidebar.tabs.push((tab.id, hit));
         tab_x += width;
     }
@@ -404,8 +411,7 @@ fn click(state: &mut AppState, pos: Vec2) {
     }
     let row_h = state.theme.m.row_h;
     let index = ((pos.y - view.top() - HEADER_H + state.sidebar.scroll) / row_h).floor() as usize;
-    let rows = state.ws.tree.rows();
-    let Some(row) = rows.get(index) else {
+    let Some(row) = state.ws.tree.rows().get(index).cloned() else {
         return;
     };
     if row.is_dir {

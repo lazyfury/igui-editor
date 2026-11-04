@@ -293,7 +293,15 @@ impl AppState {
     }
 
     /// Opens a URL from a BBCode `[url]` span in the platform browser.
+    ///
+    /// Only web/mail schemes are accepted: the URL comes from language-server
+    /// data and must never reach the OS opener as a file/command target.
     pub fn open_external_url(&mut self, url: &str) {
+        let url = url.trim();
+        if !external_url_allowed(url) {
+            self.error("refusing to open an unsupported URL");
+            return;
+        }
         let result = {
             #[cfg(target_os = "macos")]
             {
@@ -305,8 +313,8 @@ impl AppState {
             }
             #[cfg(target_os = "windows")]
             {
-                std::process::Command::new("cmd")
-                    .args(["/C", "start", "", url])
+                std::process::Command::new("rundll32")
+                    .args(["url.dll,FileProtocolHandler", url])
                     .spawn()
             }
             #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
@@ -465,5 +473,32 @@ impl AppState {
         }
         self.dirty = true;
         true
+    }
+}
+
+/// URL schemes accepted by the documentation viewer.
+fn external_url_allowed(url: &str) -> bool {
+    if url.is_empty() || url.len() > 4096 || url.chars().any(char::is_control) {
+        return false;
+    }
+    let lower = url.to_ascii_lowercase();
+    lower.starts_with("https://") || lower.starts_with("http://") || lower.starts_with("mailto:")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn external_urls_are_scheme_restricted() {
+        assert!(external_url_allowed(
+            "https://docs.godotengine.org/en/stable/"
+        ));
+        assert!(external_url_allowed("http://example.com/a?b=1&c=2"));
+        assert!(external_url_allowed("mailto:user@example.com"));
+        assert!(!external_url_allowed("file:///etc/passwd"));
+        assert!(!external_url_allowed("javascript:alert(1)"));
+        assert!(!external_url_allowed("-a Calculator"));
+        assert!(!external_url_allowed("https://example.com/\ncalc"));
     }
 }

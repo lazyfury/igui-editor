@@ -172,7 +172,7 @@ Module ownership and the full file map: [docs/code-map.md](docs/code-map.md).
 
 ## Scope and known gaps
 
-Delivered through M12: shell/editing/tabs, native dialogs, find/replace,
+Delivered through M13: shell/editing/tabs, native dialogs, find/replace,
 Markdown preview, syntax/packs, Quick Open/project search, split/scroll sync,
 tab drag/context menu, soft wrap, external changes, Git, PTY terminal, LSP
 (Rust/Godot), macOS integration, settings and recovery.

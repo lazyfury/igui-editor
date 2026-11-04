@@ -55,7 +55,8 @@ lsp.symbols
 ```
 
 Git read + stage/unstage/commit are wired. Terminal capabilities are declared;
-the first panel currently exposes one session, fixed height, no persistence.
+the first panel exposes one session with a draggable, persisted height and
+open state. Multiple sessions and selection/scrollback are next.
 
 ## Git service
 
@@ -98,9 +99,10 @@ same service.
 
 ## Next
 
-1. Git M8.2: stage/unstage/commit/discard, status-bar branch chip.
-2. Terminal service + panel.
-3. Extension host (deferred): JSON-RPC/WASM mapping of the same capabilities.
+1. Terminal: multiple sessions, selection/copy and scrollback.
+2. Git: discard, branch and network operations (network stays in the terminal).
+3. Workspace Trust before executing repo-local language servers.
+4. Extension host (deferred): JSON-RPC/WASM mapping of the same capabilities.
 
 ## LSP service (Rust, Go, TS/JS, C/C++, Python, Godot)
 

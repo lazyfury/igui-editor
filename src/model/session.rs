@@ -15,6 +15,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use super::fsutil;
+
 const MAX_RECENT: usize = 8;
 
 /// Persisted application state. Missing/corrupt files fall back to defaults.
@@ -280,11 +282,7 @@ impl Session {
 
     /// Writes the session atomically (parent directories are created).
     pub fn save(&self, path: &Path) -> io::Result<()> {
-        let parent = path.parent().unwrap_or_else(|| Path::new("."));
-        fs::create_dir_all(parent)?;
-        let tmp = path.with_extension("tmp");
-        fs::write(&tmp, self.render())?;
-        fs::rename(&tmp, path)
+        fsutil::atomic_write(path, self.render().as_bytes(), None)
     }
 
     /// Moves `path` to the front of the recent list (deduplicated, capped).

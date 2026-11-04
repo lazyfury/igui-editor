@@ -478,26 +478,28 @@ impl EditorApp {
                     return EventResult::Handled;
                 }
                 #[cfg(target_os = "macos")]
-                if let Some(hit) = ui::menu::header_hit(&state, *position) {
-                    // AppKit can re-enter the event loop; never keep the state
-                    // RefCell borrowed across the native call.
-                    drop(state);
-                    self.header_pressed = true;
-                    match hit {
-                        ui::menu::HeaderHit::Close => self.request_quit(),
-                        ui::menu::HeaderHit::Minimize => crate::macos::minimize_window(),
-                        ui::menu::HeaderHit::Zoom => {
-                            crate::macos::toggle_zoom();
-                            self.save_window_state();
+                if ui::menu::panel_at(&state, *position).is_none() {
+                    if let Some(hit) = ui::menu::header_hit(&state, *position) {
+                        // AppKit can re-enter the event loop; never keep the state
+                        // RefCell borrowed across the native call.
+                        drop(state);
+                        self.header_pressed = true;
+                        match hit {
+                            ui::menu::HeaderHit::Close => self.request_quit(),
+                            ui::menu::HeaderHit::Minimize => crate::macos::minimize_window(),
+                            ui::menu::HeaderHit::Zoom => {
+                                crate::macos::toggle_zoom();
+                                self.save_window_state();
+                            }
+                            ui::menu::HeaderHit::Drag => {
+                                // Capture the press-to-frame offset now; movement
+                                // only starts after the click threshold.
+                                crate::macos::begin_window_drag();
+                                self.window_drag_pending = Some(*position);
+                            }
                         }
-                        ui::menu::HeaderHit::Drag => {
-                            // Capture the press-to-frame offset now; movement
-                            // only starts after the click threshold.
-                            crate::macos::begin_window_drag();
-                            self.window_drag_pending = Some(*position);
-                        }
+                        return EventResult::Handled;
                     }
-                    return EventResult::Handled;
                 }
                 if state.tooling.prompt.is_some() {
                     ui::tooling::click(&mut state, *position);
@@ -632,6 +634,9 @@ impl EditorApp {
                     state.dirty = true;
                     return EventResult::Handled;
                 }
+                if ui::menu::handle_panel_click(&mut state, *position) {
+                    return EventResult::Handled;
+                }
                 if ui::menu::handle_bar_click(&mut state, *position) {
                     return EventResult::Handled;
                 }
@@ -750,6 +755,7 @@ impl EditorApp {
                 let lsp_hover = state.lsp_hit.contains(*position);
                 let lsp_toggle_hover = state.lsp_toggle_hit.contains(*position);
                 let header_hover = ui::menu::header_button_at(&state, *position);
+                let panel_hover = ui::menu::panel_at(&state, *position);
                 let git_hover = ui::git::hover_rect(&state, *position);
                 if state.git.hover != git_hover {
                     state.git.hover = git_hover;
@@ -782,6 +788,7 @@ impl EditorApp {
                     || state.lsp_toggle_hover != lsp_toggle_hover
                     || state.problems.hover != problems
                     || state.header_hover != header_hover
+                    || state.panel_hover != panel_hover
                 {
                     state.menubar_hover = menubar;
                     state.menu_hover = menu_hover;
@@ -792,6 +799,7 @@ impl EditorApp {
                     state.lsp_toggle_hover = lsp_toggle_hover;
                     state.problems.hover = problems;
                     state.header_hover = header_hover;
+                    state.panel_hover = panel_hover;
                     state.dirty = true;
                 }
                 if tab_menu_changed || tree_menu_changed {
@@ -844,6 +852,13 @@ impl EditorApp {
             InputEvent::DoubleClick { position } => {
                 #[cfg(target_os = "macos")]
                 {
+                    let on_panel = {
+                        let state = self.state.borrow();
+                        ui::menu::panel_at(&state, *position).is_some()
+                    };
+                    if on_panel {
+                        return EventResult::Handled;
+                    }
                     let hit = {
                         let state = self.state.borrow();
                         ui::menu::header_hit(&state, *position)
@@ -1112,6 +1127,7 @@ impl EditorApp {
                     state.git.hover = None;
                     state.outline.hover = None;
                     state.header_hover = None;
+                    state.panel_hover = None;
                     if let Some(menu) = state.tab_menu.as_mut() {
                         menu.hover = None;
                     }

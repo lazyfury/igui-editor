@@ -26,10 +26,11 @@ use crate::app::EditorApp;
 use crate::dialogs::{Call, ScriptedDialogs};
 use crate::keymap::KeymapId;
 use crate::kit::RectExt;
+use crate::model::doc::LineEnding;
 use crate::model::recovery::RecoveryStore;
 use crate::model::session::WindowGeometry;
 use crate::settings::Row;
-use crate::state::{Action, Focus, HeaderButton, Menu, ModalButton, ViewMode};
+use crate::state::{Action, Focus, HeaderButton, Menu, ModalButton, Panel, ViewMode};
 use crate::theme::Mode;
 
 const WIDTH: f32 = 1200.0;
@@ -158,6 +159,111 @@ impl Harness {
         // The bar records its hit rectangles during paint.
         let _ = self.frame();
     }
+}
+
+/// Header panel group: one recorded hit per panel, icon strokes in the header
+/// band, and a click toggles the dock without starting a window drag.
+fn check_header_panels(harness: &mut Harness, frame: &RecordedFrame) -> Result<(), String> {
+    let (buttons, menubar_h, viewport_right) = {
+        let state = harness.app.state();
+        (
+            state.panel_hits.clone(),
+            state.theme.m.menubar_h,
+            state.viewport.logical_rect().right(),
+        )
+    };
+    if buttons.len() != Panel::ALL.len() {
+        return Err(format!(
+            "expected {} header panel buttons, got {}",
+            Panel::ALL.len(),
+            buttons.len()
+        ));
+    }
+    for (panel, rect) in &buttons {
+        if rect.height() < 20.0 || rect.left() < 0.0 || rect.right() > viewport_right + 0.5 {
+            return Err(format!(
+                "{panel:?} panel button has invalid geometry {rect:?}"
+            ));
+        }
+        if rect.top() < 0.0 || rect.bottom() > menubar_h + 0.5 {
+            return Err(format!("{panel:?} panel button escapes the header band"));
+        }
+    }
+    for pair in buttons.windows(2) {
+        if pair[0].1.right() > pair[1].1.left() + 0.5 {
+            return Err(format!(
+                "panel buttons overlap: {:?} then {:?}",
+                pair[0].0, pair[1].0
+            ));
+        }
+    }
+    let header_stroke = frame.commands().iter().any(|command| match command {
+        DrawCommand::Line { from, to, .. } => from.y <= menubar_h && to.y <= menubar_h,
+        DrawCommand::FillCircle { center, .. } => center.y <= menubar_h,
+        _ => false,
+    });
+    if !header_stroke {
+        return Err("header panel icons painted no strokes".into());
+    }
+
+    let center = |panel: Panel| -> Result<Vec2, String> {
+        buttons
+            .iter()
+            .find(|(candidate, _)| *candidate == panel)
+            .map(|(_, rect)| rect.center())
+            .ok_or_else(|| format!("no header button for {panel:?}"))
+    };
+    let explorer = center(Panel::Explorer)?;
+    let initially_open = Panel::Explorer.is_open(&harness.app.state());
+    harness.click(explorer);
+    harness.frame()?;
+    if Panel::Explorer.is_open(&harness.app.state()) == initially_open {
+        return Err("clicking the header Explorer toggle did not change the sidebar".into());
+    }
+    harness.click(explorer);
+    harness.frame()?;
+    if Panel::Explorer.is_open(&harness.app.state()) != initially_open {
+        return Err("the Explorer header toggle did not restore the sidebar".into());
+    }
+
+    let git = center(Panel::Git)?;
+    harness.click(git);
+    harness.frame()?;
+    if !Panel::Git.is_open(&harness.app.state()) {
+        return Err("clicking the header Git toggle did not open the Git dock".into());
+    }
+    harness.click(explorer);
+    harness.frame()?;
+    if !Panel::Explorer.is_open(&harness.app.state()) {
+        return Err("the Explorer header toggle did not switch back from Git".into());
+    }
+
+    let outline = center(Panel::Outline)?;
+    let outline_before = harness.app.state().show_outline;
+    harness.click(outline);
+    harness.frame()?;
+    if harness.app.state().show_outline == outline_before {
+        return Err("clicking the header Outline toggle did not change the outline".into());
+    }
+    harness.click(outline);
+    harness.frame()?;
+    if harness.app.state().show_outline != outline_before {
+        return Err("the Outline header toggle did not restore the outline".into());
+    }
+
+    // Hover feedback is state-only (no domain change).
+    harness.event(InputEvent::PointerMove { position: explorer });
+    if harness.app.state().panel_hover != Some(Panel::Explorer) {
+        return Err("moving over a header panel button did not set its hover".into());
+    }
+    harness.event(InputEvent::PointerMove {
+        position: Vec2::new(400.0, 400.0),
+    });
+    if harness.app.state().panel_hover.is_some() {
+        return Err("leaving the header did not clear the panel-button hover".into());
+    }
+    harness.frame()?;
+    Ok(())
 }
 
 fn check(dir: &Path) -> Result<(), String> {
@@ -313,6 +419,7 @@ fn check(dir: &Path) -> Result<(), String> {
     expect(&painted, "main.rs", "active tab / status file")?;
     expect(&painted, "EXPLORER", "sidebar header")?;
     expect(&painted, "notes.md", "sidebar rows")?;
+    check_header_panels(&mut harness, &frame)?;
     if !frame
         .commands()
         .iter()
@@ -2775,11 +2882,14 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
     store
         .save(
             7,
-            "recovered.txt",
-            Some(Path::new("/tmp/original.txt")),
-            "recovered body\n",
-            3,
-            1,
+            crate::model::recovery::Snapshot {
+                name: "recovered.txt",
+                path: Some(Path::new("/tmp/original.txt")),
+                text: "recovered body\n",
+                caret: 3,
+                anchor: 1,
+                eol: LineEnding::Crlf,
+            },
         )
         .map_err(|error| format!("recovery fixture: {error}"))?;
     let mut harness = Harness::new(
@@ -2838,7 +2948,17 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
     fs::create_dir_all(&discard_dir).map_err(|error| format!("fixture: {error}"))?;
     let store = RecoveryStore::new(discard_dir.join("recovery"));
     store
-        .save(9, "discard.txt", None, "discard me", 0, 0)
+        .save(
+            9,
+            crate::model::recovery::Snapshot {
+                name: "discard.txt",
+                path: None,
+                text: "discard me",
+                caret: 0,
+                anchor: 0,
+                eol: LineEnding::Lf,
+            },
+        )
         .map_err(|error| format!("recovery fixture: {error}"))?;
     let mut harness = Harness::new(
         None,

@@ -176,7 +176,9 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    metadata snapshot under `<config>/recovery/`, and a startup prompt offers
    Restore All / Discard All. Window size/position and the maximized flag
    persist in the session and are restored on launch. Session format is version
-   11 (`window.max` stores maximize state).
+   12 (`window.max` stores maximize state). Saves use temp + fsync + rename
+   (remove + rename on Windows) and preserve the file's LF/CRLF style,
+   permissions and the undo save point.
 24. **Language packs are data, not code.** `<config>/languages/*.json` packs are
    validated, capped and registered into `SyntaxRegistry` after the built-ins
    (the registry keeps the first registration, so a pack can never shadow a
@@ -268,6 +270,17 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
     overlays (menus, modals, git diff) are still painted every frame. The mono
     family list is Menlo-first because it also covers prompt symbols (`➜`,
     `✗`); a face miss would make the font server load a huge fallback font.
+
+30. **Icons are vendored vectors, and panels declare their dock.** Lucide SVGs
+   live under `assets/icons/` (ISC) and are embedded with `include_str!`; no
+   network, build step or texture atlas. The engine's `igui_svg` crate parses the
+   subset into flattened polylines and strokes them (round caps/joins included);
+   `ui::icon` only caches the parsed documents and paints them in the active
+   palette color, so icons stay crisp at any DPI. `state::panels` is the single table
+   for toggleable panels: dock group, icon, label, command and open state. The
+   header's right side lays those panels out as grouped buttons from one
+   function and records the hit rectangles during paint; the same table also
+   drives the sidebar tabs' icons and the Outline/Terminal headers.
 
 ## Theme spec (geek / compact / no corners)
 
@@ -393,10 +406,10 @@ with vt100 cell rendering and `⌃\`` toggle. Extension host remains deferred.
 IME caret, vim application cursor mode and live PTY repaint. Next: multiple
 terminal sessions, selection/copy, scrollback.
 
-Next candidates: terminal drag-resize/multiple sessions/session restore, Git
+Next candidates: terminal multiple sessions/selection/scrollback, Git
 discard/branch/network operations, native close-guard/Dock-reopen polish,
-per-hit replace and cross-file undo, incremental preview layout for very large
-documents, word-boundary wrapping.
+cross-file undo, incremental preview layout for very large documents,
+word-boundary wrapping and grapheme-aware editing.
 
 ## Non-goals for the editor core
 
