@@ -78,5 +78,6 @@ persistence, and folder/split/window restored from the session.
 
 No OS capture of any kind is used. Native AppKit menus and the borderless
 window chrome are a manual smoke-test item; the headless check covers the
-custom header hit rectangles but cannot drive macOS's menu bar. Performance
-methodology and budgets are in [benchmarks.md](benchmarks.md).
+custom header hit rectangles, hover feedback and double-click routing but cannot
+drive macOS's menu bar, window drag or native zoom. Performance methodology and
+budgets are in [benchmarks.md](benchmarks.md).

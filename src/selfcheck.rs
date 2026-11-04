@@ -29,7 +29,7 @@ use crate::kit::RectExt;
 use crate::model::recovery::RecoveryStore;
 use crate::model::session::WindowGeometry;
 use crate::settings::Row;
-use crate::state::{Action, Focus, Menu, ModalButton, ViewMode};
+use crate::state::{Action, Focus, HeaderButton, Menu, ModalButton, ViewMode};
 use crate::theme::Mode;
 
 const WIDTH: f32 = 1200.0;
@@ -237,6 +237,74 @@ fn check(dir: &Path) -> Result<(), String> {
     if cfg!(target_os = "macos") {
         if harness.app.state().header_close.width() == 0.0 {
             return Err("custom macOS traffic lights were not painted".into());
+        }
+        let (close, minimize, zoom, drag) = {
+            let state = harness.app.state();
+            (
+                state.header_close.center(),
+                state.header_minimize.center(),
+                state.header_zoom.center(),
+                Vec2::new(
+                    state.header_zoom.right() + 30.0,
+                    state.theme.m.menubar_h * 0.5,
+                ),
+            )
+        };
+        let state = harness.app.state();
+        for (position, expected) in [
+            (close, crate::ui::menu::HeaderHit::Close),
+            (minimize, crate::ui::menu::HeaderHit::Minimize),
+            (zoom, crate::ui::menu::HeaderHit::Zoom),
+            (drag, crate::ui::menu::HeaderHit::Drag),
+        ] {
+            if crate::ui::menu::header_hit(&state, position) != Some(expected) {
+                return Err(format!(
+                    "custom header misclassified {position:?} (expected {expected:?})"
+                ));
+            }
+        }
+        drop(state);
+        // Hovering a traffic light darkens it and reveals the glyph group.
+        let base_color =
+            circle_color(&frame, close).ok_or("the red traffic light did not paint a circle")?;
+        harness.event(InputEvent::PointerMove { position: close });
+        if harness.app.state().header_hover != Some(HeaderButton::Close) {
+            return Err("moving over the red light did not set its hover state".into());
+        }
+        let hovered = harness.frame()?;
+        let hover_color = circle_color(&hovered, close)
+            .ok_or("the hovered red traffic light did not paint a circle")?;
+        if hover_color == base_color {
+            return Err("the red traffic light did not change color on hover".into());
+        }
+        if !hovered.commands().iter().any(|command| {
+            matches!(
+                command,
+                DrawCommand::Line { from, to, .. }
+                    if close.x - 4.0 <= from.x
+                        && from.x <= close.x + 4.0
+                        && close.y - 4.0 <= from.y
+                        && from.y <= close.y + 4.0
+                        && close.x - 4.0 <= to.x
+                        && to.x <= close.x + 4.0
+                        && close.y - 4.0 <= to.y
+                        && to.y <= close.y + 4.0
+            )
+        }) {
+            return Err("the hovered traffic light did not reveal its glyph".into());
+        }
+        harness.event(InputEvent::PointerLeave);
+        if harness.app.state().header_hover.is_some() {
+            return Err("leaving the window did not clear the traffic-light hover".into());
+        }
+        // A header double-click is ours (zoom/maximize), never an editor word
+        // selection that happens to sit under the pointer.
+        if !harness
+            .app
+            .event(&InputEvent::DoubleClick { position: drag })
+            .is_handled()
+        {
+            return Err("the custom header did not consume a double-click".into());
         }
     } else {
         expect(&painted, "File", "menu bar labels")?;
@@ -2361,6 +2429,7 @@ fn check(dir: &Path) -> Result<(), String> {
         .app
         .state_mut()
         .set_window_geometry((1111.0, 777.0), (33.0, 44.0));
+    harness.app.state_mut().set_window_maximized(true);
     harness.frame()?;
 
     // -- theme toggle (persisted) ---------------------------------------
@@ -2554,6 +2623,9 @@ fn check(dir: &Path) -> Result<(), String> {
                 "session restore lost the window geometry ({:?})",
                 state.session.window
             ));
+        }
+        if !state.session.window_maximized {
+            return Err("session restore lost the maximized window state".into());
         }
         if (state.session.split - 0.5).abs() > 0.01 {
             return Err(format!(
@@ -4468,6 +4540,19 @@ fn draw_text_has_color(frame: &RecordedFrame, needle: &str, color: [u8; 4]) -> b
             text == needle && paint.color.to_rgba8() == color
         }
         _ => false,
+    })
+}
+
+fn circle_color(frame: &RecordedFrame, center: Vec2) -> Option<[u8; 4]> {
+    frame.commands().iter().find_map(|command| match command {
+        DrawCommand::FillCircle {
+            center: painted,
+            paint,
+            ..
+        } if (painted.x - center.x).abs() < 0.5 && (painted.y - center.y).abs() < 0.5 => {
+            Some(paint.color.to_rgba8())
+        }
+        _ => None,
     })
 }
 

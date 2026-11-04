@@ -20,7 +20,7 @@ const MAX_RECENT: usize = 8;
 /// Persisted application state. Missing/corrupt files fall back to defaults.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Session {
-    /// Format version (currently `10`); unknown keys are ignored so
+    /// Format version (currently `11`); unknown keys are ignored so
     /// older/newer files keep loading.
     pub version: u32,
     /// `"dark"` or `"light"`.
@@ -65,6 +65,8 @@ pub struct Session {
     pub keymap: String,
     /// Last window geometry (logical size + position).
     pub window: Option<WindowGeometry>,
+    /// Restore the window maximized (zoomed).
+    pub window_maximized: bool,
 }
 
 /// Persisted window size/position in logical pixels.
@@ -77,7 +79,7 @@ pub struct WindowGeometry {
 impl Default for Session {
     fn default() -> Self {
         Self {
-            version: 10,
+            version: 11,
             theme: "dark".into(),
             sidebar: true,
             outline: true,
@@ -102,6 +104,7 @@ impl Default for Session {
             terminal_height: 220.0,
             keymap: "vscode".into(),
             window: None,
+            window_maximized: false,
         }
     }
 }
@@ -181,6 +184,7 @@ impl Session {
                 "window.h" => window[1] = value.parse().ok(),
                 "window.x" => window[2] = value.parse().ok(),
                 "window.y" => window[3] = value.parse().ok(),
+                "window.max" => session.window_maximized = value == "1",
                 "version" => session.version = value.parse().unwrap_or(session.version),
                 key if key.starts_with("recent.") => {
                     if let Ok(index) = key["recent.".len()..].parse::<usize>() {
@@ -215,7 +219,7 @@ impl Session {
     pub fn render(&self) -> String {
         let mut out = String::new();
         // Always write the current format; parsing older files still works.
-        out.push_str("version=10\n");
+        out.push_str("version=11\n");
         out.push_str(&format!("theme={}\n", self.theme));
         out.push_str(&format!("sidebar={}\n", u8::from(self.sidebar)));
         out.push_str(&format!("outline={}\n", u8::from(self.outline)));
@@ -253,6 +257,7 @@ impl Session {
             out.push_str(&format!("window.x={}\n", window.position.0));
             out.push_str(&format!("window.y={}\n", window.position.1));
         }
+        out.push_str(&format!("window.max={}\n", u8::from(self.window_maximized)));
         for (index, path) in self.recent.iter().take(MAX_RECENT).enumerate() {
             out.push_str(&format!(
                 "recent.{index}={}\n",
@@ -404,6 +409,7 @@ mod tests {
                 size: (1024.0, 700.0),
                 position: (40.0, 60.0),
             }),
+            window_maximized: true,
             ..Session::default()
         };
         session.save(&path).unwrap();

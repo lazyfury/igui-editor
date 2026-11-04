@@ -208,8 +208,10 @@ contents do not. Multiple sessions are a follow-up.
 - **Custom window chrome**: the macOS window is borderless/full-size-content
   with the native title bar and traffic lights hidden. The header paints
   simulated red/yellow/green controls; red uses the existing dirty-quit guard,
-  yellow minimizes and green toggles zoom. Pressing anywhere else on the header
-  starts an AppKit window drag.
+  yellow minimizes and green toggles maximize/restore. Pressing anywhere else
+  on the header starts a custom window drag; double-clicking it toggles
+  maximize/restore. Quit requests are deferred one run-loop turn, because
+  AppKit's terminate notification re-enters winit's event handler.
 - The `.app` registers text/Markdown document types (`txt`, `md`, `markdown`,
   `mdown`, `mkd`) with Editor role and `Alternate` rank. Finder double-click,
   `open -a`, “Open With” and cold launch all feed the same native request queue.
@@ -402,11 +404,12 @@ remembered per document and the last ratio is persisted.
   under `<config>/recovery/` after the same idle delay. On the next launch a
   modal offers **Restore All** or **Discard All**; restored buffers keep their
   original name/path and are marked dirty so the first save writes them back.
-- **Window state**: size and position are persisted and restored (skipped while
-  maximized/fullscreen).
-- Session format is version 10 (`active` restores the current tab; v9 added
-  `outline_width`, v8 `outline`, v7 `keymap`, v6 `terminal_open`,
-  `terminal_height`, v5 `sidebar_tab`, v4 `soft_wrap`); older files still load
+- **Window state**: size, position and the maximized flag are persisted and
+  restored (fullscreen is not persisted).
+- Session format is version 11 (`window.max` stores maximize state; v10 added
+  the current-tab/window geometry set, v9 `outline_width`, v8 `outline`, v7
+  `keymap`, v6 `terminal_open`, `terminal_height`, v5 `sidebar_tab`, v4
+  `soft_wrap`); older files still load
   (v1 infers the folder from the first tab, and sessions without `active` fall
   back to the last opened tab).
 

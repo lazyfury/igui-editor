@@ -174,9 +174,9 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
 23. **Reliability is explicit.** Autosave writes dirty files with a path after
    2 s idle; every dirty buffer (including untitled) gets a raw `.txt` +
    metadata snapshot under `<config>/recovery/`, and a startup prompt offers
-   Restore All / Discard All. Window size/position persist in the session
-   (restored unless maximized). Session format is version 6 (`sidebar_tab`,
-   terminal open/height).
+   Restore All / Discard All. Window size/position and the maximized flag
+   persist in the session and are restored on launch. Session format is version
+   11 (`window.max` stores maximize state).
 24. **Language packs are data, not code.** `<config>/languages/*.json` packs are
    validated, capped and registered into `SyntaxRegistry` after the built-ins
    (the registry keeps the first registration, so a pack can never shadow a
@@ -364,8 +364,8 @@ recent items, dirty quit confirmation.
 
 **M13 (done)** — native macOS main menu (App/File/Edit/View/Window/Help),
 borderless full-size-content window, simulated traffic lights in the custom
-header, header drag and native zoom/minimize routing; the in-app header menu is
-hidden on macOS.
+header, header drag, double-click maximize/restore and native zoom/minimize
+routing; the in-app header menu is hidden on macOS.
 
 **M8/M9 (first slice)** — native service/built-in plugin registry (Git and
 Terminal descriptors), Git status/diff/stage/unstage/commit, native PTY terminal

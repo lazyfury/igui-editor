@@ -90,9 +90,13 @@ preview scrolls with the wheel/trackpad or its scrollbar.
 
 On macOS the application menu is the **native system menu bar** (App, File,
 Edit, View, Window, Help); the in-app header only carries the simulated window
-controls. On other platforms the in-app File/Edit/View menus remain
-mouse-operated. Menu shortcut hints in the in-app UI are resolved from the active
-keymap profile, so VS Code / JetBrains / Vim show the chords they actually use.
+controls. The custom header's red / yellow / green lights route to the quit
+guard, minimize and maximize/restore; hovering a light darkens it and reveals
+the glyph group, dragging the empty band moves the window, and double-clicking
+it toggles maximize/restore. On other platforms the in-app File/Edit/View menus
+remain mouse-operated. Menu shortcut hints in the in-app UI are resolved from
+the active keymap profile, so VS Code / JetBrains / Vim show the chords they
+actually use.
 
 Mouse: click a folder to expand it, a file to open it in a tab, `×` to close a
 tab (unsaved tabs open a Save / Discard / Cancel modal), `+` for a new buffer,

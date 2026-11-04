@@ -13,7 +13,7 @@ use igui_scene::SceneTree;
 use igui_ui::{Container, PaintEnv, TextMeasurer};
 
 use crate::kit::{self, RectExt};
-use crate::state::{self, Action, AppState, Menu};
+use crate::state::{self, Action, AppState, HeaderButton, Menu};
 
 /// Drop-down geometry.
 pub const POPUP_W: f32 = 300.0;
@@ -66,11 +66,67 @@ fn paint_bar(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             Color::new(1.0, 0.74, 0.18, 1.0),
             Color::new(0.16, 0.78, 0.25, 1.0),
         ];
+        let buttons = [
+            HeaderButton::Close,
+            HeaderButton::Minimize,
+            HeaderButton::Zoom,
+        ];
+        let group_hover = state.header_hover.is_some();
+        let glyph = Color::new(0.0, 0.0, 0.0, 0.68);
         let mut lights = [Rect::ZERO; 3];
-        for (index, color) in colors.into_iter().enumerate() {
+        for (index, (color, button)) in colors.into_iter().zip(buttons).enumerate() {
             let cx = rect.left() + LIGHT_X + index as f32 * LIGHT_GAP;
             let cy = rect.center().y;
-            env.ctx.fill_circle(Vec2::new(cx, cy), LIGHT_R, color);
+            let center = Vec2::new(cx, cy);
+            let hovered = state.header_hover == Some(button);
+            let fill = if hovered {
+                color.lerp(Color::BLACK, 0.18)
+            } else {
+                color
+            };
+            env.ctx.fill_circle(center, LIGHT_R, fill);
+            if group_hover {
+                // Native traffic lights reveal their glyph once the group is
+                // hovered; the hovered one also darkens above.
+                match button {
+                    HeaderButton::Close => {
+                        env.ctx.draw_line(
+                            Vec2::new(cx - 3.0, cy - 3.0),
+                            Vec2::new(cx + 3.0, cy + 3.0),
+                            1.4,
+                            glyph,
+                        );
+                        env.ctx.draw_line(
+                            Vec2::new(cx - 3.0, cy + 3.0),
+                            Vec2::new(cx + 3.0, cy - 3.0),
+                            1.4,
+                            glyph,
+                        );
+                    }
+                    HeaderButton::Minimize => {
+                        env.ctx.draw_line(
+                            Vec2::new(cx - 3.2, cy),
+                            Vec2::new(cx + 3.2, cy),
+                            1.4,
+                            glyph,
+                        );
+                    }
+                    HeaderButton::Zoom => {
+                        env.ctx.draw_line(
+                            Vec2::new(cx - 3.0, cy),
+                            Vec2::new(cx + 3.0, cy),
+                            1.4,
+                            glyph,
+                        );
+                        env.ctx.draw_line(
+                            Vec2::new(cx, cy - 3.0),
+                            Vec2::new(cx, cy + 3.0),
+                            1.4,
+                            glyph,
+                        );
+                    }
+                }
+            }
             lights[index] = Rect::from_min_size(
                 Vec2::new(cx - LIGHT_R - 4.0, rect.top()),
                 Size::new((LIGHT_R + 4.0) * 2.0, rect.height()),
@@ -140,6 +196,47 @@ fn paint_bar(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         m.font_small,
         p.faint,
     );
+}
+
+/// What a press/double-click in the custom macOS header means.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum HeaderHit {
+    /// The empty band: drag the window.
+    Drag,
+    Close,
+    Minimize,
+    Zoom,
+}
+
+/// Traffic light under the pointer, if any.
+pub fn header_button_at(state: &AppState, pos: Vec2) -> Option<HeaderButton> {
+    if !cfg!(target_os = "macos") || pos.y < 0.0 || pos.y >= state.theme.m.menubar_h {
+        return None;
+    }
+    if state.header_close.contains(pos) {
+        Some(HeaderButton::Close)
+    } else if state.header_minimize.contains(pos) {
+        Some(HeaderButton::Minimize)
+    } else if state.header_zoom.contains(pos) {
+        Some(HeaderButton::Zoom)
+    } else {
+        None
+    }
+}
+
+/// Classifies a point in the custom header. Paint records the traffic-light
+/// rectangles in [`AppState`]; both press and double-click use this one
+/// function, so the hit and painted geometry cannot drift.
+pub fn header_hit(state: &AppState, pos: Vec2) -> Option<HeaderHit> {
+    if !cfg!(target_os = "macos") || pos.y < 0.0 || pos.y >= state.theme.m.menubar_h {
+        return None;
+    }
+    Some(match header_button_at(state, pos) {
+        Some(HeaderButton::Close) => HeaderHit::Close,
+        Some(HeaderButton::Minimize) => HeaderHit::Minimize,
+        Some(HeaderButton::Zoom) => HeaderHit::Zoom,
+        None => HeaderHit::Drag,
+    })
 }
 
 /// Drop-down rectangle and per-item rectangles (separators keep their rect but

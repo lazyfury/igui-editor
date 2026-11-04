@@ -131,4 +131,12 @@ impl AppState {
             self.config_dirty = true;
         }
     }
+
+    /// Persists whether the window was maximized (zoomed) on exit.
+    pub fn set_window_maximized(&mut self, maximized: bool) {
+        if self.session.window_maximized != maximized {
+            self.session.window_maximized = maximized;
+            self.config_dirty = true;
+        }
+    }
 }

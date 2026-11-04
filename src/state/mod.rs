@@ -84,6 +84,14 @@ impl Menu {
     }
 }
 
+/// Which custom macOS header traffic light is under the pointer.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum HeaderButton {
+    Close,
+    Minimize,
+    Zoom,
+}
+
 /// How the active document is shown.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum ViewMode {
@@ -998,6 +1006,8 @@ pub struct AppState {
     pub header_close: Rect,
     pub header_minimize: Rect,
     pub header_zoom: Rect,
+    /// Traffic light under the pointer, for hover feedback.
+    pub header_hover: Option<HeaderButton>,
     pub menu_rect: Rect,
     /// Popup item rectangles, in item order (separators have no rect).
     pub menu_items: Vec<(Action, Rect)>,
@@ -1155,6 +1165,7 @@ impl AppState {
             header_close: Rect::ZERO,
             header_minimize: Rect::ZERO,
             header_zoom: Rect::ZERO,
+            header_hover: None,
             menu_rect: Rect::ZERO,
             menu_items: Vec::new(),
             menu_hover: None,

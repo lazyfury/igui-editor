@@ -19,10 +19,10 @@ use objc2::runtime::{AnyClass, AnyObject, Imp, NSObject, NSObjectProtocol, Sel};
 use objc2::{define_class, msg_send, sel, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSApplicationTerminateReply, NSDocumentController, NSEventModifierFlags, NSMenu,
-    NSMenuItem,
+    NSMenuItem, NSScreen,
 };
 use objc2_foundation::{
-    ns_string, NSAppleEventDescriptor, NSAppleEventManager, NSArray, NSString, NSURL,
+    ns_string, NSAppleEventDescriptor, NSAppleEventManager, NSArray, NSRect, NSString, NSURL,
 };
 
 use crate::native::{self, NativeCommand, NativeRequest};
@@ -45,9 +45,23 @@ thread_local! {
     static RECENT: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
     static DIRTY: Cell<usize> = const { Cell::new(0) };
     static ALLOW_QUIT: Cell<bool> = const { Cell::new(false) };
+    /// A terminate/reply already sits on the run loop. Calling AppKit's
+    /// terminate synchronously from a winit event callback makes
+    /// `applicationWillTerminate:` re-enter the event handler and abort.
+    static QUIT_PENDING: Cell<bool> = const { Cell::new(false) };
     static SET_DELEGATE_IMP: Cell<Option<Imp>> = const { Cell::new(None) };
     static MENU_TARGET: RefCell<Option<ManuallyDrop<Retained<AppMenuTarget>>>> = const { RefCell::new(None) };
     static MAIN_MENU: RefCell<Option<ManuallyDrop<Retained<NSMenu>>>> = const { RefCell::new(None) };
+    /// Cursor offset from the window frame origin while a custom header drag is
+    /// active. The frame is moved from the frame clock (polling the cursor),
+    /// not by a nested AppKit drag loop: that loop fights winit and can swallow
+    /// the release event.
+    static DRAG_OFFSET: Cell<Option<(f64, f64)>> = const { Cell::new(None) };
+    /// Frame saved before the custom green-button zoom, in screen coordinates.
+    /// `Some` means the window is currently zoomed (maximized). We own this
+    /// instead of asking winit: `Window::is_maximized` temporarily swaps a
+    /// borderless window to a titled style mask, which can visibly jump.
+    static ZOOM_RESTORE: Cell<Option<NSRect>> = const { Cell::new(None) };
 }
 
 fn wake() {
@@ -172,13 +186,15 @@ pub fn set_dirty_count(dirty: usize) {
     DIRTY.with(|slot| slot.set(dirty));
 }
 
-/// Tell AppKit that the in-app quit confirmation finished.
+/// Tell AppKit that the in-app quit confirmation finished. The reply is
+/// deferred to the next run-loop turn: it can still run `applicationWillTerminate:`
+/// and must not re-enter winit's event handler.
 pub fn reply_quit(terminate: bool) {
     ALLOW_QUIT.with(|slot| slot.set(terminate));
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
-    NSApplication::sharedApplication(mtm).replyToApplicationShouldTerminate(terminate);
+    schedule(menu_target(mtm), sel!(replyQuit));
 }
 
 pub fn note_recent(path: &Path) {
@@ -193,13 +209,32 @@ pub fn note_recent(path: &Path) {
     NSDocumentController::sharedDocumentController(mtm).noteNewRecentDocumentURL(&url);
 }
 
-/// Simulated red traffic light: ask AppKit to terminate; the existing
-/// `applicationShouldTerminate:` guard handles dirty buffers.
+/// Simulated red traffic light / Quit command: ask AppKit to terminate; the
+/// existing `applicationShouldTerminate:` guard handles dirty buffers. AppKit's
+/// terminate notification re-enters winit's event handler, so run it after the
+/// current event callback returns.
 pub fn request_quit() {
+    if QUIT_PENDING.with(Cell::get) {
+        return;
+    }
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
-    NSApplication::sharedApplication(mtm).terminate(None);
+    QUIT_PENDING.with(|slot| slot.set(true));
+    schedule(menu_target(mtm), sel!(terminateApp));
+}
+
+/// Queues a no-argument selector for the next run-loop turn. `performSelector:`
+/// is how we escape AppKit callbacks without adding a block dependency.
+fn schedule(target: Retained<AppMenuTarget>, selector: Sel) {
+    unsafe {
+        let _: () = msg_send![
+            &target,
+            performSelector: selector,
+            withObject: Option::<&AnyObject>::None,
+            afterDelay: 0.0f64
+        ];
+    }
 }
 
 pub fn minimize_window() {
@@ -207,10 +242,30 @@ pub fn minimize_window() {
 }
 
 pub fn toggle_zoom() {
-    with_window(|window| {
-        let maximized = window.is_maximized();
-        window.set_maximized(!maximized);
-    });
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let Some(window) = key_window(mtm) else {
+        return;
+    };
+    if let Some(frame) = ZOOM_RESTORE.with(Cell::get) {
+        ZOOM_RESTORE.with(|slot| slot.set(None));
+        window.setFrame_display(frame, true);
+        return;
+    }
+    let Some(screen) = window.screen().or_else(|| NSScreen::mainScreen(mtm)) else {
+        return;
+    };
+    let frame = window.frame();
+    ZOOM_RESTORE.with(|slot| slot.set(Some(frame)));
+    window.setFrame_display(screen.visibleFrame(), true);
+}
+
+/// Whether the custom header zoom/maximize is active. Used instead of
+/// `winit::Window::is_maximized`, which changes the style mask of a borderless
+/// window just to answer the question.
+pub fn window_is_zoomed() -> bool {
+    ZOOM_RESTORE.with(Cell::get).is_some()
 }
 
 fn with_window(mut action: impl FnMut(&winit::window::Window)) {
@@ -226,19 +281,56 @@ fn with_window(mut action: impl FnMut(&winit::window::Window)) {
     });
 }
 
-/// Simulated titlebar drag. The current NSEvent is valid while winit is
-/// dispatching the pointer-down that triggered this call.
+fn key_window(mtm: MainThreadMarker) -> Option<Retained<objc2_app_kit::NSWindow>> {
+    let app = NSApplication::sharedApplication(mtm);
+    let window = app.keyWindow().or_else(|| app.mainWindow())?;
+    // A native file dialog is a sheet and becomes the key window; window
+    // commands must still target the editor underneath it.
+    Some(window.sheetParent().unwrap_or(window))
+}
+
+/// Starts a custom header drag. The cursor-to-frame offset is captured here;
+/// [`continue_window_drag`] then moves the frame until the button is released.
 pub fn begin_window_drag() {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
-    let app = NSApplication::sharedApplication(mtm);
-    let Some(window) = app.keyWindow().or_else(|| app.mainWindow()) else {
+    let Some(window) = key_window(mtm) else {
         return;
     };
-    if let Some(event) = app.currentEvent() {
-        window.performWindowDragWithEvent(&event);
-    }
+    let mouse = objc2_app_kit::NSEvent::mouseLocation();
+    let frame = window.frame();
+    DRAG_OFFSET.with(|offset| {
+        offset.set(Some((mouse.x - frame.origin.x, mouse.y - frame.origin.y)));
+    });
+}
+
+pub fn continue_window_drag() {
+    let Some((offset_x, offset_y)) = DRAG_OFFSET.with(Cell::get) else {
+        return;
+    };
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let Some(window) = key_window(mtm) else {
+        return;
+    };
+    let mouse = objc2_app_kit::NSEvent::mouseLocation();
+    window.setFrameOrigin(objc2_foundation::NSPoint::new(
+        mouse.x - offset_x,
+        mouse.y - offset_y,
+    ));
+}
+
+pub fn end_window_drag() {
+    DRAG_OFFSET.with(|offset| offset.set(None));
+}
+
+/// Whether the left mouse button is still down. Winit can miss the release
+/// event while the window is moved under the cursor; polling AppKit is the
+/// reliable stop.
+pub fn window_drag_button_down() -> bool {
+    objc2_app_kit::NSEvent::pressedMouseButtons() & 1 != 0
 }
 
 pub fn clear_system_recent() {
@@ -315,6 +407,24 @@ define_class!(
                 native::push(NativeRequest::Command(command));
                 wake();
             }
+        }
+
+        #[unsafe(method(terminateApp))]
+        fn terminate_app(&self) {
+            let Some(mtm) = MainThreadMarker::new() else {
+                return;
+            };
+            NSApplication::sharedApplication(mtm).terminate(None);
+        }
+
+        #[unsafe(method(replyQuit))]
+        fn reply_quit(&self) {
+            QUIT_PENDING.with(|slot| slot.set(false));
+            let allow = ALLOW_QUIT.with(Cell::get);
+            let Some(mtm) = MainThreadMarker::new() else {
+                return;
+            };
+            NSApplication::sharedApplication(mtm).replyToApplicationShouldTerminate(allow);
         }
     }
 

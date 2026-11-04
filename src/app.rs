@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use igui_app::{AppLogic, EventContext, FrameContext, InitContext};
-use igui_core::{Cursor, EventResult, InputEvent, Key, NodeId, PointerButton, Rect, ViewportSize};
+use igui_core::{
+    Cursor, EventResult, InputEvent, Key, NodeId, PointerButton, Rect, Vec2, ViewportSize,
+};
 use igui_render::PaintContext;
 use igui_scene::SceneTree;
 use igui_ui::{Control, ControlData, TextMeasurer};
@@ -43,9 +45,15 @@ pub struct EditorApp {
     pending: Option<PendingDialog>,
     /// Drop the committed text that follows the Alt+Z soft-wrap shortcut.
     suppress_text: bool,
-    /// A native header drag is in flight; ignore pointer moves/up so they
-    /// cannot leak into editor selection.
+    /// A custom header drag is in flight (past the click threshold); pointer
+    /// moves must not leak into editor selection.
     window_dragging: bool,
+    /// Header press that may become a drag. Starting only after a small move
+    /// keeps plain clicks and double-clicks from nudging the window.
+    window_drag_pending: Option<Vec2>,
+    /// The current left press started in the custom header; consume its
+    /// release so a traffic-light click cannot fall through to the UI below.
+    header_pressed: bool,
 }
 
 /// A dialog that has been started but not answered yet. The future is polled
@@ -152,6 +160,8 @@ impl EditorApp {
             pending: None,
             suppress_text: false,
             window_dragging: false,
+            window_drag_pending: None,
+            header_pressed: false,
             analysis_behind: false,
             drop: None,
             window_restored: false,
@@ -192,6 +202,17 @@ impl EditorApp {
     /// refresh find matches, run queued dialogs, persist the session, expire the
     /// status message and sync the window title.
     pub fn update(&mut self, _delta: f32) {
+        // Moving the frame from the clock (rather than a nested AppKit drag
+        // loop) keeps winit in charge of the event loop. `needs_frame` keeps
+        // frames coming while the button is held.
+        if self.window_dragging {
+            if crate::macos::window_drag_button_down() {
+                crate::macos::continue_window_drag();
+            } else {
+                crate::macos::end_window_drag();
+                self.window_dragging = false;
+            }
+        }
         // Dialogs run first: opening a Markdown file can change the pane
         // structure, and the same frame must rebuild for it.
         self.pump_dialog();
@@ -307,7 +328,11 @@ impl EditorApp {
                 position,
                 button: PointerButton::Left,
             } => {
-                self.window_dragging = false;
+                self.header_pressed = false;
+                if self.window_drag_pending.take().is_some() || self.window_dragging {
+                    self.window_dragging = false;
+                    crate::macos::end_window_drag();
+                }
                 let mut state = self.state.borrow_mut();
                 if state.recovery_prompt.is_some() {
                     ui::recovery::click(&mut state, *position);
@@ -327,16 +352,24 @@ impl EditorApp {
                     return EventResult::Handled;
                 }
                 #[cfg(target_os = "macos")]
-                if position.y >= 0.0 && position.y < state.theme.m.menubar_h {
-                    if state.header_close.contains(*position) {
-                        crate::macos::request_quit();
-                    } else if state.header_minimize.contains(*position) {
-                        crate::macos::minimize_window();
-                    } else if state.header_zoom.contains(*position) {
-                        crate::macos::toggle_zoom();
-                    } else {
-                        self.window_dragging = true;
-                        crate::macos::begin_window_drag();
+                if let Some(hit) = ui::menu::header_hit(&state, *position) {
+                    // AppKit can re-enter the event loop; never keep the state
+                    // RefCell borrowed across the native call.
+                    drop(state);
+                    self.header_pressed = true;
+                    match hit {
+                        ui::menu::HeaderHit::Close => self.request_quit(),
+                        ui::menu::HeaderHit::Minimize => crate::macos::minimize_window(),
+                        ui::menu::HeaderHit::Zoom => {
+                            crate::macos::toggle_zoom();
+                            self.save_window_state();
+                        }
+                        ui::menu::HeaderHit::Drag => {
+                            // Capture the press-to-frame offset now; movement
+                            // only starts after the click threshold.
+                            crate::macos::begin_window_drag();
+                            self.window_drag_pending = Some(*position);
+                        }
                     }
                     return EventResult::Handled;
                 }
@@ -544,6 +577,23 @@ impl EditorApp {
             }
             InputEvent::PointerMove { position } => {
                 if self.window_dragging {
+                    if crate::macos::window_drag_button_down() {
+                        crate::macos::continue_window_drag();
+                    } else {
+                        crate::macos::end_window_drag();
+                        self.window_dragging = false;
+                    }
+                    return EventResult::Handled;
+                }
+                if let Some(start) = self.window_drag_pending {
+                    if !crate::macos::window_drag_button_down() {
+                        self.window_drag_pending = None;
+                        crate::macos::end_window_drag();
+                    } else if start.distance_squared(*position) > 9.0 {
+                        self.window_drag_pending = None;
+                        self.window_dragging = true;
+                        crate::macos::continue_window_drag();
+                    }
                     return EventResult::Handled;
                 }
                 let mut state = self.state.borrow_mut();
@@ -559,6 +609,7 @@ impl EditorApp {
                     state.ws.active_doc().is_some() && state.language_hit.contains(*position);
                 let problems = ui::problems::hover_at(&state, *position);
                 let lsp_hover = state.lsp_hit.contains(*position);
+                let header_hover = ui::menu::header_button_at(&state, *position);
                 let git_hover = ui::git::hover_rect(&state, *position);
                 if state.git.hover != git_hover {
                     state.git.hover = git_hover;
@@ -589,6 +640,7 @@ impl EditorApp {
                     || state.language_hover != language
                     || state.lsp_hover != lsp_hover
                     || state.problems.hover != problems
+                    || state.header_hover != header_hover
                 {
                     state.menubar_hover = menubar;
                     state.menu_hover = menu_hover;
@@ -597,6 +649,7 @@ impl EditorApp {
                     state.language_hover = language;
                     state.lsp_hover = lsp_hover;
                     state.problems.hover = problems;
+                    state.header_hover = header_hover;
                     state.dirty = true;
                 }
                 if tab_menu_changed || tree_menu_changed {
@@ -633,6 +686,38 @@ impl EditorApp {
                 result
             }
             InputEvent::PointerUp { .. } => {
+                let header_pressed = std::mem::take(&mut self.header_pressed);
+                if header_pressed
+                    || self.window_drag_pending.take().is_some()
+                    || self.window_dragging
+                {
+                    self.window_dragging = false;
+                    crate::macos::end_window_drag();
+                    return EventResult::Handled;
+                }
+                let result = igui_ui::route_input(&mut self.tree, event);
+                self.focus_editor();
+                result
+            }
+            InputEvent::DoubleClick { position } => {
+                #[cfg(target_os = "macos")]
+                {
+                    let hit = {
+                        let state = self.state.borrow();
+                        ui::menu::header_hit(&state, *position)
+                    };
+                    if let Some(hit) = hit {
+                        if self.window_drag_pending.take().is_some() || self.window_dragging {
+                            self.window_dragging = false;
+                            crate::macos::end_window_drag();
+                        }
+                        if hit == ui::menu::HeaderHit::Drag {
+                            crate::macos::toggle_zoom();
+                            self.save_window_state();
+                        }
+                        return EventResult::Handled;
+                    }
+                }
                 let result = igui_ui::route_input(&mut self.tree, event);
                 self.focus_editor();
                 result
@@ -861,6 +946,25 @@ impl EditorApp {
                     state.lsp.hover = None;
                     state.lsp.hover_anchor = None;
                     state.lsp.hover_rect = igui_core::Rect::ZERO;
+                    // Leaving the window must drop every visual hover, not
+                    // just the editor's symbol hover.
+                    state.menubar_hover = None;
+                    state.menu_hover = None;
+                    state.tabs.hover = None;
+                    state.sidebar.hover = None;
+                    state.language_hover = false;
+                    state.lsp_hover = false;
+                    state.problems.hover = None;
+                    state.git.hover = None;
+                    state.outline.hover = None;
+                    state.header_hover = None;
+                    if let Some(menu) = state.tab_menu.as_mut() {
+                        menu.hover = None;
+                    }
+                    if let Some(menu) = state.tree_menu.as_mut() {
+                        menu.hover = None;
+                    }
+                    state.dirty = true;
                 }
                 igui_ui::route_input(&mut self.tree, event)
             }
@@ -934,6 +1038,7 @@ impl EditorApp {
 
     pub fn needs_frame(&self) -> bool {
         self.pending.is_some()
+            || self.window_dragging
             || self.analysis_behind
             || self.state.borrow().search_busy()
             || self.state.borrow().terminal.open
@@ -1031,6 +1136,7 @@ impl EditorApp {
                     self.state.borrow_mut().clear_recent();
                 }
                 crate::native::NativeRequest::Quit => {
+                    self.save_window_state();
                     let dirty = self
                         .state
                         .borrow()
@@ -1053,9 +1159,12 @@ impl EditorApp {
         use crate::native::NativeCommand as C;
         use crate::state::ViewMode;
         match command {
-            C::Quit => crate::macos::request_quit(),
+            C::Quit => self.request_quit(),
             C::Minimize => crate::macos::minimize_window(),
-            C::Zoom => crate::macos::toggle_zoom(),
+            C::Zoom => {
+                crate::macos::toggle_zoom();
+                self.save_window_state();
+            }
             C::New => self.state.borrow_mut().run(Action::New),
             C::NewFile => self.state.borrow_mut().run(Action::NewFile),
             C::Open => self.state.borrow_mut().run(Action::Open),
@@ -1145,6 +1254,7 @@ impl EditorApp {
         if self.window_restored {
             return;
         }
+        let maximized = self.state.borrow().session.window_maximized;
         let (Some(shared), Some(geometry)) =
             (self.window.clone(), self.state.borrow().session.window)
         else {
@@ -1158,7 +1268,26 @@ impl EditorApp {
         let x = (geometry.position.0 * scale as f32) as i32;
         let y = (geometry.position.1 * scale as f32) as i32;
         window.set_outer_position(winit::dpi::PhysicalPosition::new(x, y));
+        if maximized {
+            #[cfg(target_os = "macos")]
+            crate::macos::toggle_zoom();
+            #[cfg(not(target_os = "macos"))]
+            window.set_maximized(true);
+        }
         self.window_restored = true;
+    }
+
+    /// Persists the current window geometry and maximize state. Called after
+    /// green-button/double-click zoom and before quitting, so closing the app
+    /// while maximized still restores that state.
+    fn save_window_state(&mut self) {
+        self.persist_window_geometry();
+        self.state.borrow_mut().save_session_if_dirty();
+    }
+
+    fn request_quit(&mut self) {
+        self.save_window_state();
+        crate::macos::request_quit();
     }
 
     /// Saves the live window size/position (logical px) when it changed.
@@ -1170,9 +1299,18 @@ impl EditorApp {
         let Some(window) = window else {
             return;
         };
-        if window.is_maximized() || window.fullscreen().is_some() {
+        #[cfg(target_os = "macos")]
+        let maximized = crate::macos::window_is_zoomed();
+        #[cfg(not(target_os = "macos"))]
+        let maximized = window.is_maximized();
+        if window.fullscreen().is_some() {
             return;
         }
+        if maximized {
+            self.state.borrow_mut().set_window_maximized(true);
+            return;
+        }
+        self.state.borrow_mut().set_window_maximized(false);
         let scale = window.scale_factor();
         if scale <= 0.0 {
             return;
