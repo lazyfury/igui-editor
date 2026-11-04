@@ -3885,7 +3885,7 @@ while True:
             }],
         }})
     elif method == "textDocument/hover":
-        send({"jsonrpc": "2.0", "id": request_id, "result": {"contents": {"kind": "markdown", "value": "lsp hover card"}}})
+        send({"jsonrpc": "2.0", "id": request_id, "result": {"contents": {"kind": "markdown", "value": "lsp hover card\n\n```rust\nfn main() {}\n```"}}})
     elif method == "textDocument/completion":
         items = [{"label": "completion_item", "detail": "fake"}]
         items += [{"label": "filler_%d" % i, "insertText": "filler_%d" % i} for i in range(300)]
@@ -4183,6 +4183,13 @@ fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
     let frame = harness.frame()?;
     if !texts(&frame).iter().any(|text| text == "lsp hover card") {
         return Err("LSP hover overlay was not painted".into());
+    }
+    let theme = harness.app.state().theme;
+    if !draw_text_has_color(&frame, "fn", theme.p.syntax.keyword.to_rgba8()) {
+        return Err("hover code block keyword `fn` was not syntax-highlighted".into());
+    }
+    if !draw_text_has_color(&frame, "main", theme.p.syntax.function.to_rgba8()) {
+        return Err("hover code block function `main` was not syntax-highlighted".into());
     }
 
     // Completion: platform accelerator, navigate, insert.

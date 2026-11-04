@@ -3,12 +3,15 @@
 //! Both are painted after the tree (above the editor, below menus/modals) and
 //! positioned from the real caret rectangle recorded by the editor painter.
 
+use std::sync::Arc;
+
 use igui_core::{Rect, Size, Vec2};
 use igui_render::PaintContext;
 use igui_ui::TextMeasurer;
 
 use crate::kit::{self, RectExt};
 use crate::state::AppState;
+use crate::syntax::{Highlight, SyntaxProvider, SyntaxRegistry};
 
 const HOVER_W: f32 = 480.0;
 const HOVER_MAX_H: f32 = 300.0;
@@ -29,6 +32,199 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
     }
 }
 
+/// One display line in a hover card. Fenced code keeps its syntax tokens so
+/// Rust-analyzer/Godot hover snippets read like the editor instead of a wall
+/// of single-colored text.
+struct HoverLine {
+    text: String,
+    code: bool,
+    tokens: Vec<Highlight>,
+}
+
+fn hover_provider(
+    registry: &SyntaxRegistry,
+    info: &str,
+    active: Option<Arc<dyn SyntaxProvider>>,
+) -> Option<Arc<dyn SyntaxProvider>> {
+    let language = info
+        .split(|ch: char| ch == ',' || ch.is_whitespace())
+        .find(|part| !part.is_empty())
+        .unwrap_or("");
+    if language.is_empty() {
+        return active;
+    }
+    registry
+        .by_name(language)
+        .or_else(|| registry.provider_for_extension(language))
+}
+
+fn looks_like_declaration(line: &str) -> bool {
+    let first = line
+        .trim_start()
+        .split(|ch: char| ch.is_whitespace() || ch == '(' || ch == '{' || ch == ':')
+        .next()
+        .unwrap_or("");
+    matches!(
+        first,
+        "fn" | "func"
+            | "class"
+            | "struct"
+            | "enum"
+            | "trait"
+            | "impl"
+            | "let"
+            | "var"
+            | "const"
+            | "pub"
+            | "def"
+            | "interface"
+            | "type"
+            | "namespace"
+            | "signal"
+            | "property"
+    )
+}
+
+fn build_hover_lines(
+    text: &str,
+    registry: &SyntaxRegistry,
+    active: Option<Arc<dyn SyntaxProvider>>,
+    max_width: f32,
+    measurer: &dyn TextMeasurer,
+    font: f32,
+) -> Vec<HoverLine> {
+    let mut lines = Vec::new();
+    let mut fence: Option<(Option<Arc<dyn SyntaxProvider>>, u32)> = None;
+    let mut first_content = true;
+    for raw in text.lines() {
+        let trimmed = raw.trim_end();
+        if trimmed.trim_start().starts_with("```") || trimmed.trim_start().starts_with("~~~") {
+            if fence.is_some() {
+                fence = None;
+            } else {
+                let info = trimmed.trim_start().trim_start_matches(['`', '~']).trim();
+                fence = Some((hover_provider(registry, info, active.clone()), 0));
+            }
+            first_content = false;
+            continue;
+        }
+        if let Some((provider, state)) = fence.as_mut() {
+            let expanded = crate::model::wrap::expand_tabs(trimmed, 4);
+            let (tokens, next) = provider
+                .as_ref()
+                .filter(|provider| expanded.len() <= provider.max_line_len())
+                .map(|provider| provider.highlight_line(&expanded, *state))
+                .unwrap_or_default();
+            *state = next;
+            lines.push(HoverLine {
+                text: expanded,
+                code: true,
+                tokens,
+            });
+            first_content = false;
+            continue;
+        }
+        let cleaned = trimmed
+            .strip_prefix("# ")
+            .or_else(|| trimmed.strip_prefix("## "))
+            .or_else(|| trimmed.strip_prefix("### "))
+            .unwrap_or(trimmed);
+        let cleaned = clean_inline(cleaned);
+        if cleaned.is_empty() {
+            lines.push(HoverLine {
+                text: String::new(),
+                code: false,
+                tokens: Vec::new(),
+            });
+        } else if first_content
+            && looks_like_declaration(&cleaned)
+            && active
+                .as_ref()
+                .is_some_and(|provider| cleaned.len() <= provider.max_line_len())
+        {
+            // Native Godot hovers and plain-text LSP declarations start with
+            // `func …` / `fn …` rather than a fenced block. Highlight the
+            // first declaration line as code too.
+            let provider = active.as_ref().expect("checked above");
+            let (tokens, _) = provider.highlight_line(&cleaned, provider.neutral_state());
+            lines.push(HoverLine {
+                text: cleaned,
+                code: true,
+                tokens,
+            });
+        } else {
+            let mut wrapped = Vec::new();
+            wrap_line(&cleaned, max_width - 20.0, measurer, font, &mut wrapped);
+            for line in wrapped {
+                lines.push(HoverLine {
+                    text: line,
+                    code: false,
+                    tokens: Vec::new(),
+                });
+            }
+        }
+        first_content = false;
+    }
+    lines
+}
+
+fn draw_hover_line(
+    ctx: &mut PaintContext,
+    theme: &crate::theme::Theme,
+    measurer: &dyn TextMeasurer,
+    line: &HoverLine,
+    x: f32,
+    baseline: f32,
+    font: f32,
+) {
+    let p = theme.p;
+    if line.text.is_empty() {
+        return;
+    }
+    if line.tokens.is_empty() {
+        kit::text(ctx, &line.text, x, baseline, font, p.text);
+        return;
+    }
+    let mut cursor = 0usize;
+    for token in &line.tokens {
+        let start = token.start.min(line.text.len());
+        let end = token.end.min(line.text.len());
+        if start < cursor || end <= start {
+            continue;
+        }
+        if start > cursor {
+            kit::text(
+                ctx,
+                &line.text[cursor..start],
+                x + kit::width(measurer, &line.text[..cursor], font),
+                baseline,
+                font,
+                p.text,
+            );
+        }
+        let token_text = &line.text[start..end];
+        kit::text(
+            ctx,
+            token_text,
+            x + kit::width(measurer, &line.text[..start], font),
+            baseline,
+            font,
+            theme.token_color(token.kind),
+        );
+        cursor = end;
+    }
+    if cursor < line.text.len() {
+        kit::text(
+            ctx,
+            &line.text[cursor..],
+            x + kit::width(measurer, &line.text[..cursor], font),
+            baseline,
+            font,
+            p.text,
+        );
+    }
+}
+
 fn paint_hover(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintContext) {
     let Some(hover) = state.lsp.hover.as_ref() else {
         return;
@@ -40,29 +236,23 @@ fn paint_hover(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut Pain
     let max_width = HOVER_W.min(viewport.width() - 32.0).max(240.0);
     let font = m.font_small;
     let line_h = font + 5.0;
-    let mut lines = Vec::new();
-    for raw in hover.text.lines() {
-        let trimmed = raw.trim_end();
-        if trimmed.trim_start().starts_with("```") {
-            continue;
-        }
-        let cleaned = trimmed
-            .strip_prefix("# ")
-            .or_else(|| trimmed.strip_prefix("## "))
-            .or_else(|| trimmed.strip_prefix("### "))
-            .unwrap_or(trimmed);
-        let cleaned = clean_inline(cleaned);
-        if cleaned.is_empty() {
-            lines.push(String::new());
-        } else {
-            wrap_line(&cleaned, max_width - 20.0, measurer, font, &mut lines);
-        }
-    }
+    let mut lines = build_hover_lines(
+        &hover.text,
+        &state.syntax,
+        state.language_of_active(),
+        max_width,
+        measurer,
+        font,
+    );
     let has_docs = hover.native.is_some();
     let max_lines = if has_docs { 12 } else { 13 };
     if lines.len() > max_lines {
         lines.truncate(max_lines);
-        lines.push("…".into());
+        lines.push(HoverLine {
+            text: "…".into(),
+            code: false,
+            tokens: Vec::new(),
+        });
     }
     if lines.is_empty() {
         return;
@@ -93,17 +283,25 @@ fn paint_hover(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut Pain
     ctx.stroke_rect(panel, 1.0, p.border);
     kit::hline(ctx, panel.left(), panel.right(), panel.top(), p.accent);
     let mut y = panel.top() + 8.0;
+    ctx.save();
+    ctx.clip_rect(panel);
     for line in lines.iter().take(13) {
-        kit::text(
-            ctx,
-            line,
-            panel.left() + 10.0,
-            y + measurer.ascent(font),
-            font,
-            if line.is_empty() { p.faint } else { p.text },
-        );
+        if line.code {
+            kit::fill(
+                ctx,
+                Rect::from_min_size(
+                    Vec2::new(panel.left() + 6.0, y),
+                    Size::new(panel.width() - 12.0, line_h),
+                ),
+                p.bg,
+            );
+        }
+        let x = panel.left() + if line.code { 14.0 } else { 10.0 };
+        let baseline = kit::line_baseline(measurer, y, line_h, font);
+        draw_hover_line(ctx, &theme, measurer, line, x, baseline, font);
         y += line_h;
     }
+    ctx.restore();
     if has_docs {
         let docs = Rect::from_min_size(
             Vec2::new(panel.left() + 10.0, panel.bottom() - 22.0),
@@ -414,6 +612,90 @@ fn wrap_line(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::syntax::TokenKind;
+
+    struct Probe;
+
+    impl TextMeasurer for Probe {
+        fn advance(&self, ch: char, font_size: f32) -> f32 {
+            if ch == ' ' {
+                font_size * 0.25
+            } else {
+                font_size * 0.55
+            }
+        }
+
+        fn line_height(&self, font_size: f32) -> f32 {
+            font_size * 1.4
+        }
+    }
+
+    #[test]
+    fn hover_code_fences_are_highlighted_with_the_fence_language() {
+        let registry = SyntaxRegistry::with_builtins();
+        let lines = build_hover_lines(
+            "```rs\nfn main() {}\n```",
+            &registry,
+            None,
+            480.0,
+            &Probe,
+            12.0,
+        );
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].code);
+        assert_eq!(lines[0].text, "fn main() {}");
+        assert!(
+            lines[0]
+                .tokens
+                .iter()
+                .any(|token| token.kind == TokenKind::Keyword
+                    && &lines[0].text[token.start..token.end] == "fn"),
+            "missing keyword token: {:?}",
+            lines[0].tokens
+        );
+    }
+
+    #[test]
+    fn a_plain_declaration_line_uses_the_active_language() {
+        let registry = SyntaxRegistry::with_builtins();
+        let gdscript = registry.by_name("gdscript");
+        let lines = build_hover_lines(
+            "func Node._ready() -> void",
+            &registry,
+            gdscript,
+            480.0,
+            &Probe,
+            12.0,
+        );
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].code);
+        assert!(
+            lines[0]
+                .tokens
+                .iter()
+                .any(|token| token.kind == TokenKind::Keyword
+                    && &lines[0].text[token.start..token.end] == "func"),
+            "missing keyword token: {:?}",
+            lines[0].tokens
+        );
+    }
+
+    #[test]
+    fn prose_and_code_fences_keep_their_line_roles() {
+        let registry = SyntaxRegistry::with_builtins();
+        let lines = build_hover_lines(
+            "before\n```rust\nlet value = 1;\n```\nafter",
+            &registry,
+            None,
+            480.0,
+            &Probe,
+            12.0,
+        );
+        let roles: Vec<bool> = lines.iter().map(|line| line.code).collect();
+        assert_eq!(roles, vec![false, true, false]);
+        assert_eq!(lines[0].text, "before");
+        assert_eq!(lines[2].text, "after");
+    }
 
     #[test]
     fn markdown_links_show_the_readable_label_not_the_encoded_url() {

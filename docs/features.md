@@ -63,6 +63,11 @@ non-project buffers.
   `/opt/homebrew/bin`, `/opt/homebrew/opt/rustup/bin`, `/usr/local/bin` and
   rustup toolchains; if the server still cannot start, the OUTLINE panel shows
   the error detail.
+- Hover cards keep fenced code blocks as code: the fence language (or the
+  active document language when the fence is unlabeled) drives the same syntax
+  provider as the editor, so keywords, types, functions, strings and comments
+  stay colored. A leading plain-text declaration such as `func Node._ready()`
+  or `fn main()` is highlighted the same way.
 - `F1` shows server hover, `F12` jumps to definition (macOS top-row media keys
   may need `Fn`; `⌘⇧I` / `⌘⇧D` are also available), and `⌘I` (`Ctrl+I` on
   Linux/Windows) opens completion. Typing an identifier also activates
