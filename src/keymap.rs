@@ -608,6 +608,7 @@ fn action_from_id(id: &str) -> Option<Action> {
         "lsp.hover" => Action::LspHover,
         "lsp.completion" => Action::LspCompletion,
         "lsp.definition" => Action::LspDefinition,
+        "lsp.restart" => Action::LspRestart,
         "tabs.next" => Action::NextTab,
         "tabs.previous" => Action::PreviousTab,
         "tabs.select1" => Action::SelectTab(1),

@@ -61,6 +61,7 @@ pub fn clang_server() -> LanguageServerSpec {
         ],
         project_markers: vec![
             "compile_commands.json".into(),
+            "compile_flags.txt".into(),
             "CMakeLists.txt".into(),
             ".clangd".into(),
             ".git".into(),

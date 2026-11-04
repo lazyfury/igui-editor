@@ -264,6 +264,7 @@ impl AppState {
             Action::LspHover => self.request_lsp_hover(),
             Action::LspCompletion => self.request_lsp_completion(),
             Action::LspDefinition => self.request_lsp_definition(),
+            Action::LspRestart => self.restart_language_server(),
             Action::Settings => self.toggle_settings(),
             Action::ToggleSidebar => self.dock_toggle(DockId::Left),
             Action::ToggleOutline => self.dock_toggle(DockId::Right),

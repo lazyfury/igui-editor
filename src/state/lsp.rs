@@ -444,6 +444,26 @@ impl AppState {
         }
     }
 
+    /// Drops and restarts the active document's server (hard reset). Saves and
+    /// file changes never do this; the command exists for a wedged server or a
+    /// Godot project whose scan has to happen now.
+    pub fn restart_language_server(&mut self) {
+        let Some(path) = self
+            .ws
+            .active_doc()
+            .and_then(|doc| doc.path())
+            .map(PathBuf::from)
+        else {
+            self.status("no language server for this file");
+            return;
+        };
+        if self.lsp.restart(&path) {
+            self.status("language server restarting");
+        } else {
+            self.status(self.lsp_unavailable());
+        }
+    }
+
     pub(crate) fn lsp_unavailable(&self) -> String {
         if !self.lsp.enabled() {
             return "language servers are off (Settings → Language Intelligence)".into();

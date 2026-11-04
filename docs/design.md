@@ -342,37 +342,40 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    `{a,b}` suffice). Every detected change — editor-side create/rename/delete
    and the filesystem poll — is queued as a `FileEvent` and forwarded as one
    `workspace/didChangeWatchedFiles` notification per session: registered
-   watchers decide what a session sees, otherwise the spec's extensions do.
+   watchers decide what a session sees; without a registration the spec's
+   extensions and project/workspace markers do.
    Saves additionally send `textDocument/didSave` for open documents. This is
    what lets a server notice a script that another tool (the Godot editor,
    creating the `.uid` companion) brought into the project without the file
    ever being opened as a tab. Godot's LSP is the documented exception: it has
    no watched-file handler, so `file_changes: ServerRescan` skips the
-   notification, runs a spawned headless instance with a private profile whose
-   "rescan while unfocused" timer is on, and re-parses open documents with a
-   short delayed `didChange` once the engine's scan has run. Deleted paths drop
-   their diagnostics immediately instead of waiting for an update that can
-   never arrive.
+   notification and re-parses open documents with a delayed `didChange` once the
+   attached editor's scan has run (the `.godot` class-cache rewrite is the
+   signal). Deleted paths drop their diagnostics immediately instead of waiting
+   for an update that can never arrive.
 
-39. **Godot talks to the editor you already have.** Godot's GDScript server is a
-   TCP service owned by the editor process, and that editor is what imports the
-   project and writes `<script>.gd.uid`. Spawning a second, headless editor gave
-   the client a *stale* project scan (it never sees scripts created later) and
-   made two editors compete over the same import state. `LanguageServerSpec`
-   therefore carries an `attach` target (`127.0.0.1:6008`, overridable with
-   `IGUI_EDITOR_GODOT_LSP`): the client tries it with a 250 ms timeout and, on
-   success, speaks JSON-RPC to the user's editor without owning a child process
-   (dropping the session must not kill it). Only when nothing listens does it
-   spawn the headless fallback, which stays registered as a native child. The
-   status bar names the mode, and the docs state the catches: the editor's
-   language server must be enabled, must have the same project open, and serves
-   one client at a time. An attached editor also only refreshes its project scan
-   (new/deleted scripts, `class_name`) when its window regains focus; the
-   spawned fallback keeps itself fresh via the private rescan profile. The
-   opt-in **Reload LSP on Change** setting is the escape hatch: it restarts the
-   rescanning server after structural changes and explicit saves (debounced and
-   rate-limited) and deliberately ignores the attach target, because only a
-   process we start can be made to rescan on demand.
+39. **Godot talks to the editor you already have, and only to it.** Godot's
+   GDScript server is a TCP service owned by the editor process, and that editor
+   is what imports the project and writes `<script>.gd.uid`. `LanguageServerSpec`
+   therefore carries an `attach` target (`127.0.0.1:6005` — Godot's
+   `network/language_server/remote_port` — overridable with
+   `IGUI_EDITOR_GODOT_LSP`): the client connects with a 500 ms timeout and speaks
+   JSON-RPC to the user's editor without owning a child process (dropping the
+   session must not kill it). There is **no headless fallback**: it gave the
+   client a second editor competing over the same import state, and it was not
+   the editor the user was working in. If nothing listens the session says so
+   and retries every 2 s. The catches are documented: the editor's language
+   server must be enabled, must have the same project open, and serves one
+   client at a time (a new client takes the slot; Godot logs
+   `[LSP] Connection Taken`). The client reconnects and reopens documents when
+   displaced. An attached editor refreshes its project scan (new/deleted
+   scripts, `class_name`) on its own schedule, normally when its window regains
+   focus; the client watches the class-cache write and re-sends open documents
+   after the scan. Reloads are never automatic: a save only sends `didSave`,
+   structural changes re-send open documents (bounded passes), and the explicit
+   **Restart Language Server** command reconnects. Restarting on every change was
+   rejected because a project scan is expensive and autosave would keep the
+   server down.
 
 40. **Indentation belongs to the document, not to the setting.** A file's
    existing tabs/spaces win (detected on load), so editing a Godot template

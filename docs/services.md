@@ -182,33 +182,37 @@ its own language-server binary.
   The default (`Notify`) advertises `workspace.didChangeWatchedFiles`, honours
   dynamic registrations (`client/registerCapability`) and forwards the editor's
   own create/rename/delete plus the filesystem poll as one notification per
-  session; saves send `textDocument/didSave`. A server therefore sees files that
-  were never opened as tabs (generated files, `git checkout`).
-- **Godot rescans instead** (`ServerRescan`): Godot's GDScript LSP has no
-  `didChangeWatchedFiles` handler, and its global `class_name` registry only
-  changes when the editor rescans the project. A spawned `--headless --editor`
-  never gains focus, so the client gives it a private Godot profile
-  (`model/godot_profile.rs`) whose editor settings enable
-  `interface/editor/behavior/import_resources_when_unfocused`; the user's own
-  Godot settings are untouched. After a structural change the client watches
+  session; saves send `textDocument/didSave`. Project/workspace marker files
+  (`compile_commands.json`, `tsconfig.json`, `Cargo.toml`, …) always reach the
+  server, even when a watcher registration covers only source extensions, so a
+  changed build configuration is not filtered out. A server therefore sees
+  files that were never opened as tabs (generated files, `git checkout`).
+- **Godot attaches only** (`ServerRescan`): Godot's GDScript LSP lives inside
+  the running editor, speaks LSP over TCP (`127.0.0.1:6005`, Editor Settings →
+  Network → Language Server; `IGUI_EDITOR_GODOT_LSP` overrides the address) and
+  serves one client. There is deliberately **no headless fallback**: a second
+  editor would compete over the project's `.godot` import state and would not be
+  the editor the user is working in. If nothing listens, the session reports
+  *no language server at 127.0.0.1:6005; open the project in the editor* and
+  retries every 2 s. When another client takes the single slot, Godot logs
+  `[LSP] Connection Taken`; the displaced client reconnects (2 s) and re-sends
+  every open document.
+- **Godot rescans instead**: the server has no `didChangeWatchedFiles` handler,
+  and its global `class_name` registry only changes when the editor scans the
+  project (normally when its window regains focus). The client watches
   `<root>/.godot/global_script_class_cache.cfg` and re-sends every open document
-  as a full-text `didChange` (initial pass plus one follow-up) so it is parsed
-  against the refreshed class list. A deleted path drops its diagnostics and
-  cached semantic tokens immediately, because no server will ever publish an
-  update for it again. When attached to a running Godot editor the class list
-  still only refreshes when that editor rescans — normally when its window
-  regains focus.
-- **Aggressive reload** (`Settings::lsp_reload`, settings row **Reload LSP on
-  Change**, persisted): drop and restart every `ServerRescan` session after a
-  structural change or an explicit save of one of its files. A restart is
-  debounced (300 ms) and rate-limited to one per 2 s. The class-cache write
-  that the restart itself performs is deliberately not a trigger, otherwise the
-  server would restart forever. Because a restart can
-  only refresh a project scan for a process we own, this mode also disables the
-  `attach` target: Godot runs as the private headless child (with the rescan
-  profile) even when the user's editor is listening. Diagnostics are cleared on
-  the restart and republished when the new server receives `didOpen`, so the
-  PROBLEMS panel never shows the previous project state.
+  as a full-text `didChange` (initial pass plus two follow-ups) so it is parsed
+  against the refreshed class list. Nothing is restarted: the editor keeps its
+  warm project state and diagnostics while the scan runs. A deleted path drops
+  its diagnostics and cached semantic tokens immediately, because no server
+  will ever publish an update for it again. A script created outside the
+  running editor becomes known after that editor next scans (focus it once).
+- **Explicit restart** (**Restart Language Server**, command `lsp.restart`, View
+  menu): drops the active document's session so the next tick reconnects (or
+  starts the stdio server again). Diagnostics are cleared and republished on
+  `didOpen`. For Godot this only resets the connection; the class registry
+  belongs to the editor, so focus Godot to force a project scan. Saves and file
+  changes never take this path.
 - **UI state**: diagnostics are keyed by path and painted as underlines + a
   gutter severity rail. The footer LSP chip is severity-colored and opens the
   bottom dock's PROBLEMS tab, which snapshots every session's diagnostics

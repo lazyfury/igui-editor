@@ -163,7 +163,6 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
                 Row::Syntax => state.settings.syntax,
                 Row::LanguageIntelligence => state.settings.lsp,
                 Row::TrustLocalServers => state.settings.trust_local_servers,
-                Row::ReloadLsp => state.settings.lsp_reload,
                 _ => false,
             };
             let label = if on { "ON" } else { "OFF" };
@@ -307,20 +306,6 @@ mod tests {
                 "{rect:?} escapes the panel"
             );
         }
-    }
-
-    #[test]
-    fn reload_lsp_row_toggles_and_persists_to_the_session() {
-        let mut state = state();
-        state.open_settings();
-        state.adjust_setting(Row::ReloadLsp, 1);
-        assert!(state.settings.lsp_reload);
-        assert!(state.session.lsp_reload);
-        assert!(state.lsp.aggressive_reload_enabled());
-        state.adjust_setting(Row::ReloadLsp, 1);
-        assert!(!state.settings.lsp_reload);
-        assert!(!state.session.lsp_reload);
-        assert!(!state.lsp.aggressive_reload_enabled());
     }
 
     #[test]

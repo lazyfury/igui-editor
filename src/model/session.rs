@@ -62,8 +62,6 @@ pub struct Session {
     pub lsp: bool,
     /// Allow repository-local language-server binaries.
     pub trust_local_servers: bool,
-    /// Aggressive Godot LSP reload on file changes and explicit saves.
-    pub lsp_reload: bool,
     /// Per-path language overrides (provider name).
     pub languages: Vec<(PathBuf, String)>,
     /// Keep the editor and Markdown preview scroll positions in sync.
@@ -115,7 +113,6 @@ impl Default for Session {
             autosave: true,
             lsp: true,
             trust_local_servers: false,
-            lsp_reload: false,
             languages: Vec::new(),
             sync_scroll: true,
             soft_wrap: false,
@@ -182,7 +179,6 @@ impl Session {
                 "autosave" => session.autosave = value == "1",
                 "lsp" => session.lsp = value == "1",
                 "trust_local_servers" => session.trust_local_servers = value == "1",
-                "lsp_reload" => session.lsp_reload = value == "1",
                 "sync_scroll" => session.sync_scroll = value == "1",
                 "soft_wrap" => session.soft_wrap = value == "1",
                 "sidebar_tab" => session.sidebar_tab = value,
@@ -282,7 +278,6 @@ impl Session {
             "trust_local_servers={}\n",
             u8::from(self.trust_local_servers)
         ));
-        out.push_str(&format!("lsp_reload={}\n", u8::from(self.lsp_reload)));
         out.push_str(&format!("sync_scroll={}\n", u8::from(self.sync_scroll)));
         out.push_str(&format!("soft_wrap={}\n", u8::from(self.soft_wrap)));
         out.push_str(&format!("sidebar_tab={}\n", escape(&self.sidebar_tab)));
@@ -465,7 +460,6 @@ mod tests {
             autosave: false,
             lsp: false,
             trust_local_servers: true,
-            lsp_reload: true,
             languages: vec![(PathBuf::from("/tmp/x.lua"), "lua".into())],
             sync_scroll: false,
             soft_wrap: true,

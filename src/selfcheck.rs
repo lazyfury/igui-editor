@@ -2122,6 +2122,12 @@ fn check(dir: &Path) -> Result<(), String> {
     harness.key(Key::Escape);
     harness.frame()?;
 
+    // The View menu owns the explicit LSP hard reset; it must stay reachable
+    // (disabled only when the active document has no language server).
+    if !crate::state::items(Menu::View, &harness.app.state()).contains(&Some(Action::LspRestart)) {
+        return Err("View menu lost the Restart Language Server item".into());
+    }
+
     // Sidebar drag: one centered divider line. The sidebar no longer draws its
     // own border, so there is exactly one line.
     let dark = crate::theme::Theme::new(Mode::Dark);
@@ -5602,8 +5608,8 @@ fn wait_for_lsp(
 /// A monorepo must run one server for the whole workspace (`go.work`), keep
 /// both modules' diagnostics alive, and restart only when re-enabled.
 /// A running Godot editor already serves the project: the client must attach to
-/// it instead of spawning a private headless instance (the fixture deliberately
-/// points `IGUI_EDITOR_GODOT` at a path that does not exist).
+/// it and never spawn a second editor (the fixture points the command at a path
+/// that does not exist).
 #[cfg(unix)]
 fn check_godot_attach(dir: &Path) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
@@ -5648,13 +5654,8 @@ fn check_godot_attach(dir: &Path) -> Result<(), String> {
         None
     })()
     .ok_or("the scripted Godot editor never listened")?;
-    // A spawn attempt would fail with NotFound and surface the install prompt.
-    std::env::set_var(
-        "IGUI_EDITOR_GODOT",
-        "/nonexistent/igui-godot-must-not-spawn",
-    );
+    // Attach-only: the spec has no command to run, so only the address matters.
     std::env::set_var("IGUI_EDITOR_GODOT_LSP", format!("127.0.0.1:{port}"));
-    let _godot_guard = EnvGuard("IGUI_EDITOR_GODOT");
     let _lsp_guard = EnvGuard("IGUI_EDITOR_GODOT_LSP");
 
     let mut harness = Harness::new(

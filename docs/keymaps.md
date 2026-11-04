@@ -94,7 +94,7 @@ motion.lineStart, motion.lineEnd, motion.docStart, motion.docEnd
 editor.find, editor.findNext, editor.findPrevious
 view.split, view.preview, view.softWrap, view.sidebar, view.explorer, view.git,
 view.outline, view.terminal, view.problems
-lsp.hover, lsp.completion, lsp.definition
+lsp.hover, lsp.completion, lsp.definition, lsp.restart
 ```
 
 A command carries metadata used by menus, settings and conflict reporting:

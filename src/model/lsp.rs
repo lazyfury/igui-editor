@@ -34,17 +34,15 @@ const CHANGE_DEBOUNCE: Duration = Duration::from_millis(140);
 /// Wait before re-sending open documents to a server that rescans the project
 /// itself. Godot's "rescan while unfocused" timer fires every 0.5 s.
 const RESCAN_DELAY: Duration = Duration::from_millis(800);
-/// Second pass in case the first scan was still running (large projects).
+/// Follow-up pass in case the first scan was still running (large projects).
 const RESCAN_FOLLOWUP: Duration = Duration::from_millis(2_000);
-/// Aggressive mode: wait briefly so a save and its poll event coalesce into one
-/// restart.
-const RELOAD_DELAY: Duration = Duration::from_millis(300);
-/// Aggressive mode: never restart faster than this, even if the user keeps
-/// saving (a headless Godot start is a full project scan).
-const RELOAD_COOLDOWN: Duration = Duration::from_secs(2);
+/// Re-parse passes per structural change: the first plus two follow-ups.
+const RESCAN_PASSES: u8 = 3;
 /// Godot's project scan rewrites this file when the global class list changes.
 const CLASS_CACHE_FILE: &str = "global_script_class_cache.cfg";
 const RETRY_AFTER: Duration = Duration::from_secs(5);
+/// Attached servers reconnect promptly: the editor may be opened after us.
+const ATTACH_RETRY: Duration = Duration::from_secs(2);
 const MAX_COMPLETIONS: usize = 200;
 const MAX_DIAGNOSTICS: usize = 500;
 /// Public Godot class reference. The stable branch tracks the current release.
@@ -213,12 +211,7 @@ struct LspClient {
 }
 
 impl LspClient {
-    fn spawn(
-        spec: &LanguageServerSpec,
-        root: &Path,
-        allow_workspace: bool,
-        allow_attach: bool,
-    ) -> io::Result<Self> {
+    fn spawn(spec: &LanguageServerSpec, root: &Path, allow_workspace: bool) -> io::Result<Self> {
         let command = spec
             .command_env
             .as_deref()
@@ -234,15 +227,21 @@ impl LspClient {
         match spec.transport {
             LanguageServerTransport::Stdio => Self::spawn_stdio(process),
             LanguageServerTransport::Tcp => {
-                // A running editor may already serve this project. Prefer it:
-                // it owns the import/scan state (Godot's `.gd.uid` generation),
-                // so symbols and diagnostics match what the user sees.
-                if allow_attach {
-                    if let Some(attach) = spec.attach.as_ref() {
-                        if let Some(stream) = connect_attach(attach) {
-                            return Self::spawn_tcp_stream(None, stream);
-                        }
-                    }
+                // A server that lives inside another program (Godot's editor)
+                // is attach-only. It owns the project's import/scan state, and
+                // a second editor would compete over `.godot` instead of being
+                // the editor the user is working in.
+                if let Some(attach) = spec.attach.as_ref() {
+                    let (host, port) = attach.resolve();
+                    let Some(stream) = connect_attach(attach) else {
+                        return Err(io::Error::new(
+                            io::ErrorKind::ConnectionRefused,
+                            format!(
+                                "no language server at {host}:{port}; open the project in the editor"
+                            ),
+                        ));
+                    };
+                    return Self::spawn_tcp_stream(None, stream);
                 }
                 let port = match spec.port {
                     Some(port) => port,
@@ -254,16 +253,6 @@ impl LspClient {
                     return Err(io::Error::other(
                         "TCP language server needs a port_arg or a fixed port",
                     ));
-                }
-                // A server that rescans the project itself needs a private
-                // profile: Godot ignores watched files and only refreshes its
-                // class registry from its own scan.
-                if spec.file_changes == FileChangePolicy::ServerRescan {
-                    if let Some(overrides) =
-                        crate::model::godot_profile::prepare(Path::new(&resolved))
-                    {
-                        process.envs(overrides);
-                    }
                 }
                 process.stdin(Stdio::null()).stdout(Stdio::null());
                 let child = process.spawn()?;
@@ -453,7 +442,7 @@ fn connect_attach(attach: &AttachTarget) -> Option<TcpStream> {
 
     let (host, port) = attach.resolve();
     let address = (host.as_str(), port).to_socket_addrs().ok()?.next()?;
-    let stream = TcpStream::connect_timeout(&address, Duration::from_millis(250)).ok()?;
+    let stream = TcpStream::connect_timeout(&address, Duration::from_millis(500)).ok()?;
     let _ = stream.set_nodelay(true);
     Some(stream)
 }
@@ -962,9 +951,15 @@ impl Session {
 
     /// Whether this session wants `path` reported as `kind`.
     ///
-    /// With registered watchers the pattern decides; without them the file
-    /// belongs to the session when its spec (extension) does.
+    /// Project/workspace markers always belong to the session: build and config
+    /// files (`compile_commands.json`, `tsconfig.json`, `Cargo.toml`, …) change
+    /// analysis without being source files, and a watcher registration often
+    /// covers only source extensions. Otherwise registered watchers decide;
+    /// without them the spec's extensions do.
     fn wants(&self, path: &Path, kind: FileEventKind) -> bool {
+        if self.spec.is_marker(path) {
+            return true;
+        }
         if self.watchers.is_empty() {
             return self.spec.matches_path(path);
         }
@@ -978,14 +973,7 @@ impl Session {
     /// Whether a path is part of this session's project surface: one of its
     /// extensions or a project marker (`project.godot`).
     fn owns_structural(&self, path: &Path) -> bool {
-        let name = path.file_name().and_then(|name| name.to_str());
-        self.spec.matches_path(path)
-            || name.is_some_and(|name| {
-                self.spec
-                    .project_markers
-                    .iter()
-                    .any(|marker| marker == name)
-            })
+        self.spec.matches_path(path) || self.spec.is_marker(path)
     }
 
     fn publish_diagnostics(&mut self, params: &Value) {
@@ -1312,16 +1300,8 @@ pub struct LspController {
     failed: HashMap<(String, PathBuf), Instant>,
     /// When open documents should be re-sent to a self-rescanning server.
     resync_at: Option<Instant>,
-    /// Remaining passes for the current structural change (initial + follow-up).
+    /// Remaining passes for the current structural change (`RESCAN_PASSES`).
     resync_passes: u8,
-    /// Aggressive mode: restart self-rescanning servers on changes/saves.
-    aggressive_reload: bool,
-    /// Whether a spec may attach to an already-running editor. Aggressive
-    /// reload needs its own process (only a fresh start runs a project scan).
-    allow_attach: bool,
-    /// When the next restart is due, and the last time one happened.
-    reload_at: Option<Instant>,
-    last_reload: Option<Instant>,
     notified: HashSet<String>,
     issue: Option<LspIssue>,
     /// One-shot status line for the next frame (attached vs. spawned server).
@@ -1364,10 +1344,6 @@ impl Default for LspController {
             failed: HashMap::new(),
             resync_at: None,
             resync_passes: 0,
-            aggressive_reload: false,
-            allow_attach: true,
-            reload_at: None,
-            last_reload: None,
             notified: HashSet::new(),
             issue: None,
             notice: None,
@@ -1425,33 +1401,6 @@ impl LspController {
         self.changed = true;
     }
 
-    /// Applies the aggressive reload setting. Turning it on (or off) drops the
-    /// self-rescanning clients so the next tick starts them with the new attach
-    /// policy; other language servers keep running.
-    pub fn set_aggressive_reload(&mut self, aggressive: bool) {
-        if self.aggressive_reload == aggressive {
-            return;
-        }
-        self.aggressive_reload = aggressive;
-        self.allow_attach = !aggressive;
-        self.reload_at = None;
-        for session in &mut self.sessions {
-            if session.spec.file_changes == FileChangePolicy::ServerRescan {
-                session.client = None;
-                session.status = LspStatus::Off;
-                session.reset_protocol();
-                session.changed = true;
-            }
-        }
-        self.changed = true;
-    }
-
-    /// Test hook: whether aggressive reload is active.
-    #[cfg(test)]
-    pub(crate) fn aggressive_reload_enabled(&self) -> bool {
-        self.aggressive_reload
-    }
-
     /// A missing-tool prompt waiting for the UI.
     pub fn take_issue(&mut self) -> Option<LspIssue> {
         self.issue.take()
@@ -1473,6 +1422,42 @@ impl LspController {
             }
         }
         self.changed = true;
+    }
+
+    /// Drops the server that owns `path` so the next tick starts a fresh one.
+    ///
+    /// For a stdio server this starts a fresh process. An attached editor
+    /// (Godot) is simply reconnected: its project scan belongs to the editor,
+    /// so focusing Godot is what refreshes new scripts. Diagnostics are cleared
+    /// (the previous connection's results may be stale) and the server
+    /// republishes them on `didOpen`. Saves and file changes never take this
+    /// path; it is the explicit reset behind the **Restart Language Server**
+    /// command.
+    pub fn restart(&mut self, path: &Path) -> bool {
+        let index = self
+            .sessions
+            .iter()
+            .position(|session| session.spec.matches_path(path) && path_under(path, &session.root))
+            .or_else(|| {
+                self.sessions
+                    .iter()
+                    .position(|session| session.spec.matches_path(path))
+            });
+        let Some(index) = index else {
+            return false;
+        };
+        let spec = self.sessions[index].spec.clone();
+        let root = self.sessions[index].root.clone();
+        self.sessions[index].client = None;
+        self.sessions[index].status = LspStatus::Off;
+        self.sessions[index].diagnostics.clear();
+        self.sessions[index].reset_protocol();
+        self.sessions[index].changed = true;
+        self.failed.remove(&(spec.id, root));
+        self.clear_transient();
+        self.notice = Some(format!("{} language server restarting", spec.language));
+        self.changed = true;
+        true
     }
 
     /// Kills every language-server child and drops session state. Called on
@@ -1498,8 +1483,6 @@ impl LspController {
         self.issue = None;
         self.resync_at = None;
         self.resync_passes = 0;
-        self.reload_at = None;
-        self.last_reload = None;
         self.clear_transient();
     }
 
@@ -1627,9 +1610,6 @@ impl LspController {
             self.clear_transient();
         }
 
-        // Aggressive mode restarts a self-rescanning server; the start below
-        // picks the active one up in the same frame.
-        self.service_reload(Instant::now());
         if let Some(index) = self.active {
             if self.sessions[index].client.is_none() {
                 self.start(index);
@@ -1690,19 +1670,19 @@ impl LspController {
         let spec = self.sessions[index].spec.clone();
         let root = self.sessions[index].root.clone();
         let key = (spec.id.clone(), root.clone());
+        let retry_after = if spec.attach.is_some() {
+            ATTACH_RETRY
+        } else {
+            RETRY_AFTER
+        };
         if self
             .failed
             .get(&key)
-            .is_some_and(|at| at.elapsed() < RETRY_AFTER)
+            .is_some_and(|at| at.elapsed() < retry_after)
         {
             return;
         }
-        match LspClient::spawn(
-            &spec,
-            &root,
-            self.allow_workspace_binaries,
-            self.allow_attach,
-        ) {
+        match LspClient::spawn(&spec, &root, self.allow_workspace_binaries) {
             Ok(mut client) => {
                 self.notice = Some(if client.attached() {
                     format!(
@@ -1730,7 +1710,13 @@ impl LspController {
                     LspStatus::Error(format!("{}: {error}", spec.command));
                 self.failed.insert(key, Instant::now());
                 let missing = error.kind() == io::ErrorKind::NotFound;
-                if missing && self.notified.insert(spec.id.clone()) {
+                if spec.attach.is_some() && !missing {
+                    // Attached servers are retried while the editor is closed;
+                    // say how to fix it once instead of every retry.
+                    if self.notified.insert(format!("attach:{}", spec.id)) {
+                        self.notice = Some(format!("{}: {error}", spec.language));
+                    }
+                } else if missing && self.notified.insert(spec.id.clone()) {
                     let install = spec.install.clone().unwrap_or_else(|| ToolInstall {
                         tool: spec.command.clone(),
                         language: spec.language.clone(),
@@ -2290,7 +2276,6 @@ impl LspController {
             }
         }
         let now = Instant::now();
-        let mut reload = false;
         for session in &mut self.sessions {
             let under_root = events
                 .iter()
@@ -2301,25 +2286,16 @@ impl LspController {
             if session.spec.file_changes == FileChangePolicy::ServerRescan {
                 // Godot's LSP has no watched-file handler. Its scan timer (and
                 // the class cache it rewrites) is the real signal; the open
-                // documents must then be parsed again.
+                // documents must then be parsed again. A restart would drop
+                // the process (a full startup scan), so the documents are
+                // re-sent instead.
                 let relevant = |event: &FileEvent| {
-                    path_under(&event.path, &session.root)
-                        && if self.aggressive_reload {
-                            restarts_server(session, event)
-                        } else {
-                            rescans_project(session, event)
-                        }
+                    path_under(&event.path, &session.root) && rescans_project(session, event)
                 };
                 if events.iter().any(relevant) {
-                    if self.aggressive_reload {
-                        // A restart is the strongest signal: the fresh process
-                        // scans the project before serving any request.
-                        reload = true;
-                    } else {
-                        let at = now + RESCAN_DELAY;
-                        self.resync_at = Some(self.resync_at.map_or(at, |current| current.min(at)));
-                        self.resync_passes = self.resync_passes.max(2);
-                    }
+                    let at = now + RESCAN_DELAY;
+                    self.resync_at = Some(self.resync_at.map_or(at, |current| current.min(at)));
+                    self.resync_passes = self.resync_passes.max(RESCAN_PASSES);
                 }
                 continue;
             }
@@ -2347,9 +2323,6 @@ impl LspController {
                 "workspace/didChangeWatchedFiles",
                 json!({ "changes": changes }),
             );
-        }
-        if reload {
-            self.schedule_reload(now);
         }
     }
 
@@ -2391,6 +2364,8 @@ impl LspController {
     /// project scan has picked up a structural change.
     ///
     /// Called from [`Self::tick`]; `next_wake` keeps the app awake until then.
+    /// The server keeps running: a fresh process would pay for a full startup
+    /// scan and leave the editor without diagnostics while it does.
     fn service_resync(&mut self, now: Instant) {
         let Some(at) = self.resync_at else {
             return;
@@ -2415,67 +2390,18 @@ impl LspController {
         }
     }
 
-    /// Schedules a restart of the self-rescanning servers (aggressive mode).
-    /// A short delay coalesces a save and its poll event; the cooldown keeps a
-    /// burst of saves from restarting a headless Godot over and over.
-    fn schedule_reload(&mut self, now: Instant) {
-        let mut at = now + RELOAD_DELAY;
-        if let Some(last) = self.last_reload {
-            at = at.max(last + RELOAD_COOLDOWN);
-        }
-        self.reload_at = Some(at);
-    }
-
-    /// Drops the client of every self-rescanning server so the next start uses
-    /// a fresh process and therefore a fresh project scan.
-    fn service_reload(&mut self, now: Instant) {
-        let Some(at) = self.reload_at else {
-            return;
-        };
-        if now < at {
-            return;
-        }
-        self.reload_at = None;
-        self.last_reload = Some(now);
-        let mut reloaded = false;
-        for session in &mut self.sessions {
-            if session.spec.file_changes != FileChangePolicy::ServerRescan {
-                continue;
-            }
-            // Dropping the client kills our child; an attached editor would
-            // only lose the socket, which is why aggressive mode never attaches.
-            session.client = None;
-            session.status = LspStatus::Off;
-            // A reload is a full reset: the old process' diagnostics belong to
-            // the pre-change project. The fresh server republishes on didOpen.
-            session.diagnostics.clear();
-            session.reset_protocol();
-            session.changed = true;
-            reloaded = true;
-        }
-        if reloaded {
-            self.notice = Some("language server reloaded (aggressive mode)".into());
-            self.changed = true;
-        }
-    }
-
-    /// Earliest instant at which open documents must be re-sent or a server
-    /// restarted.
+    /// Earliest instant at which open documents must be re-sent.
     pub fn next_wake(&self) -> Option<Instant> {
-        match (self.resync_at, self.reload_at) {
-            (Some(resync), Some(reload)) => Some(resync.min(reload)),
-            (resync, reload) => resync.or(reload),
-        }
+        self.resync_at
     }
 
     /// `textDocument/didSave` for the sessions that have `path` open.
     ///
-    /// In aggressive mode an explicit save of a self-rescanning server's file
-    /// also schedules a restart: a fresh process re-reads the project instead
-    /// of trusting a scan that may have happened before the save.
+    /// A save is incremental: the document content is already synchronized, so
+    /// the server only needs the save marker. Saves never restart a server
+    /// (autosave would keep a headless Godot down); a changed `class_name`
+    /// registry is picked up through the project scan and class-cache watch.
     pub fn notify_doc_saved(&mut self, path: &Path) {
-        let now = Instant::now();
-        let mut reload = false;
         for session in &self.sessions {
             if !session.open_docs.contains_key(path) {
                 continue;
@@ -2486,16 +2412,6 @@ impl LspController {
                     json!({"textDocument": {"uri": path_to_uri(path)}}),
                 );
             }
-            if self.aggressive_reload
-                && session.spec.file_changes == FileChangePolicy::ServerRescan
-                && path_under(path, &session.root)
-                && session.owns_structural(path)
-            {
-                reload = true;
-            }
-        }
-        if reload {
-            self.schedule_reload(now);
         }
     }
 
@@ -2736,15 +2652,14 @@ fn rescans_project(session: &Session, event: &FileEvent) -> bool {
     // The class cache is the engine's own "the registry changed" signal, so any
     // kind counts: a slow first scan may create it after the file event.
     event.path.file_name().and_then(|name| name.to_str()) == Some(CLASS_CACHE_FILE)
-        || restarts_server(session, event)
+        || structural_change(session, event)
 }
 
-/// Structural change worth a full server restart in aggressive mode.
+/// Created/deleted script or project marker: the class registry may change.
 ///
 /// Content-only edits are covered by the open document and the class cache is
-/// deliberately excluded: a restart rewrites it during startup, so reacting to
-/// it would restart the server forever.
-fn restarts_server(session: &Session, event: &FileEvent) -> bool {
+/// deliberately excluded: the scan rewrites it, so reacting to it would loop.
+fn structural_change(session: &Session, event: &FileEvent) -> bool {
     matches!(event.kind, FileEventKind::Created | FileEventKind::Deleted)
         && session.owns_structural(&event.path)
 }
@@ -3209,6 +3124,9 @@ mod tests {
         // A watcher replaces the extension fallback: `.go` files are no longer
         // reported unless a pattern says so.
         assert!(!session.wants(Path::new("/root/a.go"), FileEventKind::Created));
+        // Config markers are not source files but always reach the server.
+        assert!(session.wants(Path::new("/root/go.mod"), FileEventKind::Changed));
+        assert!(session.wants(Path::new("/root/sub/go.work"), FileEventKind::Created));
         assert!(session.wants(Path::new("/root/scripts/a.gd"), FileEventKind::Deleted));
         // The `kind: 4` watcher only reports deletions.
         assert!(session.wants(Path::new("/root/sub/x.ts"), FileEventKind::Deleted));
@@ -3220,6 +3138,20 @@ mod tests {
         ]}));
         assert!(session.watchers.is_empty());
         assert!(session.wants(Path::new("/root/a.go"), FileEventKind::Created));
+    }
+
+    #[test]
+    fn marker_files_always_reach_the_server() {
+        let session = Session::new(
+            crate::services::clang::clang_server(),
+            PathBuf::from("/root"),
+        );
+        // clangd's build database and config are not source files, but they
+        // change analysis and must not be filtered out by extension.
+        for name in ["compile_commands.json", "compile_flags.txt", ".clangd"] {
+            assert!(session.wants(&Path::new("/root").join(name), FileEventKind::Changed));
+        }
+        assert!(!session.wants(Path::new("/root/README.md"), FileEventKind::Changed));
     }
 
     #[test]
@@ -3313,9 +3245,11 @@ mod tests {
         assert!(!lsp.sessions[0].resync);
         lsp.service_resync(deadline + Duration::from_millis(1));
         assert!(lsp.sessions[0].resync, "open documents must be re-sent");
-        // A second pass covers projects whose first scan was still running.
+        // Follow-up passes cover projects whose first scan was still running.
         let followup = lsp.next_wake().expect("a follow-up pass");
         lsp.service_resync(followup + Duration::from_millis(1));
+        let last = lsp.next_wake().expect("the last follow-up pass");
+        lsp.service_resync(last + Duration::from_millis(1));
         assert!(lsp.next_wake().is_none());
     }
 
@@ -3348,9 +3282,8 @@ mod tests {
                 &session,
                 &event(".godot/global_script_class_cache.cfg", kind)
             ));
-            // A restart rewrites the cache itself, so aggressive mode must not
-            // treat the cache write as another reason to restart.
-            assert!(!restarts_server(
+            // The class cache is a scan artefact, not a structural change.
+            assert!(!structural_change(
                 &session,
                 &event(".godot/global_script_class_cache.cfg", kind)
             ));
@@ -3408,7 +3341,7 @@ mod tests {
         let mut ws = Workspace::new(&root);
         ws.open(&script).unwrap();
         let mut session = Session::new(spec, root.clone());
-        session.client = Some(LspClient::spawn(&session.spec, &root, false, true).unwrap());
+        session.client = Some(LspClient::spawn(&session.spec, &root, false).unwrap());
         session.status = LspStatus::Ready;
         let (stream, _) = listener.accept().unwrap();
         stream
@@ -3439,13 +3372,11 @@ mod tests {
     }
 
     #[test]
-    fn aggressive_mode_restarts_the_godot_server_on_changes_and_saves() {
+    fn structural_changes_resync_the_godot_server_without_restarting_it() {
         let spec = crate::services::godot::godot_server();
-        let root = std::env::temp_dir().join(format!("igui-lsp-aggressive-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("igui-lsp-resync-{}", std::process::id()));
         let path = root.join("player.gd");
         let mut lsp = LspController::default();
-        lsp.set_aggressive_reload(true);
-        assert!(!lsp.allow_attach, "aggressive mode must not attach");
         lsp.sessions.push(Session::new(spec, root.clone()));
         lsp.sessions[0].status = LspStatus::Ready;
         lsp.sessions[0].open_docs.insert(
@@ -3460,50 +3391,35 @@ mod tests {
             .diagnostics
             .insert(path.clone(), vec![diagnostic("old")]);
 
-        // A structural change drops the process; the next tick starts a fresh
-        // one, which scans the project before serving requests.
+        // A created script schedules a re-parse; the process keeps running so
+        // diagnostics and warm project state survive.
         lsp.notify_file_events(&[FileEvent {
             path: root.join("new.gd"),
             kind: FileEventKind::Created,
         }]);
-        let at = lsp.next_wake().expect("a reload deadline");
-        lsp.service_reload(at + Duration::from_millis(1));
-        assert_eq!(lsp.sessions[0].status, LspStatus::Off);
-        assert!(lsp.sessions[0].open_docs.is_empty());
-        assert!(lsp.sessions[0].diagnostics.is_empty());
-        assert!(lsp.next_wake().is_none());
+        let at = lsp.next_wake().expect("a rescan deadline");
+        assert_eq!(lsp.sessions[0].status, LspStatus::Ready);
+        assert!(!lsp.sessions[0].resync);
+        lsp.service_resync(at + Duration::from_millis(1));
+        assert!(lsp.sessions[0].resync, "open documents must be re-sent");
+        assert_eq!(lsp.sessions[0].status, LspStatus::Ready);
+        assert!(!lsp.diagnostics_for(&path).is_empty());
 
-        // The restart rewrites the class cache during its startup scan; that
-        // write must not schedule another restart (it would loop forever).
-        lsp.notify_file_events(&[FileEvent {
-            path: root.join(".godot").join(CLASS_CACHE_FILE),
-            kind: FileEventKind::Changed,
-        }]);
-        assert!(lsp.next_wake().is_none());
-
-        // An explicit save restarts too, respecting the cooldown between
-        // restarts so a burst of saves cannot thrash a headless Godot.
-        lsp.sessions[0].status = LspStatus::Ready;
-        lsp.sessions[0].open_docs.insert(
-            path.clone(),
-            OpenDoc {
-                version: 1,
-                rev: 0,
-                changed_at: None,
-            },
-        );
-        lsp.notify_doc_saved(&path);
-        let at = lsp.next_wake().expect("a reload deadline for the save");
-        let last = lsp.last_reload.expect("a previous reload");
-        assert!(at >= last + RELOAD_COOLDOWN);
-        lsp.service_reload(at + Duration::from_millis(1));
-        assert_eq!(lsp.sessions[0].status, LspStatus::Off);
+        // Follow-up passes cover a project whose first scan was still running.
+        let mut passes = 0;
+        while let Some(pass) = lsp.next_wake() {
+            lsp.service_resync(pass + Duration::from_millis(1));
+            passes += 1;
+            assert!(passes <= 2, "resync passes must be bounded");
+        }
+        assert_eq!(passes, 2);
+        assert_eq!(lsp.sessions[0].status, LspStatus::Ready);
     }
 
     #[test]
-    fn without_aggressive_mode_saves_do_not_restart_anything() {
+    fn saves_never_restart_a_rescanning_server() {
         let spec = crate::services::godot::godot_server();
-        let root = PathBuf::from("/tmp/igui-lsp-gentle-root");
+        let root = PathBuf::from("/tmp/igui-lsp-glentle-root");
         let path = root.join("player.gd");
         let mut lsp = LspController::default();
         lsp.sessions.push(Session::new(spec, root.clone()));
@@ -3517,23 +3433,42 @@ mod tests {
             },
         );
         lsp.notify_doc_saved(&path);
-        assert!(lsp.reload_at.is_none());
-        // Structural changes still schedule the document re-parse.
-        lsp.notify_file_events(&[FileEvent {
-            path: root.join("new.gd"),
-            kind: FileEventKind::Created,
-        }]);
-        assert!(lsp.next_wake().is_some());
-        assert!(lsp.reload_at.is_none());
+        assert!(lsp.next_wake().is_none());
+        assert_eq!(lsp.sessions[0].status, LspStatus::Ready);
+    }
+
+    #[test]
+    fn restart_drops_the_attached_session() {
+        let spec = crate::services::godot::godot_server();
+        let root = std::env::temp_dir().join(format!("igui-lsp-restart-{}", std::process::id()));
+        let path = root.join("player.gd");
+        let mut lsp = LspController::default();
+        lsp.sessions.push(Session::new(spec, root.clone()));
+        lsp.sessions[0].status = LspStatus::Ready;
+        lsp.sessions[0]
+            .diagnostics
+            .insert(path.clone(), vec![diagnostic("old")]);
+
+        assert!(lsp.restart(&path));
+        assert_eq!(lsp.sessions[0].status, LspStatus::Off);
+        assert!(lsp.sessions[0].diagnostics.is_empty());
+        assert!(lsp.next_wake().is_none());
+        assert!(
+            lsp.take_notice().is_some(),
+            "the UI is told about the restart"
+        );
+        assert!(!lsp.restart(Path::new("/elsewhere/other.rs")));
     }
 
     #[cfg(unix)]
     #[test]
-    fn aggressive_mode_spawns_instead_of_attaching() {
+    fn attached_servers_have_no_headless_fallback() {
+        // A reserved-then-closed port: the editor is not running.
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
+        drop(listener);
         let spec = LanguageServerSpec {
-            id: "fake-no-attach".into(),
+            id: "fake-attach-only".into(),
             language: "gdscript".into(),
             extensions: vec!["gd".into()],
             project_markers: vec![],
@@ -3545,7 +3480,7 @@ mod tests {
             args: vec!["-c".into(), "sleep 30".into()],
             transport: LanguageServerTransport::Tcp,
             port_arg: None,
-            port: Some(port),
+            port: None,
             attach: Some(AttachTarget {
                 host: "127.0.0.1".into(),
                 port,
@@ -3554,9 +3489,12 @@ mod tests {
             file_changes: FileChangePolicy::ServerRescan,
             install: None,
         };
-        let client = LspClient::spawn(&spec, Path::new("/tmp"), false, false).unwrap();
-        assert!(!client.attached(), "must spawn its own process");
-        drop(client);
+        let error = LspClient::spawn(&spec, Path::new("/tmp"), false)
+            .err()
+            .expect("nothing listens, so attach fails");
+        assert_eq!(error.kind(), io::ErrorKind::ConnectionRefused);
+        assert!(error.to_string().contains(&port.to_string()));
+        assert!(error.to_string().contains("open the project in the editor"));
     }
 
     #[test]
@@ -3618,7 +3556,7 @@ mod tests {
             file_changes: FileChangePolicy::Notify,
             install: None,
         };
-        let mut client = LspClient::spawn(&spec, Path::new("/tmp"), false, true).unwrap();
+        let mut client = LspClient::spawn(&spec, Path::new("/tmp"), false).unwrap();
         let (stream, _) = listener.accept().unwrap();
         let mut reader = BufReader::new(stream);
         let id = client
@@ -3651,11 +3589,11 @@ mod tests {
         let name = "IGUI_EDITOR_TEST_ATTACH_ADDRESS";
         let attach = AttachTarget {
             host: "127.0.0.1".into(),
-            port: 6008,
+            port: 6005,
             env: Some(name.into()),
         };
         std::env::remove_var(name);
-        assert_eq!(attach.resolve(), ("127.0.0.1".to_string(), 6008));
+        assert_eq!(attach.resolve(), ("127.0.0.1".to_string(), 6005));
         std::env::set_var(name, "127.0.0.2:7000");
         assert_eq!(attach.resolve(), ("127.0.0.2".to_string(), 7000));
         std::env::set_var(name, "7001");
@@ -3663,7 +3601,7 @@ mod tests {
         std::env::set_var(name, ":7002");
         assert_eq!(attach.resolve(), ("127.0.0.1".to_string(), 7002));
         std::env::set_var(name, "not-a-port");
-        assert_eq!(attach.resolve(), ("127.0.0.1".to_string(), 6008));
+        assert_eq!(attach.resolve(), ("127.0.0.1".to_string(), 6005));
         std::env::remove_var(name);
     }
 
@@ -3695,7 +3633,7 @@ mod tests {
             file_changes: FileChangePolicy::Notify,
             install: None,
         };
-        let mut client = LspClient::spawn(&spec, Path::new("/tmp"), false, true).unwrap();
+        let mut client = LspClient::spawn(&spec, Path::new("/tmp"), false).unwrap();
         assert!(client.attached(), "attach must not spawn a child process");
 
         let (stream, _) = listener.accept().unwrap();

@@ -16,7 +16,6 @@ src/
   syntax/pack.rs      declarative JSON language packs
   model/lsp.rs        stdio/TCP JSON-RPC client, per-root sessions, diagnostics,
                       hover/completion, monorepo root selection, native Godot symbols
-  model/godot_profile.rs  private headless-Godot editor profile (unfocused rescan)
   model/godot.rs      GDScript block rules (smart newline indent)
   model/bbcode.rs     Godot BBCode -> text spans + clickable references
   model/docs.rs       native symbol -> docs view text + link ranges

@@ -55,8 +55,9 @@ Start here; load only the document you need.
   (`go install golang.org/x/tools/gopls@latest`),
   `typescript-language-server` + `typescript` (`npm install -g …`), `clangd`
   (`brew install llvm` or the Xcode toolchain), `pyright`
-  (`npm install -g pyright`), and Godot 4 for GDScript
-  (`IGUI_EDITOR_GODOT` overrides the default macOS path).
+  (`npm install -g pyright`), and Godot 4 for GDScript (the language server is
+  the one inside the running Godot editor; the app attaches to it and never
+  starts a headless copy).
 - macOS is the primary, manually tested platform. Linux/Windows host paths are
   compiled but not release-tested here.
 

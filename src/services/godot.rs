@@ -4,11 +4,10 @@
 //! loopback TCP port (unlike rust-analyzer's stdio), so this plugin contributes
 //! a TCP transport spec; the generic client owns process startup and JSON-RPC.
 //!
-//! A running Godot editor already serves the project — and already ran its
-//! import/scan, which is what creates `<script>.gd.uid` — so the client
-//! attaches to it first and only spawns a private `--headless --editor`
-//! instance when no editor is listening. `IGUI_EDITOR_GODOT_LSP` overrides the
-//! address (`host:port`, `:port` or `port`).
+//! The server lives inside the running Godot editor — the process that imports
+//! the project and writes `<script>.gd.uid` — so the client only attaches; it
+//! never starts a second, headless editor. `IGUI_EDITOR_GODOT_LSP` overrides the
+//! address (`host:port`, `:port` or `port`; default `127.0.0.1:6005`).
 
 use super::{
     AttachTarget, BuiltinPlugin, Capability, CommandSpec, FileChangePolicy, LanguageServerSpec,
@@ -43,14 +42,9 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
 ];
 
-/// The default Godot executable. `IGUI_EDITOR_GODOT` overrides it for a custom
-/// install or a test server.
+/// The editor language-server spec. The command is only a label: the server is
+/// never spawned, so the executable does not have to exist.
 pub fn godot_server() -> LanguageServerSpec {
-    let command = if cfg!(target_os = "macos") {
-        "/Applications/Godot.app/Contents/MacOS/Godot"
-    } else {
-        "godot"
-    };
     LanguageServerSpec {
         id: "gdscript".into(),
         language: "gdscript".into(),
@@ -59,23 +53,20 @@ pub fn godot_server() -> LanguageServerSpec {
         workspace_markers: Vec::new(),
         language_ids: Default::default(),
         loose_files: false,
-        command: command.into(),
-        command_env: Some("IGUI_EDITOR_GODOT".into()),
-        args: vec![
-            "--headless".into(),
-            "--editor".into(),
-            "--path".into(),
-            ".".into(),
-        ],
+        command: "godot".into(),
+        command_env: None,
+        // Attach-only: the server lives inside the running editor and there is
+        // no headless fallback (a second editor would compete over the
+        // project's import state and would not be the editor you are using).
+        args: Vec::new(),
         transport: LanguageServerTransport::Tcp,
-        port_arg: Some("--lsp-port".into()),
+        port_arg: None,
         port: None,
         // Godot's editor language server (Editor Settings → Network → Language
-        // Server, port 6008 by default). Attaching keeps our diagnostics in step
-        // with the editor that does the importing.
+        // Server; `network/language_server/remote_port` defaults to 6005).
         attach: Some(AttachTarget {
             host: "127.0.0.1".into(),
-            port: 6008,
+            port: 6005,
             env: Some("IGUI_EDITOR_GODOT_LSP".into()),
         }),
         // Godot's LSP has no `workspace/didChangeWatchedFiles` handler. It only
@@ -117,15 +108,15 @@ mod tests {
         assert_eq!(spec.extensions, vec!["gd"]);
         assert_eq!(spec.project_markers, vec!["project.godot"]);
         assert_eq!(spec.transport, LanguageServerTransport::Tcp);
-        assert_eq!(spec.port_arg.as_deref(), Some("--lsp-port"));
+        assert!(spec.args.is_empty(), "the editor is never spawned");
+        assert!(spec.port_arg.is_none());
         assert!(spec.port.is_none());
-        assert!(spec.args.iter().any(|arg| arg == "--headless"));
         let attach = spec.attach.as_ref().expect("godot attaches to the editor");
         assert_eq!(attach.host, "127.0.0.1");
-        assert_eq!(attach.port, 6008);
+        assert_eq!(attach.port, 6005);
         assert_eq!(attach.env.as_deref(), Some("IGUI_EDITOR_GODOT_LSP"));
-        // Godot ignores watched-file notifications; the client keeps it fresh
-        // with a private rescan profile and a document re-parse.
+        // Godot ignores watched-file notifications; the client re-parses open
+        // documents once the editor's own scan refreshes its class registry.
         assert_eq!(spec.file_changes, FileChangePolicy::ServerRescan);
     }
 

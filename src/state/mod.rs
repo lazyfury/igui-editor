@@ -203,6 +203,8 @@ pub enum Action {
     LspHover,
     LspCompletion,
     LspDefinition,
+    /// Drops and restarts the active document's language server.
+    LspRestart,
     ToggleTerminal,
     Settings,
     ToggleSidebar,
@@ -262,6 +264,7 @@ impl Action {
             Action::LspHover => "Show Hover".into(),
             Action::LspCompletion => "Complete".into(),
             Action::LspDefinition => "Go to Definition".into(),
+            Action::LspRestart => "Restart Language Server".into(),
             Action::ToggleTerminal => "Terminal".into(),
             Action::Settings => "Settings…".into(),
             Action::ToggleSidebar => "Toggle Sidebar".into(),
@@ -337,7 +340,10 @@ impl Action {
             | Action::MoveLineEnd(_)
             | Action::MoveDocStart(_)
             | Action::MoveDocEnd(_) => doc.is_some(),
-            Action::LspHover | Action::LspCompletion | Action::LspDefinition => doc
+            Action::LspHover
+            | Action::LspCompletion
+            | Action::LspDefinition
+            | Action::LspRestart => doc
                 .and_then(|doc| doc.path())
                 .is_some_and(|path| state.lsp.supports(path)),
             Action::SetView(_) => doc.is_some(),
@@ -442,6 +448,8 @@ pub fn items(menu: Menu, state: &AppState) -> Vec<Option<Action>> {
             Some(Action::ToggleSoftWrap),
             Some(Action::ToggleTerminal),
             Some(Action::ShowPanel(Panel::Problems)),
+            None,
+            Some(Action::LspRestart),
             Some(Action::Settings),
         ],
     }
@@ -1423,11 +1431,7 @@ impl AppState {
                 height: terminal_height,
                 ..TerminalState::default()
             },
-            lsp: {
-                let mut lsp = LspController::default();
-                lsp.set_aggressive_reload(settings.lsp_reload);
-                lsp
-            },
+            lsp: LspController::default(),
             keymap: Keymap::for_id(settings.keymap),
             keymap_pending: Vec::new(),
             keymap_pending_at: Instant::now(),
@@ -1596,7 +1600,6 @@ fn settings_from_session(session: &Session) -> Settings {
         autosave: session.autosave,
         lsp: session.lsp,
         trust_local_servers: session.trust_local_servers,
-        lsp_reload: session.lsp_reload,
         sidebar_width: session.sidebar_width,
         keymap: KeymapId::from_session(&session.keymap),
     }

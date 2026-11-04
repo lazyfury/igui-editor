@@ -49,22 +49,19 @@ bridge. Six built-in servers are registered:
 - **Python** — `pyright-langserver --stdio`, rooted at `pyrightconfig.json`, a
   Python project marker or the file's folder (loose files work).
 - **Godot GDScript** — the Godot editor's GDScript server over loopback TCP.
-  A **running** Godot editor already serves the project, so the client attaches
-  to it first (`127.0.0.1:6008`, Editor Settings → Network → Language Server;
-  `IGUI_EDITOR_GODOT_LSP` overrides `host:port`, `:port` or `port`). This is the
-  same instance that imports the project — the one that writes `<script>.gd.uid`
-  — so diagnostics, symbols and the sidebar agree, and no second Godot is
-  started. When nothing is listening, the app falls back to a private headless
-  Godot (`--headless --editor --path .`, macOS default executable
-  `/Applications/Godot.app/Contents/MacOS/Godot`, `IGUI_EDITOR_GODOT` overrides
-  it) that is registered as a native child and killed when the session stops.
-  The status bar says which mode was used. The editor's language server must be
-  enabled and must have the same project open; Godot serves one client at a
-  time.
+  The client attaches to the **running** editor (`127.0.0.1:6005`, Editor
+  Settings → Network → Language Server; `IGUI_EDITOR_GODOT_LSP` overrides
+  `host:port`, `:port` or `port`). This is the same instance that imports the
+  project — the one that writes `<script>.gd.uid` — so diagnostics, symbols and
+  the sidebar agree. There is **no headless fallback**; when nothing listens the
+  status bar says to open the project in Godot. The editor's language server
+  must be enabled and must have the same project open; Godot serves one client
+  at a time, and a new client takes the slot (`[LSP] Connection Taken` in
+  Godot's log).
 
 Each spec declares `IGUI_EDITOR_*` overrides (`IGUI_EDITOR_GOPLS`,
 `IGUI_EDITOR_TS_SERVER`, `IGUI_EDITOR_CLANGD`, `IGUI_EDITOR_PYRIGHT`,
-`IGUI_EDITOR_RUST_ANALYZER`, `IGUI_EDITOR_GODOT`, `IGUI_EDITOR_GODOT_LSP`). Repository-local
+`IGUI_EDITOR_RUST_ANALYZER`, `IGUI_EDITOR_GODOT_LSP`). Repository-local
 `node_modules/.bin` shims are **not** executed by default; set
 `IGUI_EDITOR_TRUST_WORKSPACE=1` only for projects you trust. PATH and the
 user/global toolchains remain available either way. Servers are installed
@@ -90,17 +87,20 @@ diagnostics/semantic tokens/outline. The same switch is the
 - File changes reach the servers: the client advertises
   `workspace.didChangeWatchedFiles`, honours watcher registrations, forwards the
   editor's own create/rename/delete and the filesystem poll as
-  create/change/delete events, and sends `textDocument/didSave` on save. Files
-  never opened as tabs (generated code, `git checkout`) are therefore visible to
-  the server too. Godot's LSP has no watched-file handler, so a spawned headless
-  Godot instead runs with a private profile that keeps its project scan (and
-  `class_name` registry) fresh while you create and delete scripts; open files
-  are re-parsed after each structural change. Deleted files leave PROBLEMS
-  immediately. The **Reload LSP on Change** settings row is the aggressive
-  fallback: it restarts Godot's server on every structural change and explicit
-  save (debounced, at most one restart per 2 s) and ignores a running editor's
-  attach target so the private headless instance — and its fresh project
-  scan — is what serves requests.
+  create/change/delete events, and sends `textDocument/didSave` on save. Project
+  and workspace markers (`compile_commands.json`, `tsconfig.json`, `Cargo.toml`,
+  …) always reach the server, even if a watcher covers only source extensions,
+  so configuration changes are not filtered out. Files never opened as tabs
+  (generated code, `git checkout`) are therefore visible to the server too.
+  Godot's LSP has no watched-file handler; its project scan (the source of the
+  `class_name` registry) runs in the editor, normally when its window regains
+  focus. The client watches `<root>/.godot/global_script_class_cache.cfg` and
+  re-parses every open document after a script or `project.godot` is created or
+  deleted, so diagnostics follow the editor's scan. Deleted files leave PROBLEMS
+  immediately. No save or file change restarts a server, so diagnostics stay
+  live while you type. **Restart Language Server** (View menu, `lsp.restart`)
+  resets the session; for Godot that only reconnects — focus Godot to force its
+  project scan.
 - Diagnostics are painted as severity-colored underlines and a full-height
   gutter severity rail. The footer chip is colored by the worst severity and
   shows the active document's `LSP 1E 2W` (or `LSP ERR` if the server cannot
@@ -191,26 +191,21 @@ server for the nearest `project.godot`. For example:
 cargo run --release -- "/path/to/godot_project/new_script.gd"
 ```
 
-`IGUI_EDITOR_GODOT` can point at another Godot executable, and
-`IGUI_EDITOR_GODOT_LSP` at the running editor's language-server address. An
-attached editor is left running; a spawned headless Godot is registered as a
-native child and is killed when the editor stops the session or quits (including
-AppKit's non-unwinding terminate path). Godot's server sends diagnostics, hover,
-completion, definition and document symbols; semantic tokens are not provided by
-Godot, so the syntax palette remains in charge of token colors.
+`IGUI_EDITOR_GODOT_LSP` can point at another editor language-server address
+(`host:port`, `:port` or `port`; default `127.0.0.1:6005`). The editor is left
+running; the client only owns the socket. Godot's server sends diagnostics,
+hover, completion, definition and document symbols; semantic tokens are not
+provided by Godot, so the syntax palette remains in charge of token colors.
 
 Godot's language server does not understand
 `workspace/didChangeWatchedFiles`, and its project scan (the source of the
-global `class_name` list) only refreshes on editor focus. The spawned fallback
-therefore gets a private Godot profile with
-`interface/editor/behavior/import_resources_when_unfocused` enabled, plus a
-short `didChange` re-parse of every open document after a script or
-`project.godot` is created or deleted. A running editor you attach to keeps its
-own settings and scans when it regains focus, so a script created here becomes
-visible after you click back into Godot. For a hard guarantee enable
-**Reload LSP on Change** in Settings: the client then spawns its own headless
-Godot and restarts it after file changes and explicit saves instead of attaching
-to the editor.
+global `class_name` list) runs in the editor, normally when its window regains
+focus. The client watches the class-cache file and re-sends every open document
+after a script or `project.godot` is created or deleted, so a script created in
+Godot is picked up as soon as that editor scans. If the editor is not running,
+the status bar asks you to open the project in it (the client retries every
+2 s); **Restart Language Server** in the View menu reconnects and reopens the
+documents. Nothing is spawned and nothing restarts on save.
 
 ## Header panel groups
 
@@ -443,7 +438,6 @@ setting is persisted in the session. Preview-only and Edit modes ignore it.
 | Sidebar Width | 180–420 px |
 | Language Intelligence | on / off (start/stop all language servers) |
 | Trust Local Servers | on / off (allow repository `node_modules/.bin` shims) |
-| Reload LSP on Change | on / off (restart Godot's server on changes/saves) |
 | Reset to Defaults | — |
 
 Changes apply immediately and are stored in the session file. `↑↓` select,

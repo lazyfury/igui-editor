@@ -39,11 +39,6 @@ pub struct Settings {
     pub lsp: bool,
     /// Allow repository-local language-server binaries (`node_modules/.bin`).
     pub trust_local_servers: bool,
-    /// Aggressive mode for self-rescanning servers (Godot): restart the server
-    /// on a structural file change or an explicit save instead of re-parsing
-    /// open documents. Ignores a running editor's attach target so the private
-    /// headless instance (and its fresh project scan) is used.
-    pub lsp_reload: bool,
     /// Sidebar width in logical pixels.
     pub sidebar_width: f32,
     /// Selectable keyboard profile.
@@ -62,7 +57,6 @@ impl Default for Settings {
             autosave: true,
             lsp: true,
             trust_local_servers: false,
-            lsp_reload: false,
             sidebar_width: 232.0,
             keymap: KeymapId::VsCode,
         }
@@ -82,7 +76,6 @@ impl Settings {
             autosave: self.autosave,
             lsp: self.lsp,
             trust_local_servers: self.trust_local_servers,
-            lsp_reload: self.lsp_reload,
             sidebar_width: clamp_sidebar(self.sidebar_width),
             keymap: self.keymap,
         }
@@ -175,13 +168,12 @@ pub enum Row {
     Autosave,
     LanguageIntelligence,
     TrustLocalServers,
-    ReloadLsp,
     SidebarWidth,
     Keymap,
     Reset,
 }
 
-pub const ROWS: [Row; 14] = [
+pub const ROWS: [Row; 13] = [
     Row::Theme,
     Row::FontSize,
     Row::IndentStyle,
@@ -194,7 +186,6 @@ pub const ROWS: [Row; 14] = [
     Row::Keymap,
     Row::LanguageIntelligence,
     Row::TrustLocalServers,
-    Row::ReloadLsp,
     Row::Reset,
 ];
 
@@ -211,7 +202,6 @@ impl Row {
             Row::Autosave => "Autosave",
             Row::LanguageIntelligence => "Language Intelligence",
             Row::TrustLocalServers => "Trust Local Servers",
-            Row::ReloadLsp => "Reload LSP on Change",
             Row::SidebarWidth => "Sidebar Width",
             Row::Keymap => "Keymap",
             Row::Reset => "Reset to Defaults",
@@ -228,7 +218,6 @@ impl Row {
                 | Row::Syntax
                 | Row::LanguageIntelligence
                 | Row::TrustLocalServers
-                | Row::ReloadLsp
         )
     }
 }
@@ -258,16 +247,12 @@ mod tests {
         assert!(settings.normalized().lsp);
         assert!(!settings.trust_local_servers);
         assert!(!settings.normalized().trust_local_servers);
-        assert!(!settings.lsp_reload);
-        assert!(!settings.normalized().lsp_reload);
         assert!(ROWS.contains(&Row::LanguageIntelligence));
         assert!(ROWS.contains(&Row::TrustLocalServers));
-        assert!(ROWS.contains(&Row::ReloadLsp));
         assert!(ROWS.contains(&Row::IndentStyle));
         assert!(Row::IndentStyle.is_toggle());
         assert!(Row::LanguageIntelligence.is_toggle());
         assert!(Row::TrustLocalServers.is_toggle());
-        assert!(Row::ReloadLsp.is_toggle());
         assert!(ROWS.contains(&Row::Reset));
     }
 

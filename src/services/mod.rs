@@ -124,11 +124,10 @@ pub enum FileChangePolicy {
     #[default]
     Notify,
     /// The server ignores watched-file notifications and rescans the project
-    /// itself. Godot's GDScript LSP is the built-in case: it only refreshes its
-    /// global `class_name` registry when the editor rescans. The client then
-    /// re-parses open documents after a structural change, and a spawned
-    /// server runs with a private editor profile whose "rescan while
-    /// unfocused" timer is enabled (see `model::godot_profile`).
+    /// itself. Godot's GDScript LSP is the built-in case: it lives in the
+    /// running editor, refreshes its global `class_name` registry on its own
+    /// scan, and the client re-parses open documents after that scan (the
+    /// `.godot` class-cache rewrite is the signal).
     ServerRescan,
 }
 
@@ -140,7 +139,7 @@ pub struct AttachTarget {
     /// Host the editor listens on.
     #[serde(default = "loopback_host")]
     pub host: String,
-    /// Port the editor listens on (Godot's default is 6008).
+    /// Port the editor listens on (Godot's default is 6005).
     #[serde(default)]
     pub port: u16,
     /// Environment variable that overrides `host:port` (accepts `host:port`,
@@ -267,6 +266,20 @@ impl LanguageServerSpec {
                     .iter()
                     .any(|candidate| candidate.eq_ignore_ascii_case(ext))
             })
+    }
+
+    /// Whether `path` is one of the project/workspace markers this server
+    /// roots itself on. Build and config files (`compile_commands.json`,
+    /// `tsconfig.json`, `Cargo.toml`, …) change analysis but are not source
+    /// files, so file-change notifications must not be filtered by extension.
+    pub fn is_marker(&self, path: &std::path::Path) -> bool {
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            return false;
+        };
+        self.project_markers
+            .iter()
+            .chain(&self.workspace_markers)
+            .any(|marker| marker == name)
     }
 }
 
