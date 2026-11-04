@@ -72,6 +72,8 @@ Not exposed: arbitrary git command strings, network/auth UI, libgit2.
 ## Terminal service (first slice implemented)
 
 - `portable-pty` + `vt100`; native cell-grid renderer, no WebView/JS.
+- Native children are registered in `model::processes`; `kill_all` runs before
+  `NSTerminateNow` and before a deferred quit reply.
 - Font: the panel names a fixed-pitch family per text draw
   (`src/fonts.rs`: `Menlo` / `SF Mono` / `.SF NS Mono` / `Monaco` / …), probed against
   the backend measurer and cached in `TerminalState`. The editor uses the same
@@ -82,8 +84,9 @@ Not exposed: arbitrary git command strings, network/auth UI, libgit2.
   em and are centered in their two columns, and the parser screen (not the
   cached grid) decides when to resize the parser/PTY.
 - One PTY worker per session; reader thread + writer; resize updates PTY and
-  parser; drop kills the child. The first UI has one session and a draggable
-  panel whose open/height state persists; multiple sessions are next.
+  parser; drop kills the child. PTYs and language-server children are also in a
+  process registry that the macOS quit path kills synchronously, because AppKit
+  can terminate without running Rust destructors.
 - Focus is a separate `Focus::Terminal`; key encoding is pure and testable.
 - Panel lives below the editor inside `main`; its top divider extends the shared
   `ui::handle` with a horizontal axis.

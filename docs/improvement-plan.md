@@ -270,6 +270,22 @@ Acceptance:
   close the window.
 - Clean window close follows winit's normal close path.
 
+### Task 12: native child cleanup on quit (done)
+
+- [x] Register LSP and PTY children in a process registry.
+- [x] Kill every registered child before AppKit returns `NSTerminateNow` and
+      before replying to a deferred quit.
+- [x] Keep `Drop` cleanup for normal session stop/eviction.
+- [x] Self-check verifies the fake language-server pid is gone after
+      `shutdown_children`.
+- [x] Manual packaged-app check: open a Godot project, quit from the app, no
+      `Godot --headless` process remains.
+
+Acceptance:
+
+- A Godot project's headless process is gone after an app quit.
+- Language-server/PTY cleanup still works for normal stop and eviction.
+
 ## Deferred to the next feature slice
 
 These are intentionally not part of this plan's implementation phases:
@@ -300,6 +316,7 @@ These are intentionally not part of this plan's implementation phases:
 | Session 2 | Follow-up 9 | done | Terminal Ctrl+Shift clipboard chords; 248 unit tests. |
 | Session 2 | Follow-up 10 | done | Workspace Trust UI, session v13; 248 unit tests. |
 | Session 2 | Follow-up 11 | done | macOS dirty-window close guard; 249 unit tests. |
+| Session 2 | Follow-up 12 | done | Native child cleanup on quit; 251 unit tests + packaged Godot test. |
 
 ## Final acceptance checklist
 

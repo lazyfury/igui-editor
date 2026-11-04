@@ -220,8 +220,10 @@ unsafe extern "C-unwind" fn window_should_close_imp(
     sender: *mut AnyObject,
 ) -> Bool {
     if close_needs_confirmation(DIRTY.with(Cell::get)) {
-        native::push(NativeRequest::Quit);
-        wake();
+        // Route through the normal quit guard so AppKit has a pending
+        // terminate/reply pair; the guard will enqueue `Quit` and keep the
+        // window open.
+        request_quit();
         return Bool::NO;
     }
     if let Some(original) = WINDOW_CLOSE_IMP.with(Cell::get) {
@@ -244,6 +246,9 @@ pub fn set_dirty_count(dirty: usize) {
 /// deferred to the next run-loop turn: it can still run `applicationWillTerminate:`
 /// and must not re-enter winit's event handler.
 pub fn reply_quit(terminate: bool) {
+    if terminate {
+        crate::model::processes::kill_all();
+    }
     ALLOW_QUIT.with(|slot| slot.set(terminate));
     let Some(mtm) = MainThreadMarker::new() else {
         return;
@@ -1084,8 +1089,10 @@ unsafe extern "C-unwind" fn should_terminate_imp(
     _sender: *mut NSApplication,
 ) -> usize {
     let dirty = DIRTY.with(Cell::get);
-    let allow = ALLOW_QUIT.with(Cell::get);
-    if dirty == 0 || allow {
+    if dirty == 0 || ALLOW_QUIT.with(Cell::get) {
+        // AppKit's exit path can bypass Rust destructors; kill registered
+        // language-server/PTY children synchronously first.
+        crate::model::processes::kill_all();
         return NSApplicationTerminateReply::TerminateNow.0;
     }
     native::push(NativeRequest::Quit);

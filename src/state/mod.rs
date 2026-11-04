@@ -1362,6 +1362,17 @@ impl AppState {
             .or_else(|| self.ws.folder().map(Path::to_path_buf))
     }
 
+    /// Stops native child processes before an AppKit/OS quit that may not run
+    /// Rust destructors. Also used when the quit confirmation is accepted.
+    pub fn shutdown_children(&mut self) {
+        self.lsp.shutdown();
+        self.terminal.session = None;
+        self.terminal.parser = None;
+        self.terminal.scrollback = 0;
+        self.terminal.selection = None;
+        self.terminal.selecting = false;
+    }
+
     pub fn status(&mut self, message: impl Into<String>) {
         self.message = Some((message.into(), false, Instant::now()));
         self.dirty = true;
@@ -1545,6 +1556,28 @@ mod tests {
         state.run(Action::SelectAll);
         assert_eq!(state.ws.active_doc().unwrap().text(), "editor");
         assert!(!state.ws.active_doc().unwrap().has_selection());
+    }
+
+    #[test]
+    fn shutdown_children_clears_native_sessions() {
+        let mut state = state_with_tabs(1);
+        let parser = vt100::Parser::new(
+            std::num::NonZeroU16::new(2).unwrap(),
+            std::num::NonZeroU16::new(20).unwrap(),
+            0,
+        );
+        state.terminal.parser = Some(parser);
+        state.terminal.selection = Some(TerminalSelection {
+            anchor: (0, 0),
+            caret: (0, 2),
+        });
+        state.terminal.scrollback = 3;
+        state.shutdown_children();
+        assert!(state.terminal.parser.is_none());
+        assert!(state.terminal.session.is_none());
+        assert!(state.terminal.selection.is_none());
+        assert_eq!(state.terminal.scrollback, 0);
+        assert_eq!(state.lsp.status(), &crate::model::lsp::LspStatus::Off);
     }
 
     #[test]

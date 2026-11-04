@@ -16,6 +16,7 @@ pub(crate) mod grapheme;
 pub mod highlight;
 pub mod lsp;
 pub mod markdown;
+pub mod processes;
 pub mod pty;
 pub mod recovery;
 pub mod replace;

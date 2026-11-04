@@ -244,7 +244,9 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    Closing the window is guarded by replacing winit's window-delegate
    `windowShouldClose:` implementation: dirty windows enqueue `Quit`, clean
    windows call the original method and let winit exit. Dock reopen still needs
-   a host/engine change.
+   a host/engine change. Native children (LSP/PTY) live in a process registry;
+   the quit path kills them synchronously because AppKit may exit without
+   unwinding Rust destructors.
 
 34. **Git and Terminal are native services behind built-in plugins.** A
    compile-time `BuiltinPlugin` registers a `ServiceManifest` (capabilities,

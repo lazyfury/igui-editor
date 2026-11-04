@@ -11,6 +11,8 @@ pub type WakeFn = Arc<dyn Fn() + Send + Sync>;
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 
+use super::processes;
+
 /// Whether a locale name selects UTF-8 (`UTF-8`, `utf8`, `zh_CN.UTF-8`, …).
 fn is_utf8_locale(value: &str) -> bool {
     let value = value.to_ascii_lowercase();
@@ -110,6 +112,9 @@ impl PtySession {
             .slave
             .spawn_command(cmd)
             .map_err(|error| format!("spawn shell: {error}"))?;
+        if let Some(pid) = child.process_id() {
+            processes::register(pid);
+        }
         drop(pair.slave);
         let mut reader = pair
             .master
@@ -186,6 +191,9 @@ impl PtySession {
 
 impl Drop for PtySession {
     fn drop(&mut self) {
+        if let Some(pid) = self.child.process_id() {
+            processes::unregister(pid);
+        }
         let _ = self.child.kill();
     }
 }

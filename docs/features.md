@@ -164,8 +164,11 @@ server for the nearest `project.godot`. For example:
 cargo run --release -- "/path/to/godot_project/new_script.gd"
 ```
 
-`IGUI_EDITOR_GODOT` can point at another Godot executable. Godot's server sends
-diagnostics, hover, completion, definition and document symbols; semantic
+`IGUI_EDITOR_GODOT` can point at another Godot executable. The headless Godot
+process is registered as a native child and is killed when the editor stops the
+session or quits (including AppKit's non-unwinding terminate path). Godot's
+server sends diagnostics, hover, completion, definition and document symbols;
+semantic
 tokens are not provided by Godot, so the syntax palette remains in charge of
 token colors.
 

@@ -4623,6 +4623,14 @@ fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
             .active_doc()
             .is_some_and(|doc| doc.line_col().0 == 2)
         {
+            drop(state);
+            let mut state = harness.app.state_mut();
+            state.shutdown_children();
+            if !matches!(state.lsp.status(), crate::model::lsp::LspStatus::Off)
+                || !state.lsp.diagnostics_for(&path).is_empty()
+            {
+                return Err("shutdown did not stop the LSP session".into());
+            }
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(20));
@@ -4659,6 +4667,8 @@ def note(entry):
     if LOG:
         with open(LOG, "a") as handle:
             handle.write(json.dumps(entry) + "\n")
+
+note({"event": "started", "pid": os.getpid()})
 
 while True:
     message = read()
@@ -4766,6 +4776,16 @@ fn check_lsp_monorepo(dir: &Path) -> Result<(), String> {
 }
 
 #[cfg(unix)]
+fn process_alive(pid: u32) -> bool {
+    std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[cfg(unix)]
 fn lsp_monorepo_flow(dir: &Path, project: &Path, log: &Path) -> Result<(), String> {
     let a = canonical_target(project.join("a/main.go"));
     let b = canonical_target(project.join("b/main.go"));
@@ -4853,6 +4873,34 @@ fn lsp_monorepo_flow(dir: &Path, project: &Path, log: &Path) -> Result<(), Strin
         return Err(format!(
             "re-enabling LSP started {initializes} servers, expected a restart"
         ));
+    }
+
+    // AppKit quit does not unwind Rust destructors, so the app calls this
+    // explicitly before replying to terminate. Verify the real child dies.
+    let pid = lsp_log_events(log)
+        .iter()
+        .find_map(|event| event["pid"].as_u64())
+        .ok_or_else(|| "fake language server did not log its pid".to_string())?
+        as u32;
+    harness.app.state_mut().shutdown_children();
+    for _ in 0..50 {
+        if !process_alive(pid) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    if process_alive(pid) {
+        return Err(format!(
+            "shutdown_children left language server pid {pid} running"
+        ));
+    }
+    {
+        let state = harness.app.state();
+        if !matches!(state.lsp.status(), crate::model::lsp::LspStatus::Off)
+            || !state.lsp.diagnostics_for(&a).is_empty()
+        {
+            return Err("shutdown_children did not clear the LSP session".into());
+        }
     }
     println!("selfcheck: monorepo language server ok");
     Ok(())

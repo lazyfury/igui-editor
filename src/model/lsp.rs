@@ -21,6 +21,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
+use super::processes;
 use crate::model::doc::Document;
 use crate::model::Workspace;
 use crate::services::{LanguageServerSpec, ToolInstall};
@@ -221,6 +222,7 @@ impl LspClient {
                 }
                 process.stdin(Stdio::null()).stdout(Stdio::null());
                 let child = process.spawn()?;
+                processes::register(child.id());
                 Self::spawn_tcp(child, port)
             }
         }
@@ -229,6 +231,7 @@ impl LspClient {
     fn spawn_stdio(mut process: Command) -> io::Result<Self> {
         process.stdin(Stdio::piped()).stdout(Stdio::piped());
         let mut child = process.spawn()?;
+        processes::register(child.id());
         let stdin = child
             .stdin
             .take()
@@ -412,6 +415,7 @@ fn connect_loopback(port: u16, timeout: Duration) -> io::Result<TcpStream> {
 
 impl Drop for LspClient {
     fn drop(&mut self) {
+        processes::unregister(self.child.id());
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -1114,6 +1118,9 @@ pub struct LspController {
     enabled: bool,
     /// Whether repository-local `node_modules/.bin` shims may be executed.
     allow_workspace_binaries: bool,
+    /// Set by [`LspController::shutdown`] so no frame can restart a server
+    /// between killing children and AppKit's process exit.
+    stopped: bool,
     changed: bool,
     pub hover: Option<HoverUi>,
     pub hover_anchor: Option<igui_core::Vec2>,
@@ -1148,6 +1155,7 @@ impl Default for LspController {
             issue: None,
             enabled: true,
             allow_workspace_binaries: workspace_binaries_enabled(),
+            stopped: false,
             changed: false,
             hover: None,
             hover_anchor: None,
@@ -1215,6 +1223,14 @@ impl LspController {
             }
         }
         self.changed = true;
+    }
+
+    /// Kills every language-server child and drops session state. Called on
+    /// clean quit before AppKit terminates the process (AppKit's terminate path
+    /// does not unwind Rust destructors).
+    pub fn shutdown(&mut self) {
+        self.stopped = true;
+        self.stop_all();
     }
 
     fn stop_all(&mut self) {
@@ -1298,6 +1314,9 @@ impl LspController {
     /// Starts or reuses servers for the active document and synchronizes every
     /// open document each server owns. Safe to call every frame.
     pub fn tick(&mut self, ws: &Workspace, servers: &[LanguageServerSpec], enabled: bool) {
+        if self.stopped {
+            return;
+        }
         self.set_enabled(enabled);
         if !self.enabled {
             return;
