@@ -14,6 +14,32 @@ A compact text/Markdown editor built on the sibling `igui` engine (`winit` +
 state, documents, preview, terminal, Git and LSP glue; the engine only supplies
 input, scene/layout, text measurement, painting and the window/GPU host.
 
+## Product priority (MUST)
+
+This is a lightweight, focused editor — not an IDE. Every scope decision follows
+this order; a higher priority wins when they conflict:
+
+1. **Text editing + Markdown** — the highest goal. Editing, caret/selection,
+   undo, find/replace, soft wrap, Markdown preview, and their performance and
+   polish.
+2. **Godot (GDScript)** — second goal. The editor-attached language server and
+   GDScript editing behaviour, only as far as it improves editing those files.
+3. **Everything else** — the minimum: simple LSP attach and syntax
+   highlighting. Do not build feature depth beyond that.
+
+Follow-on rules:
+
+- Prefer simplifying or deleting over adding. A new surface must tie clearly to
+  priority 1 or 2; otherwise decline, or implement only the LSP/highlight
+  minimum.
+- Do not grow general-IDE features: no plugin system, multi-root workspaces,
+  debugger, task runner, AI assistant, component library, telemetry or network
+  calls. No new dependency without a reason (rule 10 below).
+- Lightweight is measured, not asserted: startup time, binary size and the
+  Markdown budgets in [`docs/benchmarks.md`](docs/benchmarks.md) must not
+  regress.
+- When in doubt, cut scope: implement the smallest change that serves editing.
+
 ## Non-negotiable rules (MUST)
 
 1. **Do not modify `../igui`.** If an engine capability is missing, build it in
@@ -56,6 +82,8 @@ input, scene/layout, text measurement, painting and the window/GPU host.
 
 1. **Route the task** with the table below; read the listed files first.
 2. **Plan** the smallest change that preserves the layering and adds coverage.
+   Check it against [Product priority](#product-priority-must); drop or shrink
+   anything that does not serve text/Markdown first, Godot second.
 3. **Implement**; keep edits local and avoid broad rewrites.
 4. **Verify** with `scripts/check.sh`; for performance work also
    `scripts/bench.sh` and record numbers.

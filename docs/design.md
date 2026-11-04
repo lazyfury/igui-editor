@@ -13,6 +13,12 @@ One app, two document kinds:
 Out of scope: image editing (that app lives in its own repository), wasm builds,
 a general plugin system.
 
+Priority, highest first: (1) text editing and Markdown experience, (2) the Godot
+GDScript workflow, (3) everything else at the minimum — simple LSP attach plus
+syntax highlighting. Stay lightweight: decline general-IDE features and prefer
+simplification over addition. The enforceable rule set lives in
+[../AGENTS.md](../AGENTS.md#product-priority-must).
+
 ## Where it lives
 
 `~/Documents/igui-editor` — an independent Cargo package with an empty
