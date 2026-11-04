@@ -199,7 +199,7 @@ impl AppState {
         let row_h = self.theme.m.row_h;
         let rows = self.ws.tree.rows();
         if let Some(index) = rows.iter().position(|row| row.path == path) {
-            let view_h = (self.sidebar.rect.size.height - crate::ui::sidebar::HEADER_H).max(0.0);
+            let view_h = self.sidebar.rect.size.height.max(0.0);
             self.sidebar.scroll = (index as f32 * row_h - view_h * 0.5).max(0.0);
         }
         self.sidebar.selected = Some(path.clone());

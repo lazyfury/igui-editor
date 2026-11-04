@@ -461,7 +461,6 @@ impl EditorApp {
         ui::new_file::paint(&mut state, measurer.as_ref(), ctx);
         ui::project_search::paint(&mut state, measurer.as_ref(), ctx);
         ui::lsp::paint(&mut state, measurer.as_ref(), ctx);
-        ui::problems::paint(&mut state, measurer.as_ref(), ctx);
         ui::tooling::paint(&mut state, measurer.as_ref(), ctx);
         ui::drop::paint(&state, measurer.as_ref(), ctx);
         ui::modal::paint(&mut state, measurer.as_ref(), ctx);
@@ -528,13 +527,6 @@ impl EditorApp {
                 if state.tooling.prompt.is_some() {
                     ui::tooling::click(&mut state, *position);
                     return EventResult::Handled;
-                }
-                if state.problems.open {
-                    match ui::problems::click(&mut state, *position) {
-                        ui::problems::Click::Jump(_) => return EventResult::Handled,
-                        ui::problems::Click::Consumed => return EventResult::Handled,
-                        ui::problems::Click::Outside => {}
-                    }
                 }
                 if state.lsp.hover_doc_hit.contains(*position) {
                     if let Some(target) = state
@@ -638,9 +630,9 @@ impl EditorApp {
                     state.dirty = true;
                     return EventResult::Handled;
                 }
-                // Footer LSP chip: open the diagnostic message list.
+                // Footer LSP chip: show the bottom dock's PROBLEMS tab.
                 if state.lsp_hit.contains(*position) {
-                    ui::problems::toggle(&mut state);
+                    state.run(Action::ShowPanel(crate::state::Panel::Problems));
                     state.menu_open = None;
                     state.menu_hover = None;
                     state.dirty = true;
@@ -802,6 +794,8 @@ impl EditorApp {
                 let lsp_toggle_hover = state.lsp_toggle_hit.contains(*position);
                 let header_hover = ui::menu::header_button_at(&state, *position);
                 let panel_hover = ui::menu::panel_at(&state, *position);
+                let dock_hover = ui::dock::tab_at_any(&state, *position);
+                let dock_close_hover = ui::dock::close_at(&state, *position);
                 let git_hover = ui::git::hover_rect(&state, *position);
                 if state.git.hover != git_hover {
                     state.git.hover = git_hover;
@@ -836,6 +830,8 @@ impl EditorApp {
                     || state.problems.hover != problems
                     || state.header_hover != header_hover
                     || state.panel_hover != panel_hover
+                    || state.dock_hover != dock_hover
+                    || state.dock_close_hover != dock_close_hover
                 {
                     state.menubar_hover = menubar;
                     state.menu_hover = menu_hover;
@@ -848,6 +844,8 @@ impl EditorApp {
                     state.problems.hover = problems;
                     state.header_hover = header_hover;
                     state.panel_hover = panel_hover;
+                    state.dock_hover = dock_hover;
+                    state.dock_close_hover = dock_close_hover;
                     state.dirty = true;
                 }
                 if tab_menu_changed || tree_menu_changed {
@@ -934,10 +932,6 @@ impl EditorApp {
                 if state.tooling.prompt.is_some() {
                     return EventResult::Handled;
                 }
-                if state.problems.open && state.problems.rect.contains(*position) {
-                    ui::problems::wheel(&mut state, delta.y);
-                    return EventResult::Handled;
-                }
                 if state.git.detail_visible {
                     let (panel, _) = ui::git::detail_layout(&state);
                     if panel.contains(*position) {
@@ -981,10 +975,6 @@ impl EditorApp {
                     return EventResult::Handled;
                 }
                 if state.search.open && ui::project_search::on_key(&mut state, *key, modifiers) {
-                    return EventResult::Handled;
-                }
-                if state.problems.open && *key == Key::Escape {
-                    ui::problems::close(&mut state);
                     return EventResult::Handled;
                 }
                 if state.lsp_completion_key(*key) {
@@ -1204,6 +1194,8 @@ impl EditorApp {
                     state.lsp_toggle_hover = false;
                     state.lsp_toggle_hover = false;
                     state.problems.hover = None;
+                    state.dock_hover = None;
+                    state.dock_close_hover = None;
                     state.git.hover = None;
                     state.outline.hover = None;
                     state.header_hover = None;
@@ -1281,7 +1273,10 @@ impl EditorApp {
 
     pub fn caret(&self) -> Option<Rect> {
         let state = self.state.borrow();
-        if state.terminal.open && state.focus == Focus::Terminal {
+        if state.terminal.open
+            && state.bottom_tab == crate::state::Panel::Terminal
+            && state.focus == Focus::Terminal
+        {
             return Some(
                 state
                     .terminal
@@ -1823,15 +1818,30 @@ fn build_shell(tree: &mut SceneTree, state: &Rc<RefCell<AppState>>) -> (NodeId, 
         }
     };
 
+    // Bottom dock: one seam, one shared header (tabs + shell instance tabs),
+    // and the body of the active tab. It stays inside `main`, so it spans the
+    // editor column instead of the whole window.
     if state.borrow().terminal.open {
         let handle = ui::terminal::build_handle(tree, main, state.clone());
         kit::flex(tree, handle, 0.0, Some(ui::handle::HANDLE_WIDTH), 0.0);
         kit::min_size(tree, handle, 0.0, ui::handle::HANDLE_WIDTH);
-        let terminal = ui::terminal::build(tree, main, state.clone());
+        let dock = kit::node(tree, main, "bottom-dock");
+        kit::set_container(tree, dock, kit::tight_column());
         let height = state.borrow().terminal.height.clamp(120.0, 600.0);
-        kit::flex(tree, terminal, 0.0, Some(height), 0.0);
-        kit::min_size(tree, terminal, 0.0, height);
-        state.borrow_mut().terminal.node = Some(terminal);
+        kit::flex(tree, dock, 0.0, Some(height), 0.0);
+        kit::min_size(tree, dock, 0.0, height);
+        let header = ui::dock::build_bottom(tree, dock, state.clone());
+        kit::flex(tree, header, 0.0, Some(ui::dock::HEADER_H), 0.0);
+        kit::min_size(tree, header, 0.0, ui::dock::HEADER_H);
+        let bottom_tab = state.borrow().bottom_tab;
+        let body = if bottom_tab == crate::state::Panel::Terminal {
+            ui::terminal::build(tree, dock, state.clone())
+        } else {
+            ui::problems::build(tree, dock, state.clone())
+        };
+        kit::flex(tree, body, 1.0, None, 1.0);
+        kit::min_size(tree, body, 0.0, 0.0);
+        state.borrow_mut().terminal.node = Some(dock);
     } else {
         state.borrow_mut().terminal.node = None;
     }

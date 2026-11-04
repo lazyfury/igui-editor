@@ -17,13 +17,8 @@ pub fn paint_sidebar(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     let m = theme.m;
     let p = theme.p;
     let measurer = env.measurer;
-    let content = Rect::from_min_size(
-        Vec2::new(rect.left(), rect.top() + crate::ui::sidebar::HEADER_H),
-        Size::new(
-            rect.width(),
-            (rect.height() - crate::ui::sidebar::HEADER_H).max(0.0),
-        ),
-    );
+    // The dock header sits above this body, so the list owns the whole rect.
+    let content = rect;
     state.git.rows.clear();
     state.git.refresh_rect = Rect::ZERO;
 

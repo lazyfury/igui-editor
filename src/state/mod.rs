@@ -45,6 +45,7 @@ pub(crate) mod schedule;
 // in this module; each child owns one concern so no single file becomes a god
 // object. Fields remain private to `state`, which child modules may access.
 mod actions;
+mod dock;
 mod files;
 mod find;
 mod git;
@@ -52,7 +53,6 @@ mod keymap;
 mod lsp;
 mod modal;
 mod new_file;
-mod panels;
 mod quick_open;
 mod reliability;
 mod rename;
@@ -65,7 +65,7 @@ mod tooling;
 mod view;
 mod workspace;
 
-pub use panels::{Panel, PanelGroup};
+pub use dock::{DockId, Panel};
 
 pub const MAX_RECENT: usize = 8;
 /// Recent entries shown per group in the File menu (the session keeps 8 each).
@@ -359,7 +359,7 @@ impl Action {
             Action::ToggleOutline => state.show_outline,
             Action::ShowPanel(panel) => panel.is_open(state),
             Action::ToggleSoftWrap => state.session.soft_wrap,
-            Action::ToggleTerminal => state.terminal.open,
+            Action::ToggleTerminal => Panel::Terminal.is_open(state),
             Action::SetLanguage(None) => state.language_override_of_active().is_none(),
             Action::SetLanguage(Some(name)) => {
                 state.language_override_of_active() == Some(name.as_str())
@@ -435,6 +435,7 @@ pub fn items(menu: Menu, state: &AppState) -> Vec<Option<Action>> {
             Some(Action::ToggleScrollSync),
             Some(Action::ToggleSoftWrap),
             Some(Action::ToggleTerminal),
+            Some(Action::ShowPanel(Panel::Problems)),
             Some(Action::Settings),
         ],
     }
@@ -621,14 +622,13 @@ pub struct EditorUi {
 /// Sidebar geometry captured by the last paint.
 #[derive(Clone, Debug, Default)]
 pub struct SidebarUi {
+    /// Body rectangle (below the dock header); rows and scroll use it.
     pub rect: Rect,
     pub scroll: f32,
     pub hover: Option<usize>,
     pub selected: Option<PathBuf>,
     /// Empty-state actions (no project open).
     pub actions: Vec<(Action, Rect)>,
-    /// Sidebar tab hit rectangles (tab id, rect).
-    pub tabs: Vec<(&'static str, Rect)>,
 }
 
 /// Right-side document outline (LSP document symbols).
@@ -643,13 +643,17 @@ pub struct OutlineUi {
     pub rows: Vec<(usize, Rect)>,
 }
 
-/// LSP problems popup, anchored above the status bar.
+/// Bottom-dock PROBLEMS panel: a workspace-wide, click-to-jump diagnostic list.
 #[derive(Clone, Debug, Default)]
 pub struct ProblemsUi {
-    pub open: bool,
+    /// Diagnostic snapshot from every live language server, refreshed on change.
+    pub rows: Vec<crate::model::lsp::ProblemEntry>,
+    /// Severity totals for the dock tab badge (cached with `rows`).
+    pub errors: usize,
+    pub warnings: usize,
     pub hover: Option<usize>,
     pub rect: Rect,
-    /// Visible diagnostic index and its hit rectangle, recorded during paint.
+    /// Visible row index and its hit rectangle, recorded during paint.
     pub hits: Vec<(usize, Rect)>,
     pub scroll: f32,
     pub scroll_max: f32,
@@ -1155,6 +1159,8 @@ pub struct AppState {
     pub ws: Workspace,
     pub show_sidebar: bool,
     pub show_outline: bool,
+    /// Active bottom-dock tab (`Terminal` or `Problems`).
+    pub bottom_tab: Panel,
     pub viewport: ViewportSize,
     pub sidebar: SidebarUi,
     pub outline: OutlineUi,
@@ -1180,6 +1186,13 @@ pub struct AppState {
     pub panel_hits: Vec<(Panel, Rect)>,
     /// Header panel button under the pointer.
     pub panel_hover: Option<Panel>,
+    /// Dock tab strips: per-dock tab rectangles and close button, recorded in
+    /// paint so paint and hit-testing share one layout.
+    pub dock_hits: [Vec<(Panel, Rect)>; 3],
+    pub dock_close: [Rect; 3],
+    /// Dock tab / close button under the pointer.
+    pub dock_hover: Option<Panel>,
+    pub dock_close_hover: Option<DockId>,
     /// Native-style window chrome painted by the header.
     pub header_close: Rect,
     pub header_minimize: Rect,
@@ -1326,6 +1339,9 @@ impl AppState {
             ws,
             show_sidebar: session.sidebar,
             show_outline,
+            bottom_tab: Panel::from_id(&session.bottom_tab)
+                .filter(|panel| panel.dock() == DockId::Bottom)
+                .unwrap_or(Panel::Terminal),
             viewport: ViewportSize::default(),
             sidebar: SidebarUi::default(),
             outline: OutlineUi::default(),
@@ -1356,6 +1372,10 @@ impl AppState {
             menubar_hits: Vec::new(),
             panel_hits: Vec::new(),
             panel_hover: None,
+            dock_hits: std::array::from_fn(|_| Vec::new()),
+            dock_close: [Rect::ZERO; 3],
+            dock_hover: None,
+            dock_close_hover: None,
             header_close: Rect::ZERO,
             header_minimize: Rect::ZERO,
             header_zoom: Rect::ZERO,
@@ -1868,7 +1888,8 @@ mod tests {
         state.terminal.sessions.push(TerminalSession::default());
         state.outline.hover = Some(1);
         state.outline.scroll = 12.0;
-        state.problems.open = true;
+        state.bottom_tab = Panel::Problems;
+        state.terminal.open = true;
 
         state.open_project(second.clone());
 
@@ -1880,7 +1901,7 @@ mod tests {
         assert!(state.terminal.sessions.is_empty());
         assert!(state.outline.hover.is_none());
         assert_eq!(state.outline.scroll, 0.0);
-        assert!(!state.problems.open);
+        assert!(state.problems.rows.is_empty());
         let _ = std::fs::remove_dir_all(&base);
     }
 

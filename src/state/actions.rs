@@ -264,21 +264,8 @@ impl AppState {
             Action::LspCompletion => self.request_lsp_completion(),
             Action::LspDefinition => self.request_lsp_definition(),
             Action::Settings => self.toggle_settings(),
-            Action::ToggleSidebar => {
-                self.show_sidebar = !self.show_sidebar;
-                self.session.sidebar = self.show_sidebar;
-                self.config_dirty = true;
-                self.needs_rebuild = true;
-            }
-            Action::ToggleOutline => {
-                self.show_outline = !self.show_outline;
-                self.session.outline = self.show_outline;
-                if !self.show_outline {
-                    self.outline.hover = None;
-                }
-                self.config_dirty = true;
-                self.needs_rebuild = true;
-            }
+            Action::ToggleSidebar => self.dock_toggle(DockId::Left),
+            Action::ToggleOutline => self.dock_toggle(DockId::Right),
             Action::ShowPanel(panel) => self.toggle_panel(panel),
             Action::ToggleTheme => {
                 self.theme.toggle();

@@ -70,7 +70,9 @@ against cold and running `open -a` launches; Dock menu/quit methods are installe
 on the existing winit delegate.
 
 LSP checks: a scripted stdio language server is launched through the real
-client; diagnostics appear under the changed line and in the footer, `F1` paints
+client; diagnostics appear under the changed line and in the footer, the footer
+chip opens the bottom dock's PROBLEMS tab (workspace rows, click jumps and keeps
+the panel open), `F1` paints
 a hover card, `⌘I`/`Ctrl+I` opens a completion list and inserts the selected
 item, and `F12` jumps to the returned definition. A second scripted server
 checks a `go.work` monorepo: one `initialize`, two `didOpen`s with the `go`
@@ -100,7 +102,8 @@ the earliest of the status/hover/autocomplete/preview/poll deadlines.
 The quality pass adds tests for: keymap unbind not being resurrected by a
 fallback table, literal Ctrl chords on both platform paths, movement actions,
 native child cleanup on LSP shutdown,
-terminal session tabs/close and scrollback clamping,
+terminal session tabs/close, shell tabs surviving a dock tab switch / dock close
+and scrollback clamping, dock tab switching and session-tab hit geometry,
 CRLF save round-trips, undo/redo save-point cleanliness, divergent save-point
 invalidation, batched replace (one undo step), bounded find matches, terminal
 focus keeping clipboard/history out of the editor document, sidebar row-cache

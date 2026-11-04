@@ -9,10 +9,8 @@ use igui_ui::{Container, PaintEnv, PointerPhase, TextMeasurer};
 
 use crate::kit::{self, RectExt};
 use crate::state::{AppState, Focus};
-use crate::ui::icon::{self, Icon};
 
 pub const HEIGHT: f32 = 220.0;
-const HEADER: f32 = 28.0;
 
 pub fn build_handle(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>) -> NodeId {
     let id = kit::node(tree, parent, "terminal-handle");
@@ -98,27 +96,6 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
                 PointerPhase::Down => {
                     state.focus = Focus::Terminal;
                     state.terminal.focused = true;
-                    if state.terminal.header_rect.contains(pos) {
-                        if state.terminal.new_hit.contains(pos) {
-                            state.terminal_new_session();
-                        } else if state.terminal.close_hit.contains(pos) {
-                            let active = state.terminal.active;
-                            state.terminal_close_session(active);
-                        } else {
-                            let tab = state
-                                .terminal
-                                .tab_hits
-                                .iter()
-                                .find(|(_, rect)| rect.contains(pos))
-                                .map(|(index, _)| *index);
-                            if let Some(index) = tab {
-                                state.terminal_select_session(index);
-                            }
-                        }
-                        state.dirty = true;
-                        igui_ui::request_paint(tree);
-                        return;
-                    }
                     if let Some(cell) = state.terminal_cell_at(pos) {
                         state.terminal_begin_selection(cell);
                     }
@@ -223,59 +200,34 @@ fn caret_rect(body: Rect, cell_w: f32, line_h: f32, row: u16, col: u16) -> Rect 
     )
 }
 
-fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
-    let theme = state.theme;
-    let m = theme.m;
-    let p = theme.p;
-    let focused = state.focus == Focus::Terminal;
-    kit::fill(env.ctx, rect, p.bg);
-    let header = Rect::from_min_size(rect.origin, Size::new(rect.width(), HEADER));
-    state.terminal.header_rect = header;
+/// Shell-instance tabs (`1 2 + ×`) in the bottom dock header, starting at `x`.
+/// Hit rectangles are recorded for [`session_tab_click`].
+pub fn paint_session_tabs(
+    ctx: &mut igui_render::PaintContext,
+    state: &mut AppState,
+    rect: Rect,
+    mut x: f32,
+) {
+    let m = state.theme.m;
+    let p = state.theme.p;
     state.terminal.tab_hits.clear();
     state.terminal.new_hit = Rect::ZERO;
     state.terminal.close_hit = Rect::ZERO;
-
-    let icon_rect = Rect::from_min_size(
-        Vec2::new(
-            rect.left() + 10.0,
-            rect.top() + (HEADER - icon::SMALL) * 0.5,
-        ),
-        Size::new(icon::SMALL, icon::SMALL),
-    );
-    icon::paint(
-        env.ctx,
-        Icon::Terminal,
-        icon_rect,
-        if focused { p.accent } else { p.faint },
-    );
-    let title_x = rect.left() + 10.0 + icon::SMALL + 5.0;
-    kit::text(
-        env.ctx,
-        "TERMINAL",
-        title_x,
-        rect.top() + 18.0,
-        m.font_small,
-        if focused { p.accent } else { p.faint },
-    );
-
-    // Session tabs, then + and close. Hit rectangles are consumed by input.
-    let label_w = kit::width(env.measurer, "TERMINAL", m.font_small);
-    let mut x = title_x + label_w + 12.0;
-    let right_limit = rect.right() - 96.0;
-    for index in 0..state.terminal.sessions.len() {
+    let tab_h = (rect.height() - 8.0).max(14.0);
+    let top = rect.center().y - tab_h * 0.5;
+    let right_limit = rect.right() - crate::ui::dock::CLOSE_W - 8.0;
+    let count = state.terminal.sessions.len();
+    for index in 0..count {
         if x + 24.0 > right_limit {
             break;
         }
-        let tab = Rect::from_min_size(
-            Vec2::new(x, rect.top() + 4.0),
-            Size::new(24.0, HEADER - 8.0),
-        );
+        let tab = Rect::from_min_size(Vec2::new(x, top), Size::new(24.0, tab_h));
         let active = index == state.terminal.active;
         if active {
-            kit::fill(env.ctx, tab, p.active);
+            kit::fill(ctx, tab, p.active);
         }
         kit::text(
-            env.ctx,
+            ctx,
             &(index + 1).to_string(),
             tab.center().x - 3.0,
             tab.center().y + 5.0,
@@ -286,12 +238,9 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         x += 26.0;
     }
     if !state.terminal.sessions.is_empty() && x + 24.0 <= right_limit {
-        let new = Rect::from_min_size(
-            Vec2::new(x, rect.top() + 4.0),
-            Size::new(24.0, HEADER - 8.0),
-        );
+        let new = Rect::from_min_size(Vec2::new(x, top), Size::new(24.0, tab_h));
         kit::text(
-            env.ctx,
+            ctx,
             "+",
             new.center().x - 4.0,
             new.center().y + 5.0,
@@ -303,18 +252,48 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             Vec2::new(new.right() + 4.0, new.top()),
             Size::new(24.0, new.height()),
         );
-    }
-
-    if state.terminal.close_hit != Rect::ZERO {
         let c = state.terminal.close_hit.center();
-        kit::text(env.ctx, "×", c.x - 4.0, c.y + 5.0, m.font_ui, p.dim);
+        kit::text(ctx, "×", c.x - 4.0, c.y + 5.0, m.font_ui, p.dim);
     }
+}
+
+/// Runs a press on the shell-instance tabs. Returns whether it was handled.
+pub fn session_tab_click(state: &mut AppState, pos: Vec2) -> bool {
+    if state.terminal.new_hit.contains(pos) {
+        state.terminal_new_session();
+        return true;
+    }
+    if state.terminal.close_hit != Rect::ZERO && state.terminal.close_hit.contains(pos) {
+        let active = state.terminal.active;
+        state.terminal_close_session(active);
+        return true;
+    }
+    let tab = state
+        .terminal
+        .tab_hits
+        .iter()
+        .find(|(_, rect)| rect.contains(pos))
+        .map(|(index, _)| *index);
+    match tab {
+        Some(index) => {
+            state.terminal_select_session(index);
+            true
+        }
+        None => false,
+    }
+}
+
+fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
+    let theme = state.theme;
+    let p = theme.p;
+    let focused = state.focus == Focus::Terminal;
+    kit::fill(env.ctx, rect, p.bg);
 
     let body = Rect::from_min_size(
-        Vec2::new(rect.left() + 8.0, rect.top() + HEADER),
+        Vec2::new(rect.left() + 8.0, rect.top() + 4.0),
         Size::new(
             (rect.width() - 16.0).max(16.0),
-            (rect.height() - HEADER).max(16.0),
+            (rect.height() - 8.0).max(16.0),
         ),
     );
     state.terminal.rect = body;

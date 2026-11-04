@@ -32,11 +32,12 @@ pub(crate) enum Icon {
     PanelRight,
     PanelBottom,
     Terminal,
+    CircleAlert,
 }
 
 impl Icon {
     /// Every icon, in cache order (see [`Icon::index`]).
-    pub(crate) const ALL: [Icon; 7] = [
+    pub(crate) const ALL: [Icon; 8] = [
         Icon::Files,
         Icon::GitBranch,
         Icon::ListTree,
@@ -44,6 +45,7 @@ impl Icon {
         Icon::PanelRight,
         Icon::PanelBottom,
         Icon::Terminal,
+        Icon::CircleAlert,
     ];
 
     /// Source SVG (embedded, never read from disk at runtime).
@@ -56,21 +58,8 @@ impl Icon {
             Icon::PanelRight => include_str!("../../assets/icons/lucide/panel-right.svg"),
             Icon::PanelBottom => include_str!("../../assets/icons/lucide/panel-bottom.svg"),
             Icon::Terminal => include_str!("../../assets/icons/lucide/terminal.svg"),
+            Icon::CircleAlert => include_str!("../../assets/icons/lucide/circle-alert.svg"),
         }
-    }
-
-    /// Semantic name used by service/plugin descriptors (e.g. a sidebar tab).
-    pub(crate) fn from_name(name: &str) -> Option<Self> {
-        Some(match name {
-            "files" => Icon::Files,
-            "git-branch" => Icon::GitBranch,
-            "list-tree" => Icon::ListTree,
-            "panel-left" => Icon::PanelLeft,
-            "panel-right" => Icon::PanelRight,
-            "panel-bottom" => Icon::PanelBottom,
-            "terminal" => Icon::Terminal,
-            _ => return None,
-        })
     }
 
     /// Index into the document cache. Must match [`Icon::ALL`] order.
@@ -83,6 +72,7 @@ impl Icon {
             Icon::PanelRight => 4,
             Icon::PanelBottom => 5,
             Icon::Terminal => 6,
+            Icon::CircleAlert => 7,
         }
     }
 }
@@ -167,22 +157,5 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn semantic_names_round_trip() {
-        for icon in Icon::ALL {
-            let name = match icon {
-                Icon::Files => "files",
-                Icon::GitBranch => "git-branch",
-                Icon::ListTree => "list-tree",
-                Icon::PanelLeft => "panel-left",
-                Icon::PanelRight => "panel-right",
-                Icon::PanelBottom => "panel-bottom",
-                Icon::Terminal => "terminal",
-            };
-            assert_eq!(Icon::from_name(name), Some(icon));
-        }
-        assert_eq!(Icon::from_name("unknown"), None);
     }
 }

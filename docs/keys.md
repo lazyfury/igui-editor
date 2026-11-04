@@ -26,6 +26,8 @@
 | `⌘F` / `⌥⌘F` | find / jump to the replace field |
 | `⌘G` / `⇧⌘G` | next / previous match |
 | `⌘B` | toggle sidebar |
+| `⌃\`` | toggle the bottom dock's Terminal tab |
+| `⌘⌥P` | toggle the bottom dock's **PROBLEMS** tab |
 | `⇧⌘L` | toggle dark / light |
 | `⇧⌘M` | cycle Editor → Split Preview → Preview Only |
 | `⇧⌘Y` | toggle editor/preview scroll sync |

@@ -290,13 +290,37 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    network, build step or texture atlas. The engine's `igui_svg` crate parses the
    subset into flattened polylines and strokes them (round caps/joins included);
    `ui::icon` only caches the parsed documents and paints them in the active
-   palette color, so icons stay crisp at any DPI. `state::panels` is the single table
-   for toggleable panels: dock group, icon, label, command and open state. The
-   header's right side lays those panels out with Git first, then the left,
+   palette color, so icons stay crisp at any DPI. `state::dock` is the single
+   table for docked panels: dock, icon, label, command, open state and badge.
+   The header's right side lays those panels out with Git first, then the left,
    right and bottom dock toggles, with the project name beside them and
    the active file label to its left; one function computes the geometry and
-   records the hit rectangles during paint. The same table also drives the
-   sidebar tabs' icons and the Outline/Terminal headers.
+   records the hit rectangles during paint. The same table also drives every
+   dock's tab strip.
+
+37. **Docks are tabs around one editor; the center is not a dock.** A dock
+   (`state::dock::{DockId, Panel}`) owns an ordered tab list, one active tab and
+   an open flag; `Panel` stays the single table for a tab's dock, icon, label,
+   command, open state and badge. One shared strip (`ui::dock`) paints and
+   hit-tests every dock header from the rectangles recorded during paint, so the
+   four regions cannot drift. The center region is deliberately **not** a dock:
+   its tabs are documents with their own undo, dirty state, close confirmation
+   and session ordering in `model::workspace`, and folding them into the dock
+   model would create a second document lifecycle. The left dock keeps its two
+   tabs (Explorer, Git), the right dock owns the outline, and the bottom dock
+   owns **Problems and Terminal** (in that order), which is the pair that belongs
+   together in daily use; the PROBLEMS tab title carries the workspace `1E 2W`
+   totals, colored by the worst severity. The bottom dock stays inside the editor column (the sidebar and
+   outline keep their full height) instead of spanning the whole window, which
+   avoids restructuring the shell row for no functional gain. Closing a dock
+   only hides it: terminal shells keep
+   running so reopening restores the same sessions, and tab selection persists
+   in the session (`bottom_tab`). Switching projects still kills the shells
+   because their cwd belongs to the old root. `PROBLEMS` replaces the old
+   status-bar popup: it lists every diagnostic from every live language server,
+   grouped by file, and a click opens the file and jumps without hiding the
+   panel. The footer chip keeps reporting the active document's counts and now
+   opens that tab.
 
 ## Theme spec (geek / compact / no corners)
 
@@ -420,7 +444,8 @@ with vt100 cell rendering and `⌃\`` toggle. Extension host remains deferred.
 
 **M11 (in progress)** — terminal horizontal shared handle, persisted height/open,
 IME caret, vim application cursor mode, live PTY repaint, vt100 scrollback,
-inclusive cell selection/copy and multiple shell tabs.
+inclusive cell selection/copy, multiple shell tabs and a tabbed bottom dock that
+shares one header with the workspace-wide PROBLEMS panel.
 
 Next candidates: Git discard/branch/network operations, Dock reopen, cross-file
 undo and incremental preview layout for very large documents.

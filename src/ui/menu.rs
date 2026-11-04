@@ -13,7 +13,7 @@ use igui_scene::SceneTree;
 use igui_ui::{Container, PaintEnv, TextMeasurer};
 
 use crate::kit::{self, RectExt};
-use crate::state::{self, Action, AppState, HeaderButton, Menu, Panel, PanelGroup};
+use crate::state::{self, Action, AppState, DockId, HeaderButton, Menu, Panel};
 use crate::ui::icon;
 
 /// Drop-down geometry.
@@ -30,14 +30,14 @@ const PANEL_INSET: f32 = 10.0;
 
 /// One layout function for the header's panel buttons. Paint records the rects
 /// in `AppState::panel_hits`; hit-testing reads those recorded rects.
-pub fn panel_buttons(rect: Rect) -> Vec<(Panel, PanelGroup, Rect)> {
+pub fn panel_buttons(rect: Rect) -> Vec<(Panel, DockId, Rect)> {
     let mut groups = 0usize;
     let mut previous = None;
     for panel in Panel::ALL {
-        let group = panel.group();
-        if previous != Some(group) {
+        let dock = panel.dock();
+        if previous != Some(dock) {
             groups += 1;
-            previous = Some(group);
+            previous = Some(dock);
         }
     }
     let count = Panel::ALL.len();
@@ -50,18 +50,18 @@ pub fn panel_buttons(rect: Rect) -> Vec<(Panel, PanelGroup, Rect)> {
     let mut out = Vec::with_capacity(count);
     let mut previous = None;
     for panel in Panel::ALL {
-        let group = panel.group();
+        let dock = panel.dock();
         if let Some(previous) = previous {
-            x += if previous == group {
+            x += if previous == dock {
                 PANEL_GAP
             } else {
                 PANEL_GROUP_GAP
             };
         }
         let button = Rect::from_min_size(Vec2::new(x, top), Size::new(PANEL_BUTTON, PANEL_BUTTON));
-        out.push((panel, group, button));
+        out.push((panel, dock, button));
         x += PANEL_BUTTON;
-        previous = Some(group);
+        previous = Some(dock);
     }
     out
 }
@@ -243,10 +243,10 @@ fn paint_bar(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     // Right side: grouped panel toggles, then the active file label.
     state.panel_hits.clear();
     let buttons = panel_buttons(rect);
-    let mut previous_group = None;
-    for (panel, group, button) in buttons {
-        if let Some(previous) = previous_group {
-            if previous != group {
+    let mut previous_dock = None;
+    for (panel, dock, button) in buttons {
+        if let Some(previous) = previous_dock {
+            if previous != dock {
                 let x = button.left() - PANEL_GROUP_GAP * 0.5;
                 kit::vline(
                     env.ctx,
@@ -284,7 +284,7 @@ fn paint_bar(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             color,
         );
         state.panel_hits.push((panel, button));
-        previous_group = Some(group);
+        previous_dock = Some(dock);
     }
 
     let right = state

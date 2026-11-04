@@ -39,7 +39,8 @@ src/
   services/           native service registry + built-in plugin descriptors
   ui/git.rs           GIT sidebar tab + diff overlay + commit prompt
   ui/lsp.rs           hover card + completion list overlays
-  ui/problems.rs      severity-colored PROBLEMS popup and diagnostic hover
+  ui/dock.rs          shared dock tab strip (layout, paint, hit tests, close)
+  ui/problems.rs      bottom-dock PROBLEMS list (workspace diagnostics, jump)
   ui/tooling.rs       missing-tool prompt (copy-only install command)
   ui/docs_view.rs     dedicated read-only docs tab view (wrap + link hit-test)
   ui/outline.rs       right document-symbol outline
@@ -47,14 +48,14 @@ src/
   ui/icon.rs          embedded Lucide icons, cached igui_svg documents + painter
   ui/tree_menu.rs     file-tree context menu
   ui/settings.rs      settings + Keymap row
-  ui/terminal.rs      vt100 cell renderer + terminal key encoding
+  ui/terminal.rs      vt100 cell renderer, shell tabs and terminal key encoding
   input.rs            keyboard dispatch: modal -> find -> shortcuts -> tree
   state/mod.rs        AppState value, constructors, menus and hit rects
   state/actions.rs    command dispatch (menus, shortcuts, keymap actions)
   state/{tabs,files,find,modal,workspace}.rs  document lifecycle and dialogs
   state/{terminal,git,lsp,search}.rs  native services and workers
   state/tooling.rs    missing-tool prompt state, LSP on/off entry point
-  state/panels.rs     header panel table, dock groups and toggle commands
+  state/dock.rs       dock/panel table, open state, tab commands, badges
   state/{settings,view,reliability,services,new_file,quick_open}.rs
                       settings, layout, autosave/recovery and prompt state
   state/schedule.rs   time-based wakeup deadlines (status/hover/autosave/poll)

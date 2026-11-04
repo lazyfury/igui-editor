@@ -22,7 +22,7 @@ const MAX_RECENT: usize = 8;
 /// Persisted application state. Missing/corrupt files fall back to defaults.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Session {
-    /// Format version (currently `14`); unknown keys are ignored so
+    /// Format version (currently `15`); unknown keys are ignored so
     /// older/newer files keep loading.
     pub version: u32,
     /// `"dark"` or `"light"`.
@@ -70,6 +70,8 @@ pub struct Session {
     pub sidebar_tab: String,
     pub terminal_open: bool,
     pub terminal_height: f32,
+    /// Active bottom-dock tab (`terminal`, `problems`).
+    pub bottom_tab: String,
     /// Keyboard profile (`vscode`, `idea`, `vim`).
     pub keymap: String,
     /// Last window geometry (logical size + position).
@@ -88,7 +90,7 @@ pub struct WindowGeometry {
 impl Default for Session {
     fn default() -> Self {
         Self {
-            version: 14,
+            version: 15,
             theme: "dark".into(),
             sidebar: true,
             outline: true,
@@ -114,6 +116,7 @@ impl Default for Session {
             sidebar_tab: "explorer".into(),
             terminal_open: false,
             terminal_height: 220.0,
+            bottom_tab: "terminal".into(),
             keymap: "vscode".into(),
             window: None,
             window_maximized: false,
@@ -179,6 +182,7 @@ impl Session {
                 "terminal_height" => {
                     session.terminal_height = value.parse().unwrap_or(session.terminal_height)
                 }
+                "bottom_tab" => session.bottom_tab = value,
                 "keymap" => session.keymap = value,
                 key if key.starts_with("lang.") => {
                     let rest = &key["lang.".len()..];
@@ -245,7 +249,7 @@ impl Session {
     pub fn render(&self) -> String {
         let mut out = String::new();
         // Always write the current format; parsing older files still works.
-        out.push_str("version=14\n");
+        out.push_str("version=15\n");
         out.push_str(&format!("theme={}\n", self.theme));
         out.push_str(&format!("sidebar={}\n", u8::from(self.sidebar)));
         out.push_str(&format!("outline={}\n", u8::from(self.outline)));
@@ -274,6 +278,7 @@ impl Session {
         out.push_str(&format!("sidebar_tab={}\n", escape(&self.sidebar_tab)));
         out.push_str(&format!("terminal_open={}\n", u8::from(self.terminal_open)));
         out.push_str(&format!("terminal_height={}\n", self.terminal_height));
+        out.push_str(&format!("bottom_tab={}\n", escape(&self.bottom_tab)));
         out.push_str(&format!("keymap={}\n", self.keymap));
         for (index, (path, name)) in self.languages.iter().enumerate() {
             out.push_str(&format!(
@@ -468,6 +473,21 @@ mod tests {
             !path.with_extension("tmp").exists(),
             "temp file must be gone"
         );
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn bottom_dock_tab_round_trips() {
+        let path = temp_path("bottom-tab");
+        let session = Session {
+            bottom_tab: "problems".into(),
+            terminal_open: true,
+            ..Session::default()
+        };
+        session.save(&path).unwrap();
+        let loaded = Session::load(&path);
+        assert_eq!(loaded.bottom_tab, "problems");
+        assert!(loaded.terminal_open);
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 

@@ -94,7 +94,6 @@ impl AppState {
     /// popups so the user sees a single message.
     pub fn show_tool_prompt(&mut self, issue: LspIssue) {
         self.tooling.show(issue);
-        self.problems.open = false;
         self.lsp.dismiss_transient();
         self.dirty = true;
     }
@@ -146,7 +145,7 @@ impl AppState {
         self.lsp.set_enabled(enabled);
         if !enabled {
             self.tooling.close();
-            self.problems.open = false;
+            self.refresh_problems();
         }
         self.settings_changed();
         self.status(if enabled {

@@ -81,11 +81,16 @@ diagnostics/semantic tokens/outline. The same switch is the
 
 - Diagnostics are painted as severity-colored underlines and a full-height
   gutter severity rail. The footer chip is colored by the worst severity and
-  shows `LSP 1E 2W` (or `LSP ERR` if the server cannot start). Click the chip
-  to open **PROBLEMS**: every diagnostic with `E`/`W`, line:column and the full
-  message; click a row to jump, `Esc` or an outside click closes it. Hovering
-  an underlined diagnostic shows its message immediately; moving onto normal
-  code resumes the normal LSP hover card.
+  shows the active document's `LSP 1E 2W` (or `LSP ERR` if the server cannot
+  start). Click the chip (or `⌘⌥P`, or the header Problems button) to open
+  **PROBLEMS**, the bottom dock's first tab: every diagnostic from every live
+  language server, grouped by file with `E`/`W`, line:column and the full
+  message. The tab title carries the workspace totals (`1E 2W`, colored by the
+  worst severity), so the error/warning state is visible even when the terminal
+  tab is showing. Click a row to open that file and jump to it; the panel stays
+  open so a review pass can work through the list. Hovering an underlined diagnostic shows its
+  message immediately; moving onto normal code resumes the normal LSP hover
+  card.
 - Semantic tokens refine the syntax pass: variables, parameters, fields,
   functions/methods, types, macros, keywords and literals get server-aware
   colors. Tokens the server does not classify keep their syntax color.
@@ -175,21 +180,23 @@ token colors.
 ## Header panel groups
 
 The right side of the header is a compact row of icon buttons: **Git**, then
-the **left** (Explorer), **right** (Outline) and **bottom** (Terminal) dock
-toggles. Hairlines separate the dock groups and the active panel gets an accent
-underline, so the current dock layout is readable without opening a menu.
-Clicking a button toggles that panel; clicking Explorer or Git while the left
-dock shows the other tab switches tabs instead of closing the dock. The open
-project name sits next to the toggles and the active file label sits to its
-left; both truncate from the left when space runs out. The generic toggles
-remain in the View menu, and every panel is bindable through `keymaps.json`
-(`view.explorer`, `view.git`, `view.outline`, `view.terminal`).
+the **left** (Explorer), **right** (Outline) and **bottom** (Terminal,
+Problems) dock toggles. Hairlines separate the dock groups and the active panel
+gets an accent underline, so the current dock layout is readable without opening
+a menu. Clicking a button opens that dock on the button's tab, switches tabs
+when the dock already shows another one, and closes the dock when the tab is
+already visible. The open project name sits next to the toggles and the active
+file label sits to its left; both truncate from the left when space runs out.
+The generic toggles remain in the View menu, and every panel is bindable through
+`keymaps.json` (`view.explorer`, `view.git`, `view.outline`, `view.terminal`,
+`view.problems`).
 
 Icons are Lucide SVGs vendored under `assets/icons/lucide` (ISC). They are
 compiled in, parsed once by the engine's `igui_svg` renderer and stroked by
 `src/ui/icon.rs` (including Lucide's round caps/joins), so they scale with DPI,
-follow the active palette and need no texture atlas or runtime asset files. The Explorer/Git tabs, the Outline header
-and the Terminal header use the same icon set.
+follow the active palette and need no texture atlas or runtime asset files. Every
+dock header paints the dock's tabs with that same icon set and one shared tab
+strip, and a dock's `×` closes it without discarding its state.
 
 ## Outline (`⌘⌥O`, View → Outline)
 
@@ -207,9 +214,14 @@ Symbols are transient LSP state, not saved to disk.
 
 ## Terminal (`⌃\``, View → Terminal)
 
-Native PTY (`portable-pty`) + `vt100` screen, no WebView or JS. The panel sits
-below the editor with a draggable top handle (120–600 px, default 220 px,
-double-click resets). It starts a **login** `$SHELL` (`-l`), so
+Native PTY (`portable-pty`) + `vt100` screen, no WebView or JS. The terminal is
+the bottom dock's second tab, after **PROBLEMS**; the panel sits below the
+editor with a draggable top handle (120–600 px, default 220 px, double-click
+resets). `⌃\`` shows the Terminal tab and hides the dock when it is already
+visible, and switching tabs never kills a shell. The dock header shows one
+numbered tab per shell (right of the dock tabs) with `+` for another shell and
+`×` for the active one; the dock's own `×` at the far right hides the panel and
+keeps every shell running for the next open. It starts a **login** `$SHELL` (`-l`), so
 `/etc/zprofile` and `~/.zprofile` run just as they do in Terminal.app, and
 supports ANSI/256-color cells, cursor, resize, plain text, arrows, Ctrl letters,
 Alt prefixes, application cursor mode (vim/less) and IME candidate placement at
@@ -250,16 +262,19 @@ and wide (CJK) glyphs use the UI family centered in their two columns, so
 regional fallback faces. This relies on the engine's
 per-draw font family (`DrawCommand::DrawText::family`,
 `PaintContext::draw_text_in`, `TextMeasurer::advance_in`). The terminal grid size
-is always reconciled against the parser's screen, so closing and reopening the
-panel re-sizes the PTY instead of drawing a stale 80×24 screen. `Ctrl+\`` closes it
-and kills the child. Focus is visible through the caret: the active editor caret is accent and
-2 px, the inactive caret dims, and the terminal header text/cursor accent only
-while it owns keyboard focus. Editor and terminal tops have no accent rule.
-The terminal header shows one tab per shell; `+` opens another shell in the
-same cwd and `×` closes the active one. Each tab keeps its own parser,
-scrollback and selection, while editor text/terminal cell fonts stay shared.
-Open state and height persist in the session; shell processes and screen
-contents do not, and sessions are not restored after a restart.
+is always reconciled against the parser's screen, so hiding and reopening the
+dock re-sizes the PTY instead of drawing a stale 80×24 screen. `Ctrl+\`` hides the
+dock (or shows its Terminal tab) and keeps the shells running; only **Close
+Project**, quitting or a shell exit ends a process. Focus is visible through the
+caret: the active editor caret is accent and 2 px, the inactive caret dims, and
+the dock's TERMINAL tab label plus the terminal cursor turn accent only while the
+terminal owns keyboard focus. Editor and terminal tops have no accent rule.
+The bottom dock header shows one numbered tab per shell next to the dock tabs;
+`+` opens another shell in the same cwd and `×` closes the active one. Each tab
+keeps its own parser, scrollback and selection, while editor text/terminal cell
+fonts stay shared. Dock open state, the active dock tab and the height persist in
+the session; shell processes and screen contents do not, so a restart starts a
+fresh shell.
 
 ## macOS integration
 
@@ -419,9 +434,9 @@ clickable.
   **File → Close Project** clears the project root, every tab, the terminal and
   the project-scoped Git/LSP/outline state (dirty tabs ask first).
 - **Switching projects** (opening another project, or dropping another folder)
-  closes the old project. The terminal is re-created in the new root when its
-  panel was open, LSP sessions restart, and the outline, problems popup and Git
-  snapshot are reset. Dirty tabs open the **Switch project** confirmation.
+  closes the old project. The terminal is re-created in the new root when the
+  bottom dock was open, LSP sessions restart, and the outline, PROBLEMS list and
+  Git snapshot are reset. Dirty tabs open the **Switch project** confirmation.
 - **Dropping files** opens them in tabs without opening a project, and records
   each one in the separate **recent files** list. Dropping a project and files
   together opens the project first, then the files. While a drag hovers the
@@ -506,12 +521,12 @@ remembered per document and the last ratio is persisted.
   original name/path and are marked dirty so the first save writes them back.
 - **Window state**: size, position and the maximized flag are persisted and
   restored (fullscreen is not persisted).
-- Session format is version 14 (separate `recent_project.*` / `recent_file.*`
-  lists; v13 added `trust_local_servers`, v12 added `window.max`, v10 added the
-  current-tab/window geometry set, v9 `outline_width`, v8 `outline`, v7
-  `keymap`, v6 `terminal_open`, `terminal_height`, v5 `sidebar_tab`, v4
-  `soft_wrap`); older files still load, and pre-v14 mixed `recent.*` entries are
-  discarded. v1 infers the project from the first tab, and sessions without
+- Session format is version 15 (v15 added `bottom_tab`; v14 split
+  `recent_project.*` / `recent_file.*`; v13 added `trust_local_servers`, v12
+  added `window.max`, v10 added the current-tab/window geometry set, v9
+  `outline_width`, v8 `outline`, v7 `keymap`, v6 `terminal_open`,
+  `terminal_height`, v5 `sidebar_tab`, v4 `soft_wrap`); older files still load,
+  and pre-v14 mixed `recent.*` entries are discarded. v1 infers the project from the first tab, and sessions without
   `active` fall back to the last opened tab.
 
 ## Theme: "geek", compact, no corners

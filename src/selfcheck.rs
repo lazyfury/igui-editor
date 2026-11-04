@@ -289,6 +289,20 @@ fn check_header_panels(harness: &mut Harness, frame: &RecordedFrame) -> Result<(
         return Err("the Outline header toggle did not restore the outline".into());
     }
 
+    // The bottom dock's two tabs share one header button group: each button
+    // opens its own tab and a second click closes the dock.
+    let problems = center(Panel::Problems)?;
+    harness.click(problems);
+    harness.frame()?;
+    if !Panel::Problems.is_open(&harness.app.state()) {
+        return Err("clicking the header Problems toggle did not open its dock tab".into());
+    }
+    harness.click(problems);
+    harness.frame()?;
+    if Panel::Problems.is_open(&harness.app.state()) {
+        return Err("a second Problems click did not close the bottom dock".into());
+    }
+
     // Hover feedback is state-only (no domain change).
     harness.event(InputEvent::PointerMove { position: explorer });
     if harness.app.state().panel_hover != Some(Panel::Explorer) {
@@ -1597,10 +1611,7 @@ fn check(dir: &Path) -> Result<(), String> {
         let m = state.theme.m;
         Vec2::new(
             state.sidebar.rect.left() + 60.0,
-            state.sidebar.rect.top()
-                + crate::ui::sidebar::HEADER_H
-                + index as f32 * m.row_h
-                + m.row_h * 0.5,
+            state.sidebar.rect.top() + index as f32 * m.row_h + m.row_h * 0.5,
         )
     };
     harness.click(notes_row);
@@ -2106,7 +2117,8 @@ fn check(dir: &Path) -> Result<(), String> {
             Vec2::new(rect.right() + 2.0, rect.center().y),
             Vec2::new(rect.right() + 42.0, rect.center().y),
             state.settings.sidebar_width,
-            rect.height(),
+            // `sidebar.rect` is the tree body; the handle covers the whole dock.
+            rect.height() + crate::ui::dock::HEADER_H,
         )
     };
     let frame = harness.frame()?;
@@ -2187,7 +2199,7 @@ fn check(dir: &Path) -> Result<(), String> {
                 state.sidebar.rect.right() + 2.0,
                 state.sidebar.rect.center().y,
             ),
-            state.sidebar.rect.height(),
+            state.sidebar.rect.height() + crate::ui::dock::HEADER_H,
         )
     };
     harness.event(InputEvent::PointerMove { position: hover });
@@ -3187,7 +3199,20 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
             .push(crate::state::TerminalSession::default());
         state.outline.hover = Some(3);
         state.outline.scroll = 9.0;
-        state.problems.open = true;
+        state.bottom_tab = crate::state::Panel::Problems;
+        state.terminal.open = true;
+        let root = state.ws.root.clone();
+        state.problems.rows.push(crate::model::lsp::ProblemEntry {
+            path: root.join("lib.rs"),
+            diagnostic: crate::model::lsp::Diagnostic {
+                start_line: 0,
+                start_char: 0,
+                end_line: 0,
+                end_char: 1,
+                severity: 1,
+                message: "boom".into(),
+            },
+        });
         state.dirty = true;
     }
     harness.app.state_mut().open_project(welcome_dir.clone());
@@ -3209,8 +3234,8 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
         if state.outline.hover.is_some() || state.outline.scroll != 0.0 {
             return Err("switching projects must reset the outline".into());
         }
-        if state.problems.open {
-            return Err("switching projects must close the problems popup".into());
+        if !state.problems.rows.is_empty() {
+            return Err("switching projects must clear the PROBLEMS list".into());
         }
         if !state
             .session
@@ -3662,11 +3687,9 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
         if !state.git.status.is_repo() {
             return Err(format!("Git status did not arrive: {:?}", state.git.error));
         }
-        let git_tab = state
-            .sidebar
-            .tabs
+        let git_tab = state.dock_hits[crate::state::DockId::Left.index()]
             .iter()
-            .find(|(id, _)| *id == "git")
+            .find(|(panel, _)| *panel == crate::state::Panel::Git)
             .map(|(_, rect)| rect.center())
             .ok_or("no GIT sidebar tab")?;
         drop(state);
@@ -4176,10 +4199,9 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
     if harness.app.state().terminal.open {
         return Err("Ctrl+` did not close the terminal".into());
     }
-    // A reopened session spawns a new parser at the previous grid; the first
-    // paint must re-sync the parser/PTY with the current panel instead of
-    // trusting the cached rows/cols (that left the prompt outside the drawn
-    // area).
+    // Reopening the dock restores the hidden shell. The first paint must
+    // re-sync the parser/PTY with the current panel instead of trusting the
+    // cached rows/cols (that left the prompt outside the drawn area).
     harness.shortcut(
         Key::Character('`'),
         Modifiers {
@@ -4211,7 +4233,7 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
     }
 
     // Multiple shell sessions: + adds a tab, tab 1 switches back, × closes.
-    let frame = harness.frame()?;
+    harness.frame()?;
     let new_hit = harness.app.state().terminal.new_hit.center();
     let first_tab = harness
         .app
@@ -4238,7 +4260,90 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
     if harness.app.state().terminal.sessions.len() != 1 {
         return Err("terminal × did not close the active session".into());
     }
-    let _ = frame;
+
+    // Bottom dock: PROBLEMS and TERMINAL share one dock, and neither switching
+    // tabs nor hiding the dock may kill a shell.
+    let session_count = harness.app.state().terminal.sessions.len();
+    let bottom_tab = |harness: &Harness, panel: crate::state::Panel| -> Result<Vec2, String> {
+        harness.app.state().dock_hits[crate::state::DockId::Bottom.index()]
+            .iter()
+            .find(|(candidate, _)| *candidate == panel)
+            .map(|(_, rect)| rect.center())
+            .ok_or_else(|| format!("the bottom dock has no {panel:?} tab"))
+    };
+    let problems_tab = bottom_tab(&harness, crate::state::Panel::Problems)?;
+    let terminal_tab = bottom_tab(&harness, crate::state::Panel::Terminal)?;
+    if problems_tab.x >= terminal_tab.x {
+        return Err("PROBLEMS must be the bottom dock's first tab".into());
+    }
+    harness.click(problems_tab);
+    let frame = harness.frame()?;
+    {
+        let state = harness.app.state();
+        if state.bottom_tab != crate::state::Panel::Problems || !state.terminal.open {
+            return Err("clicking PROBLEMS did not switch the bottom dock".into());
+        }
+        if state.terminal.sessions.len() != session_count {
+            return Err("switching to PROBLEMS killed a shell".into());
+        }
+    }
+    {
+        // The dock body must have swapped, not just the tab label.
+        let state = harness.app.state();
+        if state.problems.rect.width() <= 0.0 {
+            return Err("the PROBLEMS dock body was not painted".into());
+        }
+        if !texts(&frame)
+            .iter()
+            .any(|text| text == "no problems detected")
+        {
+            return Err("the PROBLEMS dock body is empty for the wrong reason".into());
+        }
+    }
+    let terminal_tab = bottom_tab(&harness, crate::state::Panel::Terminal)?;
+    harness.click(terminal_tab);
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        if state.bottom_tab != crate::state::Panel::Terminal {
+            return Err("clicking TERMINAL did not switch back".into());
+        }
+        if state.terminal.sessions.len() != session_count {
+            return Err("switching back to TERMINAL killed a shell".into());
+        }
+    }
+    let dock_close = harness.app.state().dock_close[crate::state::DockId::Bottom.index()].center();
+    harness.click(dock_close);
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        if state.terminal.open {
+            return Err("the dock close button did not hide the bottom dock".into());
+        }
+        if state.terminal.sessions.len() != session_count {
+            return Err("hiding the bottom dock killed its shells".into());
+        }
+        if state.session.terminal_open {
+            return Err("hiding the bottom dock must persist terminal_open=false".into());
+        }
+    }
+    harness.shortcut(
+        Key::Character('`'),
+        Modifiers {
+            ctrl: true,
+            ..Modifiers::NONE
+        },
+    );
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        if !state.terminal.open || state.bottom_tab != crate::state::Panel::Terminal {
+            return Err("Ctrl+` did not reopen the Terminal dock tab".into());
+        }
+        if state.terminal.sessions.len() != session_count {
+            return Err("reopening the dock spawned a second shell".into());
+        }
+    }
     Ok(())
 }
 
@@ -4691,19 +4796,41 @@ fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
         return Err("LSP diagnostic underline was not painted".into());
     }
 
-    // The footer chip opens a message list; a warning is a separate row.
+    // The footer chip opens the bottom dock's PROBLEMS tab; warnings and errors
+    // are separate rows and a click jumps without hiding the panel.
     let lsp_hit = harness.app.state().lsp_hit;
     if lsp_hit == Rect::ZERO {
         return Err("LSP footer chip has no hit target".into());
     }
     harness.click(lsp_hit.center());
     let frame = harness.frame()?;
+    {
+        let state = harness.app.state();
+        if state.bottom_tab != crate::state::Panel::Problems || !state.terminal.open {
+            return Err("the footer chip did not open the PROBLEMS dock tab".into());
+        }
+        if state.problems.rows.len() != 2 {
+            return Err(format!(
+                "the PROBLEMS panel cached {} rows, expected 2",
+                state.problems.rows.len()
+            ));
+        }
+    }
     let text = texts(&frame);
     if !text.iter().any(|text| text == "PROBLEMS")
         || !text.iter().any(|text| text == "fake diagnostic")
         || !text.iter().any(|text| text == "fake warning")
     {
-        return Err("LSP problems panel did not paint the diagnostics".into());
+        return Err(format!(
+            "the PROBLEMS panel did not paint the diagnostics: {text:?}"
+        ));
+    }
+    // The tab title carries the counts, so the dock says what is wrong before
+    // the list is read.
+    if !text.iter().any(|text| text == "1E 1W") {
+        return Err(format!(
+            "the PROBLEMS tab did not show its error/warning counts: {text:?}"
+        ));
     }
     let row = harness
         .app
@@ -4712,7 +4839,7 @@ fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
         .hits
         .first()
         .map(|(_, row)| row.center())
-        .ok_or("LSP problems panel has no row hit target")?;
+        .ok_or("the PROBLEMS panel has no row hit target")?;
     harness.click(row);
     harness.frame()?;
     if harness
@@ -4724,11 +4851,22 @@ fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
     {
         return Err("clicking a diagnostic did not jump to its line".into());
     }
-    if harness.app.state().problems.open {
-        return Err("LSP problems panel did not close after a jump".into());
+    if !crate::state::Panel::Problems.is_open(&harness.app.state()) {
+        return Err("clicking a diagnostic must keep the PROBLEMS panel open".into());
     }
     if let Some(doc) = harness.app.state_mut().ws.active_doc_mut() {
         doc.set_caret(0);
+    }
+    // The dock switch must rebuild the shell back to the terminal body.
+    harness
+        .app
+        .state_mut()
+        .dock_show(crate::state::Panel::Terminal);
+    harness.frame()?;
+    if !harness.app.state().terminal.open
+        || harness.app.state().bottom_tab != crate::state::Panel::Terminal
+    {
+        return Err("switching back to the TERMINAL dock tab failed".into());
     }
 
     let frame = harness.frame()?;
@@ -5662,7 +5800,7 @@ fn sidebar_click_position(app: &EditorApp, name: &str) -> Result<Vec2, String> {
     let rect = state.sidebar.rect;
     Ok(Vec2::new(
         rect.left() + 60.0,
-        rect.top() + crate::ui::sidebar::HEADER_H + index as f32 * m.row_h + m.row_h * 0.5,
+        rect.top() + index as f32 * m.row_h + m.row_h * 0.5,
     ))
 }
 

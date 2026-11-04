@@ -42,34 +42,52 @@ impl AppState {
         Ok(self.terminal.sessions.len() - 1)
     }
 
+    /// `⌃\`` / View → Terminal: shows the bottom dock on its Terminal tab,
+    /// switching tabs when it currently shows PROBLEMS, and hides it when the
+    /// terminal is already the visible tab.
     pub fn toggle_terminal(&mut self) {
-        if self.terminal.open {
-            self.terminal.open = false;
-            self.terminal.focused = false;
-            self.terminal.sessions.clear();
-            self.terminal.active = 0;
-            self.session.terminal_open = false;
-            self.session.terminal_height = self.terminal.height;
-            self.config_dirty = true;
-            self.focus = Focus::Editor;
-            self.needs_rebuild = true;
-            self.dirty = true;
+        if self.terminal.open && self.bottom_tab == Panel::Terminal {
+            self.dock_hide(DockId::Bottom);
+        } else {
+            self.dock_show(Panel::Terminal);
+        }
+    }
+
+    /// Opens the bottom dock on the Terminal tab, spawning a shell only when
+    /// none is alive. Switching between the dock's tabs keeps the shells.
+    pub fn open_terminal(&mut self) {
+        if self.terminal.sessions.is_empty() {
+            match self.spawn_terminal_session(self.terminal_cwd()) {
+                Ok(index) => self.terminal.active = index,
+                Err(error) => self.error(error),
+            }
+        }
+        self.terminal.open = true;
+        self.terminal.focused = true;
+        self.session.terminal_open = true;
+        self.session.terminal_height = self.terminal.height;
+        self.focus = Focus::Terminal;
+        self.config_dirty = true;
+        self.needs_rebuild = true;
+        self.dirty = true;
+    }
+
+    /// Hides the bottom dock without killing its shells, so the terminal is
+    /// still there when the dock is reopened.
+    pub fn hide_bottom_dock(&mut self) {
+        if !self.terminal.open {
             return;
         }
-        match self.spawn_terminal_session(self.terminal_cwd()) {
-            Ok(index) => {
-                self.terminal.active = index;
-                self.terminal.open = true;
-                self.terminal.focused = true;
-                self.session.terminal_open = true;
-                self.session.terminal_height = self.terminal.height;
-                self.config_dirty = true;
-                self.focus = Focus::Terminal;
-                self.needs_rebuild = true;
-                self.dirty = true;
-            }
-            Err(error) => self.error(error),
+        self.terminal.open = false;
+        self.terminal.focused = false;
+        self.session.terminal_open = false;
+        self.session.terminal_height = self.terminal.height;
+        if self.focus == Focus::Terminal {
+            self.focus = Focus::Editor;
         }
+        self.config_dirty = true;
+        self.needs_rebuild = true;
+        self.dirty = true;
     }
 
     /// Opens another shell in the same panel.
@@ -101,12 +119,8 @@ impl AppState {
         }
         self.terminal.sessions.remove(index);
         if self.terminal.sessions.is_empty() {
-            self.terminal.open = false;
-            self.terminal.focused = false;
             self.terminal.active = 0;
-            self.session.terminal_open = false;
-            self.focus = Focus::Editor;
-            self.needs_rebuild = true;
+            self.hide_bottom_dock();
         } else if index < self.terminal.active {
             self.terminal.active -= 1;
         } else if self.terminal.active >= self.terminal.sessions.len() {
@@ -115,9 +129,13 @@ impl AppState {
         self.dirty = true;
     }
 
-    /// Restores a persisted terminal panel after startup (new shell).
+    /// Restores a persisted bottom dock after startup (spawns a shell only when
+    /// the dock was last showing the Terminal tab).
     pub fn restore_terminal(&mut self) {
-        if self.terminal.open && self.terminal.sessions.is_empty() {
+        if self.terminal.open
+            && self.bottom_tab == Panel::Terminal
+            && self.terminal.sessions.is_empty()
+        {
             let cwd = self
                 .git
                 .cwd
@@ -127,11 +145,7 @@ impl AppState {
                 .unwrap_or_else(|| PathBuf::from("."));
             match self.spawn_terminal_session(cwd) {
                 Ok(index) => self.terminal.active = index,
-                Err(_) => {
-                    self.terminal.open = false;
-                    self.terminal.focused = false;
-                    self.session.terminal_open = false;
-                }
+                Err(_) => self.hide_bottom_dock(),
             }
         }
     }
@@ -188,12 +202,14 @@ impl AppState {
             let removed = before - kept.len();
             self.terminal.sessions = kept;
             if self.terminal.sessions.is_empty() {
-                self.terminal.open = false;
-                self.terminal.focused = false;
                 self.terminal.active = 0;
-                self.session.terminal_open = false;
-                self.focus = Focus::Editor;
-                self.needs_rebuild = true;
+                // Only hide the dock when the Terminal tab was the visible one;
+                // a shell exiting must not yank the PROBLEMS tab away.
+                if self.bottom_tab == Panel::Terminal {
+                    self.hide_bottom_dock();
+                } else {
+                    self.terminal.focused = false;
+                }
             } else {
                 self.terminal.active =
                     new_active.unwrap_or_else(|| old_active.min(self.terminal.sessions.len() - 1));

@@ -1,8 +1,8 @@
-//! Sidebar: the workspace file tree.
+//! Sidebar: the left dock's tab strip plus the workspace file tree.
 //!
-//! One custom control paints the header and rows; expanding a directory reads
-//! it lazily (`FsTree`). Clicking a folder toggles it, clicking a file opens it
-//! in a tab.
+//! The header is the shared dock strip (`ui::dock`); this module owns the body:
+//! one custom control that paints the rows and reads a directory lazily
+//! (`FsTree`). Clicking a folder toggles it, clicking a file opens it in a tab.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -12,11 +12,8 @@ use igui_scene::SceneTree;
 use igui_ui::{Container, PaintEnv, PointerPhase};
 
 use crate::kit::{self, RectExt};
-use crate::state::AppState;
+use crate::state::{AppState, DockId};
 use crate::theme::Theme;
-use crate::ui::icon::{self, Icon};
-
-pub const HEADER_H: f32 = 28.0;
 
 /// The 4 px divider that resizes the sidebar (drag, column-resize cursor).
 pub fn build_divider(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>) -> NodeId {
@@ -74,11 +71,20 @@ pub fn build_divider(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<App
     id
 }
 
+/// The dock: shared tab strip on top, file tree body below.
 pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>) -> NodeId {
     let id = kit::node(tree, parent, "sidebar");
-    kit::set_container(tree, id, Container::Leaf);
-    kit::clip(tree, id, true);
-    kit::draw(tree, id, {
+    kit::set_container(tree, id, kit::tight_column());
+
+    let header = crate::ui::dock::build_tabs(tree, id, state.clone(), DockId::Left);
+    kit::flex(tree, header, 0.0, Some(crate::ui::dock::HEADER_H), 0.0);
+    kit::min_size(tree, header, 0.0, crate::ui::dock::HEADER_H);
+
+    let body = kit::node(tree, id, "sidebar-body");
+    kit::set_container(tree, body, Container::Leaf);
+    kit::clip(tree, body, true);
+    kit::flex(tree, body, 1.0, None, 1.0);
+    kit::draw(tree, body, {
         let state = state.clone();
         move |env, rect, _| {
             let mut state = state.borrow_mut();
@@ -86,13 +92,11 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
         }
     });
 
-    kit::on_pointer(tree, id, {
+    kit::on_pointer(tree, body, {
         let state = state.clone();
         move |tree, _id, phase, _rect, pos| {
             if phase == PointerPhase::Down {
                 let mut state = state.borrow_mut();
-                // The Explorer owns the keyboard after a row click, so Enter /
-                // typing can act on the selection (rename, delete, …).
                 state.focus = crate::state::Focus::Explorer;
                 click(&mut state, pos);
             }
@@ -100,7 +104,7 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
         }
     });
 
-    kit::on_scroll(tree, id, {
+    kit::on_scroll(tree, body, {
         let state = state.clone();
         move |tree, _id, delta| {
             let mut state = state.borrow_mut();
@@ -109,7 +113,7 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
             } else {
                 let row_h = state.theme.m.row_h;
                 let content = state.ws.tree.rows().len() as f32 * row_h;
-                let view = (state.sidebar.rect.height() - HEADER_H).max(0.0);
+                let view = state.sidebar.rect.height().max(0.0);
                 let max = (content - view).max(0.0);
                 crate::ui::scroll::apply(&mut state.sidebar.scroll, delta.y, max);
             }
@@ -117,7 +121,7 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
             igui_ui::request_paint(tree);
         }
     });
-    kit::set_cursor(tree, id, Cursor::Default);
+    kit::set_cursor(tree, body, Cursor::Default);
     id
 }
 
@@ -150,53 +154,6 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     // No right border here: the resize handle's single line is the separator.
     kit::fill(env.ctx, rect, p.panel);
 
-    // Header tabs contributed by built-in plugins (Explorer, Git, …).
-    let header = Rect::from_min_size(rect.origin, Size::new(rect.width(), HEADER_H));
-    let baseline = kit::baseline(measurer, header, m.font_small);
-    state.sidebar.tabs.clear();
-    let mut tab_x = rect.left() + 8.0;
-    let tabs = state.sidebar_tabs().to_vec();
-    for tab in tabs {
-        let icon = Icon::from_name(tab.icon);
-        let icon_size = icon::SMALL;
-        let icon_span = if icon.is_some() { icon_size + 5.0 } else { 0.0 };
-        let width = kit::width(measurer, tab.label, m.font_small) + 16.0 + icon_span;
-        let hit = Rect::from_min_size(
-            Vec2::new(tab_x, header.top()),
-            Size::new(width, header.height()),
-        );
-        let active = state.sidebar_tab == tab.id;
-        if active {
-            kit::hline(
-                env.ctx,
-                hit.left() + 4.0,
-                hit.right() - 4.0,
-                hit.bottom() - 2.0,
-                p.accent,
-            );
-        }
-        let color = if active { p.text } else { p.faint };
-        let mut x = hit.left() + 8.0;
-        if let Some(icon) = icon {
-            let box_rect = Rect::from_min_size(
-                Vec2::new(x, header.center().y - icon_size * 0.5),
-                Size::new(icon_size, icon_size),
-            );
-            icon::paint(env.ctx, icon, box_rect, color);
-            x += icon_span;
-        }
-        kit::text(env.ctx, tab.label, x, baseline, m.font_small, color);
-        state.sidebar.tabs.push((tab.id, hit));
-        tab_x += width;
-    }
-    kit::hline(
-        env.ctx,
-        rect.left(),
-        rect.right() - 1.0,
-        header.bottom() - 1.0,
-        p.border,
-    );
-
     if state.sidebar_tab == "git" {
         crate::ui::git::paint_sidebar(state, env, rect);
         return;
@@ -210,11 +167,11 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             env.ctx,
             "NO PROJECT OPEN",
             left,
-            header.bottom() + 22.0,
+            rect.top() + 22.0,
             m.font_small,
             p.faint,
         );
-        let mut y = header.bottom() + 44.0;
+        let mut y = rect.top() + 44.0;
         for (action, label) in [
             (crate::state::Action::OpenFolder, "Open Project…"),
             (crate::state::Action::Open, "Open File…"),
@@ -256,11 +213,11 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         return;
     }
 
-    // Rows, scrolled and clipped to the area under the header.
+    // Rows, scrolled and clipped to the body.
     let rows = state.ws.tree.rows();
     let view = Rect::from_min_size(
-        Vec2::new(rect.left(), header.bottom()),
-        Size::new(rect.width() - 1.0, (rect.height() - HEADER_H).max(0.0)),
+        Vec2::new(rect.left(), rect.top()),
+        Size::new(rect.width() - 1.0, rect.height().max(0.0)),
     );
     let row_h = m.row_h;
     let content_h = rows.len() as f32 * row_h;
@@ -363,22 +320,12 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
 }
 
 fn click(state: &mut AppState, pos: Vec2) {
-    let tab = state
-        .sidebar
-        .tabs
-        .iter()
-        .find(|(_, rect)| rect.contains(pos))
-        .map(|(id, _)| *id);
-    if let Some(id) = tab {
-        state.set_sidebar_tab(id);
-        return;
-    }
     if state.sidebar_tab == "git" {
         crate::ui::git::click(state, pos);
         return;
     }
     let view = state.sidebar.rect;
-    if !view.contains(pos) || pos.y < view.top() + HEADER_H {
+    if !view.contains(pos) {
         return;
     }
     if !state.ws.folder_open {
@@ -394,12 +341,12 @@ fn click(state: &mut AppState, pos: Vec2) {
         return;
     }
     let row_h = state.theme.m.row_h;
-    let index = ((pos.y - view.top() - HEADER_H + state.sidebar.scroll) / row_h).floor() as usize;
+    let index = ((pos.y - view.top() + state.sidebar.scroll) / row_h).floor() as usize;
     let Some(row) = state.ws.tree.rows().get(index).cloned() else {
         return;
     };
-    state.sidebar.selected = Some(row.path.clone());
     if row.is_dir {
+        state.sidebar.selected = Some(row.path.clone());
         state.ws.tree.toggle(&row.path);
         state.status(if row.expanded {
             format!("collapsed {}", row.name)
@@ -416,14 +363,14 @@ fn click(state: &mut AppState, pos: Vec2) {
 
 /// Row under `pos`, for hover feedback.
 pub fn hover_at(state: &AppState, pos: Vec2) -> Option<usize> {
-    if !state.ws.folder_open {
+    if !state.ws.folder_open || state.sidebar_tab == "git" {
         return None;
     }
     let view = state.sidebar.rect;
-    if !view.contains(pos) || pos.y < view.top() + HEADER_H {
+    if !view.contains(pos) {
         return None;
     }
     let row_h = state.theme.m.row_h;
-    let index = ((pos.y - view.top() - HEADER_H + state.sidebar.scroll) / row_h).floor() as usize;
+    let index = ((pos.y - view.top() + state.sidebar.scroll) / row_h).floor() as usize;
     (index < state.ws.tree.rows().len()).then_some(index)
 }

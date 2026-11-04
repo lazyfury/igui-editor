@@ -233,7 +233,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                 if state.lsp_hover {
                     kit::fill(env.ctx, state.lsp_hit, p.hover);
                 }
-                if state.problems.open {
+                if crate::state::Panel::Problems.is_open(state) {
                     kit::hline(
                         env.ctx,
                         state.lsp_hit.left(),

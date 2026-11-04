@@ -3,6 +3,26 @@
 use super::*;
 
 impl AppState {
+    /// Rebuilds the cached PROBLEMS rows from every live language server.
+    /// Called on a diagnostic update, not per frame.
+    pub fn refresh_problems(&mut self) {
+        self.problems.rows = self.lsp.workspace_diagnostics();
+        let rows = &self.problems.rows;
+        self.problems.errors = rows
+            .iter()
+            .filter(|row| row.diagnostic.severity == 1)
+            .count();
+        self.problems.warnings = rows
+            .iter()
+            .filter(|row| row.diagnostic.severity == 2)
+            .count();
+        if self.problems.scroll_max > 0.0 && self.problems.rows.is_empty() {
+            self.problems.scroll = 0.0;
+            self.problems.hover = None;
+        }
+        self.dirty = true;
+    }
+
     /// Pumps the language server and applies a pending go-to-definition.
     pub fn tick_lsp(&mut self) {
         self.lsp.set_workspace_binaries(
@@ -15,6 +35,7 @@ impl AppState {
             self.show_tool_prompt(issue);
         }
         if self.lsp.take_changed() {
+            self.refresh_problems();
             self.dirty = true;
         }
         if let Some(location) = self.lsp.take_location() {

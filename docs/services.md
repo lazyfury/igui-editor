@@ -171,8 +171,10 @@ its own language-server binary.
   `client/registerCapability` and progress requests are answered defensively so
   a server cannot stall the UI.
 - **UI state**: diagnostics are keyed by path and painted as underlines + a
-  gutter severity rail. The footer LSP chip is severity-colored and opens a
-  compact PROBLEMS popup (message, line:column, click to jump). Hovering a
+  gutter severity rail. The footer LSP chip is severity-colored and opens the
+  bottom dock's PROBLEMS tab, which snapshots every session's diagnostics
+  (`workspace_diagnostics`) when they change, groups them by file, and jumps on
+  click. Hovering a
   diagnostic shows its message immediately; normal code falls back to the
   server hover. Godot native hovers expose an **OPEN GODOT DOCS** action built
   from the LSP declaration (`<Native> class ...` / `func Class.member`); the

@@ -698,6 +698,13 @@ impl LspIssue {
     }
 }
 
+/// One diagnostic with the file it belongs to (PROBLEMS panel row).
+#[derive(Clone, Debug)]
+pub struct ProblemEntry {
+    pub path: PathBuf,
+    pub diagnostic: Diagnostic,
+}
+
 /// One language-server process for a `(spec, project root)` pair.
 ///
 /// A monorepo keeps one session per language root; switching tabs reuses the
@@ -1960,6 +1967,29 @@ impl LspController {
         self.session_for_path(path)
             .map(|session| session.diagnostics_for(path))
             .unwrap_or(&[])
+    }
+
+    /// Every diagnostic from every live session, sorted by file, position and
+    /// severity. The PROBLEMS panel snapshots this on change instead of
+    /// recomputing it every frame.
+    pub fn workspace_diagnostics(&self) -> Vec<ProblemEntry> {
+        let mut out = Vec::new();
+        for session in &self.sessions {
+            for (path, diagnostics) in &session.diagnostics {
+                out.extend(diagnostics.iter().map(|diagnostic| ProblemEntry {
+                    path: path.clone(),
+                    diagnostic: diagnostic.clone(),
+                }));
+            }
+        }
+        out.sort_by(|a, b| {
+            a.path
+                .cmp(&b.path)
+                .then(a.diagnostic.start_line.cmp(&b.diagnostic.start_line))
+                .then(a.diagnostic.start_char.cmp(&b.diagnostic.start_char))
+                .then(a.diagnostic.severity.cmp(&b.diagnostic.severity))
+        });
+        out
     }
 
     pub fn diagnostic_color(&self, severity: u32, p: &crate::theme::Palette) -> igui_core::Color {

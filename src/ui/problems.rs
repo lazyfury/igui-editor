@@ -1,183 +1,174 @@
-//! Compact LSP problems popup.
+//! Bottom-dock PROBLEMS panel.
 //!
 //! The editor already paints diagnostic underlines and gutter markers; this
-//! popup is the actual message UI. It opens from the footer `LSP 1E 1W` chip,
-//! lists every diagnostic for the active document, and jumps to a row on click.
+//! panel is the workspace-wide message list. It shows every diagnostic from
+//! every live language server, grouped by file, and jumps to a row on click.
+//! The dock header (tab, badge and close button) is painted by `ui::dock`.
 
-use igui_core::{Rect, Size, Vec2};
-use igui_render::PaintContext;
-use igui_ui::TextMeasurer;
+use std::cell::RefCell;
+use std::path::Path;
+use std::rc::Rc;
+
+use igui_core::{NodeId, Rect, Size, Vec2};
+use igui_scene::SceneTree;
+use igui_ui::{Container, PaintEnv, PointerPhase};
 
 use crate::kit::{self, RectExt};
-use crate::model::lsp::{byte_for_position, Diagnostic, LspStatus};
+use crate::model::lsp::{byte_for_position, ProblemEntry};
 use crate::state::{AppState, Focus};
 
-const WIDTH: f32 = 720.0;
-const MAX_ROWS: usize = 14;
-const HEADER_H: f32 = 34.0;
-const ROW_H: f32 = 28.0;
-const FOOTER_H: f32 = 20.0;
-const PAD: f32 = 12.0;
-const GAP: f32 = 10.0;
+/// One file-group header row.
+pub const GROUP_H: f32 = 24.0;
+/// One diagnostic row.
+pub const ROW_H: f32 = 24.0;
+const PAD: f32 = 14.0;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Click {
-    Outside,
-    Consumed,
-    Jump(usize),
-}
-
-pub fn diagnostics(state: &AppState) -> Vec<Diagnostic> {
-    let Some(path) = state.ws.active_doc().and_then(|doc| doc.path()) else {
-        return Vec::new();
-    };
-    state.lsp.diagnostics_for(path).to_vec()
-}
-
-pub fn toggle(state: &mut AppState) {
-    if state.problems.open {
-        close(state);
-    } else {
-        open(state);
-    }
-}
-
-pub fn open(state: &mut AppState) {
-    if diagnostics(state).is_empty() {
-        if let LspStatus::Error(error) = state.lsp.status() {
-            state.error(format!("LSP: {error}"));
-        } else {
-            state.status("no LSP diagnostics");
+/// Bottom-dock body: shared with the Terminal tab by the dock.
+pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>) -> NodeId {
+    let id = kit::node(tree, parent, "problems");
+    kit::set_container(tree, id, Container::Leaf);
+    kit::clip(tree, id, true);
+    kit::draw(tree, id, {
+        let state = state.clone();
+        move |env, rect, _| {
+            let mut state = state.borrow_mut();
+            paint(&mut state, env, rect);
         }
-        return;
-    }
-    state.problems.open = true;
-    state.problems.hover = None;
-    state.problems.scroll = 0.0;
-    state.lsp.dismiss_transient();
-    state.dirty = true;
-}
-
-pub fn close(state: &mut AppState) {
-    if state.problems.open {
-        state.problems.open = false;
-        state.problems.hover = None;
-        state.dirty = true;
-    }
-}
-
-/// Panel rectangle and visible `(diagnostic index, row)` hit rects. Uses the
-/// same geometry for paint, clicks and hover so there is no second layout.
-pub fn layout(state: &AppState) -> (Rect, Vec<(usize, Rect)>) {
-    let diagnostics = diagnostics(state);
-    if diagnostics.is_empty() {
-        return (Rect::ZERO, Vec::new());
-    }
-    let viewport = state.viewport.logical_rect();
-    let width = (viewport.width() - 32.0).clamp(320.0, WIDTH);
-    let rows = diagnostics.len().min(MAX_ROWS);
-    let height = HEADER_H + rows as f32 * ROW_H + FOOTER_H;
-    let bottom = viewport.bottom() - state.theme.m.status_h - GAP;
-    let x = (viewport.center().x - width * 0.5).clamp(
-        viewport.left() + 8.0,
-        (viewport.right() - width - 8.0).max(8.0),
-    );
-    let y = (bottom - height).max(viewport.top() + 8.0);
-    let rect = Rect::from_min_size(Vec2::new(x, y), Size::new(width, height));
-
-    let list_h = (height - HEADER_H - FOOTER_H).max(0.0);
-    let scroll = state.problems.scroll;
-    let first = (scroll / ROW_H).floor().max(0.0) as usize;
-    let mut hits = Vec::new();
-    for index in first..diagnostics.len() {
-        let row_y = rect.top() + HEADER_H + (index - first) as f32 * ROW_H - scroll % ROW_H;
-        if row_y >= rect.top() + HEADER_H + list_h {
-            break;
+    });
+    kit::on_pointer(tree, id, {
+        let state = state.clone();
+        move |tree, _id, phase, _rect, pos| {
+            if phase != PointerPhase::Down {
+                return;
+            }
+            let mut state = state.borrow_mut();
+            if click(&mut state, pos) {
+                igui_ui::request_paint(tree);
+            }
         }
-        if row_y + ROW_H < rect.top() + HEADER_H {
-            continue;
+    });
+    kit::on_scroll(tree, id, {
+        let state = state.clone();
+        move |tree, _id, delta| {
+            let mut state = state.borrow_mut();
+            let max = state.problems.scroll_max;
+            crate::ui::scroll::apply(&mut state.problems.scroll, delta.y, max);
+            state.dirty = true;
+            igui_ui::request_paint(tree);
         }
-        hits.push((
-            index,
-            Rect::from_min_size(
-                Vec2::new(rect.left(), row_y),
-                Size::new(rect.width(), ROW_H),
-            ),
-        ));
-    }
-    (rect, hits)
+    });
+    kit::set_cursor(tree, id, igui_core::Cursor::Default);
+    id
 }
 
-pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintContext) {
-    let diagnostics = diagnostics(state);
-    if diagnostics.is_empty() {
-        state.problems.open = false;
-        state.problems.rect = Rect::ZERO;
-        state.problems.hits.clear();
-        state.problems.scroll_max = 0.0;
-        return;
+/// Row text for a file group: relative to the project when possible.
+fn group_label(state: &AppState, path: &Path) -> String {
+    if let Some(root) = state.ws.folder() {
+        if let Ok(relative) = path.strip_prefix(root) {
+            return relative.display().to_string();
+        }
     }
-    if !state.problems.open {
-        return;
-    }
+    path.display().to_string()
+}
+
+fn group_count(rows: &[ProblemEntry], start: usize) -> usize {
+    let path = &rows[start].path;
+    rows[start..]
+        .iter()
+        .take_while(|entry| &entry.path == path)
+        .count()
+}
+
+fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     let theme = state.theme;
     let m = theme.m;
     let p = theme.p;
-    let (rect, hits) = layout(state);
-    let list_h = (rect.height() - HEADER_H - FOOTER_H).max(0.0);
+    let measurer = env.measurer;
     state.problems.rect = rect;
-    state.problems.hits = hits.clone();
-    state.problems.scroll_max = (diagnostics.len() as f32 * ROW_H - list_h).max(0.0);
+    state.problems.hits.clear();
+    kit::fill(env.ctx, rect, p.bg);
+
+    if state.problems.rows.is_empty() {
+        state.problems.scroll = 0.0;
+        state.problems.scroll_max = 0.0;
+        state.problems.hover = None;
+        let message = if !state.settings.lsp {
+            "language servers are off"
+        } else {
+            "no problems detected"
+        };
+        kit::text(
+            env.ctx,
+            message,
+            rect.left() + PAD + 2.0,
+            rect.top() + 26.0,
+            m.font_ui,
+            p.faint,
+        );
+        return;
+    }
+
+    // Total content height: one group header per file, one row per diagnostic.
+    let mut content = 0.0;
+    let mut previous: Option<&Path> = None;
+    for entry in &state.problems.rows {
+        if previous != Some(entry.path.as_path()) {
+            content += GROUP_H;
+            previous = Some(entry.path.as_path());
+        }
+        content += ROW_H;
+    }
+    state.problems.scroll_max = (content - rect.height()).max(0.0);
     crate::ui::scroll::clamp(&mut state.problems.scroll, state.problems.scroll_max);
 
-    kit::fill(ctx, rect, p.raised);
-    ctx.stroke_rect(rect, 1.0, p.border);
-    let header = Rect::from_min_size(rect.origin, Size::new(rect.width(), HEADER_H));
-    kit::hline(
-        ctx,
-        header.left(),
-        header.right(),
-        header.bottom(),
-        p.border,
-    );
-
-    let errors = diagnostics
-        .iter()
-        .filter(|diagnostic| diagnostic.severity == 1)
-        .count();
-    let warnings = diagnostics
-        .iter()
-        .filter(|diagnostic| diagnostic.severity == 2)
-        .count();
-    let count = if errors == 0 && warnings == 0 {
-        format!("{} problem(s)", diagnostics.len())
-    } else {
-        format!("{errors} error(s)  {warnings} warning(s)")
-    };
-    kit::text(
-        ctx,
-        "PROBLEMS",
-        rect.left() + PAD,
-        header.bottom() - 11.0,
-        m.font_small,
-        p.dim,
-    );
-    kit::text_right(
-        ctx,
-        measurer,
-        &count,
-        rect.right() - PAD,
-        header.bottom() - 11.0,
-        m.font_small,
-        p.faint,
-    );
-
-    for (index, row) in &hits {
-        let diagnostic = &diagnostics[*index];
+    env.ctx.save();
+    env.ctx.clip_rect(rect);
+    let mut y = rect.top() - state.problems.scroll;
+    let mut previous: Option<&Path> = None;
+    for (index, entry) in state.problems.rows.iter().enumerate() {
+        if previous != Some(entry.path.as_path()) {
+            let header =
+                Rect::from_min_size(Vec2::new(rect.left(), y), Size::new(rect.width(), GROUP_H));
+            if header.bottom() > rect.top() && header.top() < rect.bottom() {
+                let label = group_label(state, &entry.path);
+                let count = group_count(&state.problems.rows, index);
+                let label = kit::truncate(
+                    measurer,
+                    &label,
+                    m.font_small,
+                    (rect.width() - PAD * 2.0 - 40.0).max(24.0),
+                );
+                kit::text(
+                    env.ctx,
+                    &label,
+                    header.left() + PAD,
+                    kit::baseline(measurer, header, m.font_small),
+                    m.font_small,
+                    p.dim,
+                );
+                kit::text_right(
+                    env.ctx,
+                    measurer,
+                    &format!("({count})"),
+                    header.right() - PAD,
+                    kit::baseline(measurer, header, m.font_small),
+                    m.font_small,
+                    p.faint,
+                );
+            }
+            y += GROUP_H;
+            previous = Some(entry.path.as_path());
+        }
+        let row = Rect::from_min_size(Vec2::new(rect.left(), y), Size::new(rect.width(), ROW_H));
+        y += ROW_H;
+        if row.bottom() <= rect.top() || row.top() >= rect.bottom() {
+            continue;
+        }
+        let diagnostic = &entry.diagnostic;
         let color = state.lsp.diagnostic_color(diagnostic.severity, &p);
-        if state.problems.hover == Some(*index) {
-            kit::fill(ctx, *row, p.hover);
-            kit::vline(ctx, row.left(), row.top(), row.bottom(), color);
+        if state.problems.hover == Some(index) {
+            kit::fill(env.ctx, row, p.hover);
+            kit::vline(env.ctx, row.left(), row.top(), row.bottom(), color);
         }
         let glyph = match diagnostic.severity {
             1 => "E",
@@ -185,11 +176,12 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
             3 => "I",
             _ => "H",
         };
+        let baseline = kit::baseline(measurer, row, m.font_small);
         kit::text(
-            ctx,
+            env.ctx,
             glyph,
-            row.left() + PAD,
-            kit::baseline(measurer, *row, m.font_small),
+            row.left() + PAD + 8.0,
+            baseline,
             m.font_small,
             color,
         );
@@ -199,49 +191,46 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
             diagnostic.start_char + 1
         );
         kit::text(
-            ctx,
+            env.ctx,
             &position,
-            row.left() + PAD + 18.0,
-            kit::baseline(measurer, *row, m.font_small),
+            row.left() + PAD + 26.0,
+            baseline,
             m.font_small,
             p.faint,
         );
         let message_x =
-            row.left() + PAD + 18.0 + kit::width(measurer, &position, m.font_small) + 12.0;
+            row.left() + PAD + 26.0 + kit::width(measurer, &position, m.font_small) + 12.0;
         let message = kit::truncate(
             measurer,
             &diagnostic.message,
             m.font_small,
             (row.right() - message_x - PAD).max(24.0),
         );
-        kit::text(
-            ctx,
-            &message,
-            message_x,
-            kit::baseline(measurer, *row, m.font_small),
-            m.font_small,
-            p.text,
+        kit::text(env.ctx, &message, message_x, baseline, m.font_small, p.text);
+        state.problems.hits.push((index, row));
+    }
+    env.ctx.restore();
+
+    if state.problems.scroll_max > 0.0 {
+        let track = Rect::from_min_size(
+            Vec2::new(rect.right() - 4.0, rect.top()),
+            Size::new(3.0, rect.height()),
+        );
+        let thumb_h = (rect.height() * rect.height() / content)
+            .min(rect.height())
+            .max(1.0);
+        let thumb_y = track.top()
+            + (state.problems.scroll / state.problems.scroll_max) * (track.height() - thumb_h);
+        kit::fill(
+            env.ctx,
+            Rect::from_min_size(Vec2::new(track.left(), thumb_y), Size::new(3.0, thumb_h)),
+            p.faint,
         );
     }
-
-    let footer = Rect::from_min_size(
-        Vec2::new(rect.left() + PAD, rect.bottom() - FOOTER_H),
-        Size::new(rect.width() - PAD * 2.0, FOOTER_H),
-    );
-    kit::text(
-        ctx,
-        "click a row to jump · Esc close",
-        footer.left(),
-        footer.bottom() - 5.0,
-        m.font_small,
-        p.faint,
-    );
 }
 
+/// Diagnostic row under `pos` (index into `state.problems.rows`).
 pub fn hover_at(state: &AppState, pos: Vec2) -> Option<usize> {
-    if !state.problems.open {
-        return None;
-    }
     state
         .problems
         .hits
@@ -250,44 +239,76 @@ pub fn hover_at(state: &AppState, pos: Vec2) -> Option<usize> {
         .map(|(index, _)| *index)
 }
 
-pub fn click(state: &mut AppState, pos: Vec2) -> Click {
-    if !state.problems.open {
-        return Click::Outside;
-    }
+/// Handles a press in the panel. Returns whether the panel consumed it.
+pub fn click(state: &mut AppState, pos: Vec2) -> bool {
     if !state.problems.rect.contains(pos) {
-        close(state);
-        return Click::Outside;
+        return false;
     }
     if let Some(index) = hover_at(state, pos) {
         jump(state, index);
-        return Click::Jump(index);
     }
-    Click::Consumed
+    true
 }
 
-pub fn wheel(state: &mut AppState, delta: f32) {
-    if !state.problems.open {
-        return;
-    }
-    state.problems.scroll =
-        (state.problems.scroll + delta * ROW_H).clamp(0.0, state.problems.scroll_max);
-    state.dirty = true;
-}
-
+/// Opens the diagnostic's file (when needed), places the caret and reveals it.
 pub fn jump(state: &mut AppState, index: usize) {
-    let diagnostics = diagnostics(state);
-    let Some(diagnostic) = diagnostics.get(index) else {
+    let Some(entry) = state.problems.rows.get(index).cloned() else {
         return;
     };
-    let (line, character) = (diagnostic.start_line as u32, diagnostic.start_char as u32);
-    let Some(doc) = state.ws.active_doc_mut() else {
-        return;
-    };
-    let byte = byte_for_position(doc, line, character);
-    doc.set_caret(byte);
+    let ProblemEntry { path, diagnostic } = entry;
+    let same_doc = state
+        .ws
+        .active_doc()
+        .and_then(|doc| doc.path())
+        .is_some_and(|active| active == path);
+    if !same_doc {
+        if !path.is_file() {
+            state.error(format!("missing file: {}", path.display()));
+            return;
+        }
+        state.open_path(path.clone());
+    }
+    if let Some(doc) = state.ws.active_doc_mut() {
+        let byte = byte_for_position(
+            doc,
+            diagnostic.start_line as u32,
+            diagnostic.start_char as u32,
+        );
+        doc.set_caret(byte);
+    }
     state.focus = Focus::Editor;
     state.editor.reveal = true;
-    state.problems.open = false;
-    state.problems.hover = None;
     state.dirty = true;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::lsp::Diagnostic;
+    use std::path::PathBuf;
+
+    fn entry(path: &str, line: usize, severity: u32) -> ProblemEntry {
+        ProblemEntry {
+            path: PathBuf::from(path),
+            diagnostic: Diagnostic {
+                start_line: line,
+                start_char: 0,
+                end_line: line,
+                end_char: 1,
+                severity,
+                message: "boom".into(),
+            },
+        }
+    }
+
+    #[test]
+    fn group_counts_stop_at_the_next_file() {
+        let rows = vec![
+            entry("/w/a.rs", 0, 1),
+            entry("/w/a.rs", 4, 2),
+            entry("/w/b.rs", 1, 1),
+        ];
+        assert_eq!(group_count(&rows, 0), 2);
+        assert_eq!(group_count(&rows, 2), 1);
+    }
 }

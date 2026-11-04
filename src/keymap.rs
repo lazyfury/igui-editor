@@ -363,6 +363,7 @@ impl Keymap {
             ("primary+shift+d", Action::LspDefinition),
             ("alt+z", Action::ToggleSoftWrap),
             ("ctrl+`", Action::ToggleTerminal),
+            ("primary+alt+p", Action::ShowPanel(Panel::Problems)),
         ];
         for (sequence, action) in global {
             self.bind(Scope::Global, sequence, action);
@@ -600,6 +601,7 @@ fn action_from_id(id: &str) -> Option<Action> {
         "view.scrollSync" => Action::ToggleScrollSync,
         "view.softWrap" => Action::ToggleSoftWrap,
         "view.terminal" => Action::ToggleTerminal,
+        "view.problems" => Action::ShowPanel(Panel::Problems),
         "settings" => Action::Settings,
         "lsp.hover" => Action::LspHover,
         "lsp.completion" => Action::LspCompletion,

@@ -12,29 +12,36 @@ use igui_ui::{Container, PaintEnv, PointerPhase};
 
 use crate::kit::{self, RectExt};
 use crate::state::{AppState, Focus};
-use crate::ui::icon::{self, Icon};
 
 pub const DEFAULT_WIDTH: f32 = 224.0;
 pub const MIN_WIDTH: f32 = 160.0;
 pub const MAX_WIDTH: f32 = 420.0;
-pub const HEADER_H: f32 = 28.0;
 
 pub fn clamp_width(width: f32) -> f32 {
     width.round().clamp(MIN_WIDTH, MAX_WIDTH)
 }
 
+/// The dock: shared tab strip on top, symbol tree body below.
 pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>) -> NodeId {
     let id = kit::node(tree, parent, "outline");
-    kit::set_container(tree, id, Container::Leaf);
-    kit::clip(tree, id, true);
-    kit::draw(tree, id, {
+    kit::set_container(tree, id, kit::tight_column());
+
+    let header = crate::ui::dock::build_tabs(tree, id, state.clone(), crate::state::DockId::Right);
+    kit::flex(tree, header, 0.0, Some(crate::ui::dock::HEADER_H), 0.0);
+    kit::min_size(tree, header, 0.0, crate::ui::dock::HEADER_H);
+
+    let body = kit::node(tree, id, "outline-body");
+    kit::set_container(tree, body, Container::Leaf);
+    kit::clip(tree, body, true);
+    kit::flex(tree, body, 1.0, None, 1.0);
+    kit::draw(tree, body, {
         let state = state.clone();
         move |env, rect, _| {
             let mut state = state.borrow_mut();
             paint(&mut state, env, rect);
         }
     });
-    kit::on_scroll(tree, id, {
+    kit::on_scroll(tree, body, {
         let state = state.clone();
         move |tree, _id, delta| {
             let mut state = state.borrow_mut();
@@ -44,7 +51,7 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
             igui_ui::request_paint(tree);
         }
     });
-    kit::on_pointer(tree, id, {
+    kit::on_pointer(tree, body, {
         let state = state.clone();
         move |tree, _id, phase, _rect, pos| {
             if phase != PointerPhase::Down {
@@ -134,31 +141,6 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     state.outline.rect = rect;
     kit::fill(env.ctx, rect, p.panel);
 
-    let header = Rect::from_min_size(rect.origin, Size::new(rect.width(), HEADER_H));
-    kit::hline(
-        env.ctx,
-        header.left(),
-        header.right(),
-        header.bottom(),
-        p.border,
-    );
-    let icon_rect = Rect::from_min_size(
-        Vec2::new(
-            rect.left() + crate::ui::tree::PAD,
-            header.center().y - icon::SMALL * 0.5,
-        ),
-        Size::new(icon::SMALL, icon::SMALL),
-    );
-    icon::paint(env.ctx, Icon::ListTree, icon_rect, p.dim);
-    kit::text(
-        env.ctx,
-        "OUTLINE",
-        rect.left() + crate::ui::tree::PAD + icon::SMALL + 5.0,
-        header.bottom() - 9.0,
-        m.font_small,
-        p.dim,
-    );
-
     let path = state
         .ws
         .active_doc()
@@ -169,22 +151,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         .map(|path| state.lsp.symbols_for(path).to_vec())
         .unwrap_or_default();
     let count = symbols.len();
-    if count > 0 {
-        kit::text_right(
-            env.ctx,
-            env.measurer,
-            &count.to_string(),
-            rect.right() - crate::ui::tree::PAD,
-            header.bottom() - 9.0,
-            m.font_small,
-            p.faint,
-        );
-    }
-
-    let list = Rect::from_min_size(
-        Vec2::new(rect.left(), header.bottom()),
-        Size::new(rect.width(), (rect.height() - HEADER_H).max(0.0)),
-    );
+    let list = rect;
     let content_h = count as f32 * m.row_h;
     state.outline.scroll_max = (content_h - list.height()).max(0.0);
     crate::ui::scroll::clamp(&mut state.outline.scroll, state.outline.scroll_max);
