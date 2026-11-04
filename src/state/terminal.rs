@@ -42,6 +42,7 @@ impl AppState {
                 self.terminal.cwd = cwd;
                 self.terminal.open = true;
                 self.terminal.focused = true;
+                self.terminal.scrollback = 0;
                 self.session.terminal_open = true;
                 self.session.terminal_height = self.terminal.height;
                 self.config_dirty = true;
@@ -73,6 +74,7 @@ impl AppState {
                 ));
                 self.terminal.session = Some(session);
                 self.terminal.cwd = cwd;
+                self.terminal.scrollback = 0;
             } else {
                 self.terminal.open = false;
             }
@@ -114,8 +116,39 @@ impl AppState {
     }
 
     pub fn terminal_write(&mut self, bytes: &[u8]) {
+        // Typing is an explicit "go back to the live prompt" action.
+        self.terminal.scrollback = 0;
         if let Some(session) = self.terminal.session.as_mut() {
             session.write(bytes);
         }
+    }
+
+    /// Scrolls the terminal viewport by `delta` rows (positive = older).
+    pub fn terminal_scroll(&mut self, delta: isize) {
+        let max = self
+            .terminal
+            .parser
+            .as_ref()
+            .map_or(0, |parser| parser.screen().scrollback_len());
+        self.terminal.scrollback = clamp_scrollback(self.terminal.scrollback, delta, max);
+        self.dirty = true;
+    }
+}
+
+fn clamp_scrollback(current: usize, delta: isize, max: usize) -> usize {
+    let next = current as isize + delta;
+    next.clamp(0, max as isize) as usize
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clamp_scrollback;
+
+    #[test]
+    fn scrollback_clamps_to_the_history_bounds() {
+        assert_eq!(clamp_scrollback(0, 5, 100), 5);
+        assert_eq!(clamp_scrollback(5, -10, 100), 0);
+        assert_eq!(clamp_scrollback(99, 10, 100), 100);
+        assert_eq!(clamp_scrollback(10, 5, 0), 0);
     }
 }

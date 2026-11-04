@@ -40,7 +40,7 @@
 | triple click | select the current line |
 | `Enter` / `⇧Enter` in find | next / previous match |
 | `Esc` | close find · cancel modal |
-| wheel / trackpad | vertical scroll, `⇧`+wheel horizontal; over the tab strip it scrolls overflowing tabs (no tab scrollbar) |
+| wheel / trackpad | vertical scroll, `⇧`+wheel horizontal; over the tab strip it scrolls overflowing tabs (no tab scrollbar); over the terminal it scrolls its scrollback |
 | drag a tab | reorder it (order persists across restarts) |
 | right-click a tab | Close / Close Others / Close to the Right / Copy Path / Reveal in Sidebar |
 | drop files / folders | files open in tabs; a folder becomes the workspace |

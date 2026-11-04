@@ -167,14 +167,29 @@ Acceptance:
   `igui-editor` checkout.
 - The local gate remains green.
 
+### Task 5: terminal scrollback (done)
+
+- [x] Track a scrollback offset on `TerminalState` and clamp it to
+      `vt100::Screen::scrollback_len()`.
+- [x] Wheel over the terminal scrolls older/live rows; typing returns to live.
+- [x] Hide the caret and IME anchor while viewing scrollback.
+- [x] Test the scrollback clamp boundaries.
+- [x] Document the wheel behavior and remaining selection/copy gap.
+
+Acceptance:
+
+- Wheel-up shows older output, wheel-down returns toward live output and cannot
+  leave the valid range.
+- Typing while scrolled returns to the prompt.
+
 ## Deferred to the next feature slice
 
 These are intentionally not part of this plan's implementation phases:
 
 - Native macOS close guard + Dock reopen.
-- Terminal multiple sessions, selection/copy, scrollback.
+- Terminal multiple sessions and selection/copy (scrollback is implemented).
 - Workspace Trust UI (the opt-in local-binary guard is implemented).
-- Incremental line index and incremental Markdown preview layout.
+- Incremental Markdown preview layout.
 - Grapheme-aware caret movement.
 
 ## Progress log
@@ -192,6 +207,7 @@ These are intentionally not part of this plan's implementation phases:
 | Session 2 | Follow-up 2 | done | Word-boundary soft wrap; 237 unit tests; selfcheck green. |
 | Session 2 | Follow-up 3 | done | Repo-local LSP shims require explicit trust; 238 unit tests. |
 | Session 2 | Follow-up 4 | done | GitHub Actions gate with pinned igui v0.6.0. |
+| Session 2 | Follow-up 5 | done | Terminal vt100 scrollback with wheel navigation; 239 unit tests. |
 
 ## Final acceptance checklist
 

@@ -210,8 +210,9 @@ double-click resets). It starts a **login** `$SHELL` (`-l`), so
 `/etc/zprofile` and `~/.zprofile` run just as they do in Terminal.app, and
 supports ANSI/256-color cells, cursor, resize, plain text, arrows, Ctrl letters,
 Alt prefixes, application cursor mode (vim/less) and IME candidate placement at
-the terminal cursor. The terminal requests frames while a PTY is alive, so
-full-screen programs repaint without extra input.
+the terminal cursor. The wheel scrolls the vt100 scrollback (up to 4,000 rows);
+typing or clicking the live screen returns to the prompt. The terminal requests
+frames while a PTY is alive, so full-screen programs repaint without extra input.
 
 A macOS app launched from Finder inherits no `LANG`/`LC_*`. The PTY child would
 then run in the `C` locale, where zsh prints multibyte prompt text as

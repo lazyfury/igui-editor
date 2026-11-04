@@ -102,6 +102,18 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
             igui_ui::request_paint(tree);
         }
     });
+    kit::on_scroll(tree, id, {
+        let state = state.clone();
+        move |tree, _id, delta| {
+            let mut state = state.borrow_mut();
+            // One wheel line per row; trackpads report fractional deltas.
+            let rows = (-delta.y).round() as isize;
+            if rows != 0 {
+                state.terminal_scroll(rows);
+            }
+            igui_ui::request_paint(tree);
+        }
+    });
     id
 }
 
@@ -269,9 +281,14 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     state.terminal.cols = cols;
     state.terminal.cell_w = cell_w;
 
-    let Some(parser) = state.terminal.parser.as_ref() else {
+    let Some(parser) = state.terminal.parser.as_mut() else {
         return;
     };
+    let max_scrollback = parser.screen().scrollback_len();
+    state.terminal.scrollback = state.terminal.scrollback.min(max_scrollback);
+    parser
+        .screen_mut()
+        .set_scrollback(state.terminal.scrollback);
     let screen = parser.screen();
     let rows = rows.min(screen.size().0.get());
     let cols = cols.min(screen.size().1.get());
@@ -331,11 +348,17 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     let crow = crow.min(rows.saturating_sub(1));
     let ccol = ccol.min(cols.saturating_sub(1));
     let caret = caret_rect(body, cell_w, line_h, crow, ccol);
-    state.terminal.caret_rect = caret;
-    env.ctx.fill_rect(
-        Rect::from_min_size(caret.origin, Size::new(2.0, line_h)),
-        if focused { p.accent } else { p.faint },
-    );
+    state.terminal.caret_rect = if state.terminal.scrollback == 0 {
+        caret
+    } else {
+        Rect::ZERO
+    };
+    if state.terminal.scrollback == 0 {
+        env.ctx.fill_rect(
+            Rect::from_min_size(caret.origin, Size::new(2.0, line_h)),
+            if focused { p.accent } else { p.faint },
+        );
+    }
     env.ctx.restore();
 }
 

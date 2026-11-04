@@ -673,6 +673,8 @@ pub struct TerminalState {
     pub font_checked: bool,
     pub cwd: PathBuf,
     pub caret_rect: Rect,
+    /// Offset from the live screen into the vt100 scrollback (0 = live).
+    pub scrollback: usize,
     pub height: f32,
     pub node: Option<NodeId>,
     pub drag: Option<(f32, f32)>,
@@ -694,6 +696,7 @@ impl Default for TerminalState {
             cell_w: 0.0,
             cwd: PathBuf::from("."),
             caret_rect: Rect::ZERO,
+            scrollback: 0,
             height: 220.0,
             node: None,
             drag: None,
