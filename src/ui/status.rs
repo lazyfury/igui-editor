@@ -1,6 +1,7 @@
 //! Status bar: file, cursor position, editor facts and the last message.
 
 use std::cell::RefCell;
+use std::path::Path;
 use std::rc::Rc;
 
 use igui_core::{NodeId, Rect, Size, Vec2};
@@ -127,11 +128,29 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         right -= width + 16.0;
     }
 
-    let focus = if state.focus == crate::state::Focus::Terminal {
-        "TERMINAL"
-    } else {
-        "EDITOR"
-    };
+    // Theme chip: clicking it toggles dark/light. It sits next to the
+    // language selector so the footer's right edge stays a compact control
+    // strip.
+    let theme_name = theme.name();
+    let theme_width = kit::width(measurer, theme_name, m.font_small);
+    let theme_hit = Rect::from_min_size(
+        Vec2::new(right - theme_width - 14.0, rect.top()),
+        Size::new(theme_width + 14.0, rect.height()),
+    );
+    if state.theme_hover {
+        kit::fill(env.ctx, theme_hit, p.hover);
+    }
+    kit::text(
+        env.ctx,
+        theme_name,
+        theme_hit.left() + 7.0,
+        baseline,
+        m.font_small,
+        if state.theme_hover { p.accent } else { p.dim },
+    );
+    state.theme_hit = theme_hit;
+    right = theme_hit.left() - 16.0;
+
     let branch = state
         .git
         .status
@@ -148,10 +167,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     let lsp = state
         .lsp
         .summary(state.ws.active_doc().and_then(|doc| doc.path()));
-    let mut facts = vec![theme.name(), mode.as_str(), focus];
-    if !branch.is_empty() {
-        facts.push(branch.as_str());
-    }
+    let mut facts = vec![mode.as_str()];
     if read_only {
         facts.push("READ-ONLY");
     }
@@ -274,10 +290,20 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         right -= width + 16.0;
     }
 
-    // Left side: dirty mark, file name, transient message, then the directory.
-    // Every part is truncated against the remaining room before the facts, so
-    // nothing can overlap.
+    // Left side: the Git branch, then the dirty mark and file name, the
+    // transient message and finally the directory. Every part is truncated
+    // against the remaining room before the right-side facts, so nothing can
+    // overlap.
     let mut left = rect.left() + 10.0;
+    if !branch.is_empty() && right - left > 32.0 {
+        let branch_width = (rect.width() * 0.32)
+            .max(72.0)
+            .min((right - left - 24.0).max(0.0));
+        let branch = kit::truncate(measurer, &branch, m.font_small, branch_width);
+        let width = kit::width(measurer, &branch, m.font_small);
+        kit::text(env.ctx, &branch, left, baseline, m.font_small, p.dim);
+        left += width + 14.0;
+    }
     let doc = state.ws.active_doc();
     if let Some(doc) = doc {
         if doc.is_dirty() {
@@ -294,19 +320,6 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         let text = "no document";
         kit::text(env.ctx, text, left, baseline, m.font_small, p.faint);
         left += kit::width(measurer, text, m.font_small) + 14.0;
-        let folder = state
-            .ws
-            .folder()
-            .and_then(|folder| folder.file_name())
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "no folder open".into());
-        let folder = kit::truncate(
-            measurer,
-            &folder,
-            m.font_small,
-            (right - left - 8.0).max(0.0),
-        );
-        kit::text(env.ctx, &folder, left, baseline, m.font_small, p.faint);
     }
 
     // A transient message takes priority over the directory hint.
@@ -326,18 +339,25 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         }
     }
 
-    // Directory hint only when it still fits completely.
-    if let Some(doc) = doc {
-        if let Some(path) = doc.path() {
-            let available = (right - left - 8.0).max(0.0);
-            if available > 32.0 {
-                let parent = path
-                    .parent()
-                    .map(|parent| parent.display().to_string())
-                    .unwrap_or_default();
-                let parent = kit::truncate(measurer, &parent, m.font_small, available);
-                kit::text(env.ctx, &parent, left, baseline, m.font_small, p.faint);
-            }
+    // Directory/folder hint only when it still fits completely.
+    let hint = match doc {
+        Some(doc) => doc
+            .path()
+            .and_then(Path::parent)
+            .map(|parent| parent.display().to_string())
+            .unwrap_or_default(),
+        None => state
+            .ws
+            .folder()
+            .and_then(|folder| folder.file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "no folder open".into()),
+    };
+    if !hint.is_empty() {
+        let available = (right - left - 8.0).max(0.0);
+        if available > 32.0 {
+            let hint = kit::truncate(measurer, &hint, m.font_small, available);
+            kit::text(env.ctx, &hint, left, baseline, m.font_small, p.faint);
         }
     }
 }

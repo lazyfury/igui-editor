@@ -304,6 +304,62 @@ fn check_header_panels(harness: &mut Harness, frame: &RecordedFrame) -> Result<(
     Ok(())
 }
 
+fn check_footer_controls(harness: &mut Harness, frame: &RecordedFrame) -> Result<(), String> {
+    let baseline = frame
+        .commands()
+        .iter()
+        .find_map(|command| match command {
+            DrawCommand::DrawText { text, position, .. } if text == "UTF-8" => Some(position.y),
+            _ => None,
+        })
+        .ok_or("the footer painted no UTF-8 fact")?;
+    for command in frame.commands() {
+        if let DrawCommand::DrawText { text, position, .. } = command {
+            if (position.y - baseline).abs() < 0.01 && (text == "EDITOR" || text == "TERMINAL") {
+                return Err(format!(
+                    "the footer still shows a focus indicator: {text:?}"
+                ));
+            }
+        }
+    }
+
+    let theme_hit = {
+        let state = harness.app.state();
+        if state.theme_hit.width() <= 0.0 {
+            return Err("the footer theme chip has no hit target".into());
+        }
+        state.theme_hit
+    };
+    harness.event(InputEvent::PointerMove {
+        position: theme_hit.center(),
+    });
+    if !harness.app.state().theme_hover {
+        return Err("moving over the footer theme chip did not set its hover".into());
+    }
+
+    let before = harness.app.state().theme.mode;
+    let hit = harness.app.state().theme_hit.center();
+    harness.click(hit);
+    harness.frame()?;
+    if harness.app.state().theme.mode == before {
+        return Err("clicking the footer theme chip did not toggle the theme".into());
+    }
+    let hit = harness.app.state().theme_hit.center();
+    harness.click(hit);
+    harness.frame()?;
+    if harness.app.state().theme.mode != before {
+        return Err("clicking the footer theme chip did not toggle back".into());
+    }
+    harness.event(InputEvent::PointerMove {
+        position: Vec2::new(400.0, 400.0),
+    });
+    if harness.app.state().theme_hover {
+        return Err("leaving the footer theme chip did not clear its hover".into());
+    }
+    harness.frame()?;
+    Ok(())
+}
+
 fn check(dir: &Path) -> Result<(), String> {
     let config = dir.join("session.conf");
     // Data-only language pack loaded at startup.
@@ -458,6 +514,7 @@ fn check(dir: &Path) -> Result<(), String> {
     expect(&painted, "EXPLORER", "sidebar header")?;
     expect(&painted, "notes.md", "sidebar rows")?;
     check_header_panels(&mut harness, &frame)?;
+    check_footer_controls(&mut harness, &frame)?;
     if !frame
         .commands()
         .iter()
@@ -2858,6 +2915,21 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
         }
     }
 
+    // The theme toggle message must sit beside, not on top of, the folder hint.
+    let theme_hit = harness.app.state().theme_hit.center();
+    harness.click(theme_hit);
+    let frame = harness.frame()?;
+    expect(
+        &texts(&frame),
+        "theme: LIGHT",
+        "theme toggle footer message",
+    )?;
+    let measurer = igui_ui::text_measurer(harness.app.tree());
+    check_status_overlap(&frame, measurer.as_ref())?;
+    let theme_hit = harness.app.state().theme_hit.center();
+    harness.click(theme_hit);
+    harness.frame()?;
+
     // Drop hover overlay.
     harness.app.state_mut().drop_hover = true;
     let frame = harness.frame()?;
@@ -3337,7 +3409,21 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
         drop(state);
         harness.click(git_tab);
     }
-    harness.frame()?;
+    let git_frame = harness.frame()?;
+    {
+        let state = harness.app.state();
+        let branch = format!(
+            "GIT {} ↑{} ↓{}",
+            state.git.status.branch, state.git.status.ahead, state.git.status.behind
+        );
+        let position = draw_position(&git_frame, &branch)
+            .ok_or_else(|| format!("the footer did not paint the Git branch: {branch:?}"))?;
+        if position.x > WIDTH * 0.5 {
+            return Err(format!(
+                "the Git branch is not on the footer's left side: {position:?}"
+            ));
+        }
+    }
     {
         let state = harness.app.state();
         if state.sidebar_tab != "git" {

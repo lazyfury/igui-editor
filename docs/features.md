@@ -7,7 +7,7 @@ verification, see [design.md](design.md) and [verification.md](verification.md).
 
 The file tree marks modified/untracked files with a colored Git status letter
 (modified orange, added green, deleted/conflict red, renamed purple, untracked
-teal), and the status bar shows `GIT <branch> ↑ahead ↓behind`. The sidebar has
+teal), and the footer shows `GIT <branch> ↑ahead ↓behind` on its left. The sidebar has
 `EXPLORER / GIT` tabs. GIT shows the repository branch,
 ahead/behind, and staged/changes/conflicts sections from `git status
 --porcelain=v2 -z`. Click a file for a read-only unified diff overlay; `Esc` or
@@ -520,7 +520,8 @@ Not `igui_theme::DefaultTheme`. The app owns its palette and metrics
 - **Palette** — dark: `#0B0E13` canvas, `#0E1218` panels, `#39E0AE` phosphor
   accent, `#16362F` selection; light: `#F7F9FC` canvas, `#0A8F6F` teal accent.
 - Dark and light are separate hand-tuned palettes, not an inversion; switching
-  is a value swap (no rebuild, no second code path).
+  is a value swap (no rebuild, no second code path). Click the `DARK`/`LIGHT`
+  chip in the footer to toggle, or use View → Toggle Theme / `⌘⇧L`.
 - Syntax colors (dark): keyword `#C792EA`, type `#7DD3FC`, function `#82E2A6`,
   string `#E6C889`, number `#F78C6C`, comment `#55637A`, constant `#FF9E64`,
   macro `#39E0AE`, punctuation `#8494A8`; the light palette has equivalents.

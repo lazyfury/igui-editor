@@ -41,9 +41,10 @@ file**, then asserts:
    it, `Save` writes and closes it,
 9. a sidebar click opens a file **and returns keyboard focus**; drag selection
    and wheel scrolling work,
-10. `⇧⌘L` repaints with the light palette, `⇧⌘O` retargets the sidebar root,
-    and a fresh app restores the theme, the open tabs and current tab, the
-    recent list and every editor setting from the session file,
+10. the footer `DARK`/`LIGHT` chip and `⇧⌘L` both repaint with the other
+    palette, `⇧⌘O` retargets the sidebar root, and a fresh app restores the
+    theme, the open tabs and current tab, the recent list and every editor
+    setting from the session file,
 11. an idle app with a terminal panel open requests **no** further frames
     (`needs_frame` is false; async workers are given a bounded settle window),
     and a second unchanged frame reuses the cached tree `DrawList`.

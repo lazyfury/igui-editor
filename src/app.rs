@@ -622,6 +622,14 @@ impl EditorApp {
                     state.dirty = true;
                     return EventResult::Handled;
                 }
+                // Footer theme toggle.
+                if state.theme_hit.contains(*position) {
+                    state.run(Action::ToggleTheme);
+                    state.menu_open = None;
+                    state.menu_hover = None;
+                    state.dirty = true;
+                    return EventResult::Handled;
+                }
                 // Footer language selector (bottom-right): a click toggles the
                 // language popup, which opens above the status bar.
                 if state.ws.active_doc().is_some() && state.language_hit.contains(*position) {
@@ -751,6 +759,7 @@ impl EditorApp {
                 let sidebar = ui::sidebar::hover_at(&state, *position);
                 let language =
                     state.ws.active_doc().is_some() && state.language_hit.contains(*position);
+                let theme = state.theme_hit.contains(*position);
                 let problems = ui::problems::hover_at(&state, *position);
                 let lsp_hover = state.lsp_hit.contains(*position);
                 let lsp_toggle_hover = state.lsp_toggle_hit.contains(*position);
@@ -784,6 +793,7 @@ impl EditorApp {
                     || state.tabs.hover != tabs
                     || state.sidebar.hover != sidebar
                     || state.language_hover != language
+                    || state.theme_hover != theme
                     || state.lsp_hover != lsp_hover
                     || state.lsp_toggle_hover != lsp_toggle_hover
                     || state.problems.hover != problems
@@ -795,6 +805,7 @@ impl EditorApp {
                     state.tabs.hover = tabs;
                     state.sidebar.hover = sidebar;
                     state.language_hover = language;
+                    state.theme_hover = theme;
                     state.lsp_hover = lsp_hover;
                     state.lsp_toggle_hover = lsp_toggle_hover;
                     state.problems.hover = problems;
@@ -1130,6 +1141,7 @@ impl EditorApp {
                     state.tabs.hover = None;
                     state.sidebar.hover = None;
                     state.language_hover = false;
+                    state.theme_hover = false;
                     state.lsp_hover = false;
                     state.lsp_toggle_hover = false;
                     state.lsp_toggle_hover = false;

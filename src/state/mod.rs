@@ -1195,6 +1195,9 @@ pub struct AppState {
     /// Status-bar language selector hit rect (footer, bottom right).
     pub language_hit: Rect,
     pub language_hover: bool,
+    /// Status-bar theme toggle hit rect; clicking it toggles dark/light.
+    pub theme_hit: Rect,
+    pub theme_hover: bool,
     /// Status-bar LSP summary chip; clicking it opens the problems popup.
     pub lsp_hit: Rect,
     pub lsp_hover: bool,
@@ -1353,6 +1356,8 @@ impl AppState {
             sidebar_drag: None,
             language_hit: Rect::ZERO,
             language_hover: false,
+            theme_hit: Rect::ZERO,
+            theme_hover: false,
             lsp_hit: Rect::ZERO,
             lsp_hover: false,
             lsp_toggle_hit: Rect::ZERO,
