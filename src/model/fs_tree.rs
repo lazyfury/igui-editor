@@ -40,7 +40,7 @@ pub struct FsTree {
 }
 
 impl FsTree {
-    /// An empty tree for "no folder open": nothing to list, no IO.
+    /// An empty tree for "no project open": nothing to list, no IO.
     pub fn empty() -> Self {
         Self {
             root: PathBuf::new(),

@@ -4,13 +4,13 @@ use super::*;
 
 impl AppState {
     pub fn clear_recent(&mut self) {
-        if self.session.recent.is_empty() {
+        if self.session.recent_projects.is_empty() && self.session.recent_files.is_empty() {
             return;
         }
-        self.session.recent.clear();
+        self.session.clear_recents();
         self.config_dirty = true;
         crate::macos::clear_system_recent();
-        self.status("recent files cleared");
+        self.status("recent projects and files cleared");
         self.dirty = true;
     }
 
@@ -28,7 +28,7 @@ impl AppState {
                 self.tabs.reveal_active = true;
                 self.request_git_refresh();
                 self.remember_disk(&path);
-                self.session.push_recent(&path);
+                self.session.push_recent_file(&path);
                 crate::macos::note_recent(&path);
                 self.config_dirty = true;
                 self.sync_layout();
@@ -92,7 +92,7 @@ impl AppState {
             .active_doc()
             .and_then(|doc| doc.path().map(Path::to_path_buf))
         {
-            self.session.push_recent(&path);
+            self.session.push_recent_file(&path);
             self.config_dirty = true;
             self.sidebar.selected = Some(path.clone());
             self.request_git_refresh();

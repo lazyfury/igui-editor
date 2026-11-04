@@ -80,7 +80,7 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    `--selfcheck` for the pipeline (recorded `DrawList` + `igui_profile::inspect`
    + semantic text/color assertions). No screenshots or screen recordings.
 8. **Native dialogs behind a trait, asynchronously.** `dialogs::Dialogs`
-   returns a boxed future per call (open file / open folder / save file).
+   returns a boxed future per call (open file / open project / save file).
    `host.rs` implements it with `rfd`'s **async** API, attached to the winit
    window via `SharedWindow`: on macOS that is an `NSOpenPanel`/`NSSavePanel`
    **sheet**, so the winit loop keeps running and the app handler is never
@@ -111,8 +111,9 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    `Prim` (text/fills) once per `(doc id, rev, width, theme mode)` and paints
    them with a scroll offset — no per-frame reflow, no second tree.
 12. **Session is a tiny hand-written file.** `theme`, `sidebar`, up to eight
-   `recent.N` and `tabs.N` entries, written atomically. No serde. Values escape
-   backslash/newline; a corrupt line is ignored rather than failing startup.
+   `recent_project.N`, `recent_file.N` and `tabs.N` entries, written atomically.
+   No serde. Values escape backslash/newline; a corrupt line is ignored rather
+   than failing startup.
 13. **Unsaved-close is an app overlay, not a native alert.** It must be
    headless-testable and visually consistent (square, 1px rules, accent Save),
    so it is painted after the tree like the menu and hit-tested from one layout
@@ -148,20 +149,24 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    the active tab is revealed on switch/new/close, not re-clamped after manual
    scrolling. No scrollbar is drawn. Both states persist (sidebar width, split
    ratio).
-19. **A workspace folder is optional.** `Workspace { root, folder_open, tree }`:
-   `folder_open == false` means no folder (welcome state, empty sidebar, Quick
-   Open/project search refuse). Opening a file never implicitly opens a folder;
-   a CLI folder, Open Folder or a dropped folder does. **File → Close Folder**
-   clears `folder_open`, all open tabs, and the persisted root; a dirty tab opens
-   a confirmation first. The folder is stored in the session (`folder=`) instead of being
-   inferred from tabs; v1 sessions infer it from the first tab for compatibility.
-   Closing the last tab returns to the welcome state instead of creating a
-   hidden untitled buffer.
+19. **Projects are the workspace root.** `Workspace { root, folder_open, tree }`:
+   `folder_open == false` means no project (welcome state, empty sidebar, Quick
+   Open/project search refuse). Opening a file never implicitly opens a project;
+   a CLI folder, Open Project or a dropped folder does. **File → Close Project**
+   clears the project, every tab and the project-scoped terminal/Git/LSP/outline
+   state; a dirty tab opens a confirmation first. Opening another project is a
+   switch: the old tabs close (with confirmation), services reset, and an open
+   terminal respawns in the new root. The project is stored in the session
+   (`project=`, legacy `folder=` accepted) instead of being inferred from tabs;
+   v1 sessions infer it from the first tab for compatibility. Closing the last
+   tab returns to the welcome state instead of creating a hidden untitled
+   buffer.
 20. **Drag & drop is a host observer into a shared target.** `winit` reports
    `HoveredFile`/`DroppedFile`; a `DropPlugin` (app crate, not the engine) writes
    them into `drop::DropTarget` and `EditorApp::update` drains it. Files open as
-   tabs; the first folder becomes the workspace; the hover flag paints a themed
-   overlay. No new engine `InputEvent` variants.
+   tabs and enter the recent-file list; the first folder becomes the project and
+   enters the recent-project list; the hover flag paints a themed overlay. No
+   new engine `InputEvent` variants.
 21. **Quick Open is an index + fuzzy ranking, rebuilt on open.** The walker
    skips VCS/build/hidden entries and caps at 20k files; `model::fuzzy` scores
    relative paths (name prefix > substring > subsequence, recent bonus). The
@@ -227,10 +232,11 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    `applicationDockMenu:` and `applicationShouldTerminate:` are added to the
    *existing* winit delegate class. `NSApplication.setDelegate:` is hooked so
    cold-launch file events are handled after winit installs its delegate.
-31. **Dock Recent mirrors the session.** `session.recent` is the single source
-   of truth (8 paths); each frame copies it into the native snapshot. The Dock
-   menu is rebuilt from that snapshot on demand, skips missing files, and sends
-   `Open` / `NewFile` / `ClearRecent` requests. Open/save also calls
+31. **Dock Recent mirrors the session.** `session.recent_projects` +
+   `session.recent_files` are the source of truth (8 each); each frame copies the
+   combined list into the native snapshot. The Dock menu is rebuilt from that
+   snapshot on demand, skips missing paths, and sends `Open` / `NewFile` /
+   `ClearRecent` requests. Opening a project/file also calls
    `NSDocumentController.noteNewRecentDocumentURL:`.
 32. **Quick create is `create_new` + inline validation.** `⇧⌘N` opens a centered
    prompt, defaults to the active file's parent (then workspace, then cwd), and
@@ -287,7 +293,7 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    palette color, so icons stay crisp at any DPI. `state::panels` is the single table
    for toggleable panels: dock group, icon, label, command and open state. The
    header's right side lays those panels out with Git first, then the left,
-   right and bottom dock toggles, with the open folder's name beside them and
+   right and bottom dock toggles, with the project name beside them and
    the active file label to its left; one function computes the geometry and
    records the hit rectangles during paint. The same table also drives the
    sidebar tabs' icons and the Outline/Terminal headers.
@@ -376,7 +382,7 @@ centre so they are level — including when the find bar changes the content top
 undo/redo, clipboard, save, dark/light, IME preedit, self-check.
 
 **M2 (done)** — multi-document polish (close-with-confirm via a custom modal),
-recent files, find/replace bar, settings persistence (plain key=value file),
+recent projects/files, find/replace bar, settings persistence (plain key=value file),
 Markdown edit/preview split with a self-written block renderer on
 `pulldown-cmark`'s event stream, `Save As`.
 
@@ -384,7 +390,7 @@ Markdown edit/preview split with a self-written block renderer on
 JSON / TOML / Markdown), incremental highlight cache, indent guides, bracket
 matching, large-file guards, settings panel, sidebar drag-resize, tab overflow.
 
-**M4 (done)** — optional workspace folder + welcome state, file/folder drag &
+**M4 (done)** — optional project root + welcome state, file/folder drag &
 drop, CLI folder argument, Quick Open, project search worker, draggable split
 divider, autosave, crash recovery, window geometry, session v2.
 

@@ -351,7 +351,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             .folder()
             .and_then(|folder| folder.file_name())
             .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "no folder open".into()),
+            .unwrap_or_else(|| "no project open".into()),
     };
     if !hint.is_empty() {
         let available = (right - left - 8.0).max(0.0);

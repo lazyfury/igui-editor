@@ -298,7 +298,7 @@ pub fn reply_quit(terminate: bool) {
 }
 
 pub fn note_recent(path: &Path) {
-    if !path.is_file() {
+    if !path.exists() {
         return;
     }
     let Some(mtm) = MainThreadMarker::new() else {
@@ -690,7 +690,7 @@ fn build_main_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
         command_item(
             mtm,
             &target,
-            "Open Folder…",
+            "Open Project…",
             NativeCommand::OpenFolder,
             "o",
             NSEventModifierFlags::Command | NSEventModifierFlags::Shift,
@@ -698,7 +698,7 @@ fn build_main_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
         command_item(
             mtm,
             &target,
-            "Close Folder",
+            "Close Project",
             NativeCommand::CloseFolder,
             "",
             NSEventModifierFlags::empty(),
@@ -831,7 +831,7 @@ fn build_main_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
         command_item(
             mtm,
             &target,
-            "Search in Folder…",
+            "Search in Project…",
             NativeCommand::ProjectSearch,
             "f",
             NSEventModifierFlags::Command | NSEventModifierFlags::Shift,
@@ -1061,11 +1061,11 @@ fn build_dock_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
     let recent = RECENT.with(|slot| slot.borrow().clone());
     if recent.is_empty() {
         let empty = NSMenuItem::new(mtm);
-        empty.setTitle(ns_string!("No Recent Files"));
+        empty.setTitle(ns_string!("No Recent Items"));
         empty.setEnabled(false);
         recent_menu.addItem(&empty);
     } else {
-        for path in recent.iter().filter(|path| path.is_file()) {
+        for path in recent.iter().filter(|path| path.exists()) {
             let name = path
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
@@ -1077,7 +1077,7 @@ fn build_dock_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
         }
         if recent_menu.numberOfItems() == 0 {
             let empty = NSMenuItem::new(mtm);
-            empty.setTitle(ns_string!("No Recent Files"));
+            empty.setTitle(ns_string!("No Recent Items"));
             empty.setEnabled(false);
             recent_menu.addItem(&empty);
         }

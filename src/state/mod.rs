@@ -67,6 +67,8 @@ mod workspace;
 pub use panels::{Panel, PanelGroup};
 
 pub const MAX_RECENT: usize = 8;
+/// Recent entries shown per group in the File menu (the session keeps 8 each).
+const MENU_RECENT: usize = 5;
 
 // -- menus & actions ---------------------------------------------------------
 
@@ -208,7 +210,8 @@ pub enum Action {
     ToggleScrollSync,
     ToggleSoftWrap,
     SetLanguage(Option<String>),
-    OpenRecent(PathBuf),
+    OpenRecentProject(PathBuf),
+    OpenRecentFile(PathBuf),
     ClearRecent,
     NextTab,
     PreviousTab,
@@ -222,8 +225,8 @@ impl Action {
             Action::New => "New Buffer".into(),
             Action::NewFile => "New File…".into(),
             Action::Open => "Open…".into(),
-            Action::OpenFolder => "Open Folder…".into(),
-            Action::CloseFolder => "Close Folder".into(),
+            Action::OpenFolder => "Open Project…".into(),
+            Action::CloseFolder => "Close Project".into(),
             Action::Save => "Save".into(),
             Action::SaveAs => "Save As…".into(),
             Action::CloseTab => "Close Tab".into(),
@@ -238,7 +241,7 @@ impl Action {
             Action::FindNext => "Find Next".into(),
             Action::FindPrevious => "Find Previous".into(),
             Action::QuickOpen => "Quick Open…".into(),
-            Action::ProjectSearch => "Search in Folder…".into(),
+            Action::ProjectSearch => "Search in Project…".into(),
             Action::CycleView => "Cycle View".into(),
             Action::DeleteLine => "Delete Line".into(),
             Action::DuplicateLine => "Duplicate Line".into(),
@@ -269,12 +272,19 @@ impl Action {
             Action::NextTab => "Next Tab".into(),
             Action::PreviousTab => "Previous Tab".into(),
             Action::SelectTab(slot) => format!("Tab {slot}"),
-            Action::OpenRecent(path) => {
+            Action::OpenRecentProject(path) => {
                 let name = path
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned())
                     .unwrap_or_else(|| path.display().to_string());
-                format!("Recent: {name}")
+                format!("Project: {name}")
+            }
+            Action::OpenRecentFile(path) => {
+                let name = path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path.display().to_string());
+                format!("File: {name}")
             }
         }
     }
@@ -327,8 +337,11 @@ impl Action {
             Action::SetView(_) => doc.is_some(),
             Action::ToggleSoftWrap => doc.is_some(),
             Action::SetLanguage(_) => doc.is_some(),
-            Action::OpenRecent(path) => path.is_file(),
-            Action::ClearRecent => !state.session.recent.is_empty(),
+            Action::OpenRecentProject(path) => path.is_dir(),
+            Action::OpenRecentFile(path) => path.is_file(),
+            Action::ClearRecent => {
+                !state.session.recent_projects.is_empty() || !state.session.recent_files.is_empty()
+            }
             Action::NextTab | Action::PreviousTab => state.ws.tabs.len() > 1,
             Action::SelectTab(slot) => {
                 *slot >= 1
@@ -370,11 +383,19 @@ pub fn items(menu: Menu, state: &AppState) -> Vec<Option<Action>> {
                 Some(Action::SaveAs),
                 Some(Action::CloseTab),
             ];
-            if !state.session.recent.is_empty() {
+            if !state.session.recent_projects.is_empty() {
                 items.push(None);
-                for path in state.session.recent.iter().take(MAX_RECENT) {
-                    items.push(Some(Action::OpenRecent(path.clone())));
+                for path in state.session.recent_projects.iter().take(MENU_RECENT) {
+                    items.push(Some(Action::OpenRecentProject(path.clone())));
                 }
+            }
+            if !state.session.recent_files.is_empty() {
+                items.push(None);
+                for path in state.session.recent_files.iter().take(MENU_RECENT) {
+                    items.push(Some(Action::OpenRecentFile(path.clone())));
+                }
+            }
+            if !state.session.recent_projects.is_empty() || !state.session.recent_files.is_empty() {
                 items.push(None);
                 items.push(Some(Action::ClearRecent));
             }
@@ -508,8 +529,10 @@ pub enum Modal {
     ExternalChange { tab: usize },
     /// macOS Cmd+Q with dirty tabs: Cancel / Discard & Quit.
     Quit { dirty: usize },
-    /// Close the folder and all its open tabs: Cancel / Discard.
+    /// Close the project and all its open tabs: Cancel / Discard.
     CloseFolder { dirty: usize },
+    /// Replace the open project after discarding dirty tabs.
+    SwitchProject { dirty: usize },
     /// Replace every match in the scanned files: Cancel / Replace all.
     ReplaceInFiles { files: usize, occurrences: usize },
 }
@@ -598,7 +621,7 @@ pub struct SidebarUi {
     pub scroll: f32,
     pub hover: Option<usize>,
     pub selected: Option<PathBuf>,
-    /// Empty-state actions (no folder open).
+    /// Empty-state actions (no project open).
     pub actions: Vec<(Action, Rect)>,
     /// Sidebar tab hit rectangles (tab id, rect).
     pub tabs: Vec<(&'static str, Rect)>,
@@ -1161,6 +1184,8 @@ pub struct AppState {
     pub modal: Option<Modal>,
     pub modal_buttons: Vec<(ModalButton, Rect)>,
     pub pending_dialog: Option<DialogRequest>,
+    /// Project root waiting for the switch confirmation.
+    pub pending_project: Option<PathBuf>,
     /// Per-document UI state (keyed by `Document::id`).
     pub doc_views: HashMap<u64, DocUi>,
     pub session: Session,
@@ -1321,6 +1346,7 @@ impl AppState {
             modal: None,
             modal_buttons: Vec::new(),
             pending_dialog: None,
+            pending_project: None,
             doc_views: HashMap::new(),
             session,
             config_path,
@@ -1791,6 +1817,115 @@ mod tests {
     }
 
     #[test]
+    fn switching_projects_closes_tabs_and_resets_project_ui() {
+        let base =
+            std::env::temp_dir().join(format!("igui-editor-project-switch-{}", std::process::id()));
+        let first = base.join("first");
+        let second = base.join("second");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        let mut ws = Workspace::new(&first);
+        ws.new_tab();
+        let mut state = AppState::new(
+            Theme::dark(),
+            ws,
+            Session::default(),
+            base.join("session.conf"),
+        );
+        state.session.project = Some(first.clone());
+        state.terminal.sessions.push(TerminalSession::default());
+        state.outline.hover = Some(1);
+        state.outline.scroll = 12.0;
+        state.problems.open = true;
+
+        state.open_project(second.clone());
+
+        assert_eq!(state.ws.root, std::fs::canonicalize(&second).unwrap());
+        assert!(state.ws.folder_open);
+        assert!(state.ws.tabs.is_empty());
+        assert_eq!(state.session.project, Some(state.ws.root.clone()));
+        assert_eq!(state.session.recent_projects.first(), Some(&state.ws.root));
+        assert!(state.terminal.sessions.is_empty());
+        assert!(state.outline.hover.is_none());
+        assert_eq!(state.outline.scroll, 0.0);
+        assert!(!state.problems.open);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn switching_projects_confirms_dirty_tabs() {
+        let base = std::env::temp_dir().join(format!(
+            "igui-editor-project-confirm-{}",
+            std::process::id()
+        ));
+        let first = base.join("first");
+        let second = base.join("second");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        let mut ws = Workspace::new(&first);
+        ws.new_tab();
+        let mut state = AppState::new(
+            Theme::dark(),
+            ws,
+            Session::default(),
+            base.join("session.conf"),
+        );
+        state.ws.active_doc_mut().unwrap().insert_text("dirty");
+
+        state.open_project(second.clone());
+        assert!(matches!(
+            state.modal,
+            Some(Modal::SwitchProject { dirty: 1 })
+        ));
+        assert_eq!(
+            state.pending_project,
+            Some(std::fs::canonicalize(&second).unwrap())
+        );
+        assert_eq!(state.ws.root, std::fs::canonicalize(&first).unwrap());
+        state.resolve_modal(ModalButton::Cancel);
+        assert!(state.modal.is_none());
+        assert!(state.pending_project.is_none());
+        assert_eq!(state.ws.root, std::fs::canonicalize(&first).unwrap());
+
+        state.open_project(second.clone());
+        state.resolve_modal(ModalButton::Discard);
+        assert_eq!(state.ws.root, std::fs::canonicalize(&second).unwrap());
+        assert!(state.ws.tabs.is_empty());
+        assert!(state.pending_project.is_none());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn dropped_files_are_recent_files_not_projects() {
+        let base =
+            std::env::temp_dir().join(format!("igui-editor-drop-recent-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let file = base.join("dropped.rs");
+        std::fs::write(&file, "fn dropped() {}\n").unwrap();
+        let mut state = AppState::new(
+            Theme::dark(),
+            Workspace::detached(),
+            Session::default(),
+            base.join("session.conf"),
+        );
+
+        state.open_dropped(vec![file.clone()]);
+
+        let canonical = std::fs::canonicalize(&file).unwrap();
+        assert!(!state.ws.folder_open);
+        assert_eq!(state.session.recent_projects, Vec::<PathBuf>::new());
+        assert_eq!(state.session.recent_files.first(), Some(&canonical));
+        assert_eq!(
+            state.ws.active_doc().and_then(|doc| doc.path()),
+            Some(canonical.as_path())
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn close_folder_clears_clean_tabs_and_confirms_dirty_ones() {
         let mut state = state();
         state.ws.active_doc_mut().unwrap().insert_text("dirty");
@@ -1804,7 +1939,7 @@ mod tests {
         state.resolve_modal(ModalButton::Discard);
         assert!(!state.ws.folder_open);
         assert!(state.ws.tabs.is_empty());
-        assert!(state.session.folder.is_none());
+        assert!(state.session.project.is_none());
         assert!(state.session.tabs.is_empty());
     }
 

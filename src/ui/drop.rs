@@ -25,7 +25,7 @@ pub fn paint(state: &AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintConte
     ctx.stroke_rect(rect, 2.0, p.accent);
 
     let title = "Drop to open";
-    let hint = "files open in tabs · a folder becomes the workspace";
+    let hint = "files open in tabs · a folder becomes the project";
     let center = viewport.center();
     let title_width = kit::width(measurer, title, 18.0);
     kit::text(

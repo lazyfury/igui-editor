@@ -1446,9 +1446,23 @@ fn paint_welcome(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         actions.push(Action::QuickOpen);
         actions.push(Action::ProjectSearch);
     }
+    let recent_projects: Vec<Action> = state
+        .session
+        .recent_projects
+        .iter()
+        .filter(|path| path.is_dir())
+        .take(4)
+        .cloned()
+        .map(Action::OpenRecentProject)
+        .collect();
     let row_h = 28.0;
     let row_w = 380.0_f32.min((rect.width() - 48.0).max(220.0));
-    let total_h = 70.0 + actions.len() as f32 * (row_h + 6.0) + 36.0;
+    let recent_h = if recent_projects.is_empty() {
+        0.0
+    } else {
+        30.0 + recent_projects.len() as f32 * (row_h + 6.0)
+    };
+    let total_h = 70.0 + actions.len() as f32 * (row_h + 6.0) + recent_h + 36.0;
     let left = rect.center().x - row_w * 0.5;
     let top = (rect.center().y - total_h * 0.5).max(rect.top() + 24.0);
 
@@ -1465,7 +1479,7 @@ fn paint_welcome(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     let subtitle = if state.ws.folder_open {
         "no document open — pick a file in the sidebar"
     } else {
-        "no folder open"
+        "no project open"
     };
     kit::text_center(
         env.ctx,
@@ -1503,7 +1517,34 @@ fn paint_welcome(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         y += row_h + 6.0;
     }
 
-    let hint = "tip: drop files or a folder onto the window";
+    if !recent_projects.is_empty() {
+        y += 6.0;
+        kit::text(
+            env.ctx,
+            "RECENT PROJECTS",
+            left,
+            y + 13.0,
+            m.font_small,
+            p.faint,
+        );
+        y += 22.0;
+        for action in recent_projects {
+            let row = Rect::from_min_size(Vec2::new(left, y), Size::new(row_w, row_h));
+            env.ctx.stroke_rect(row, 1.0, p.border);
+            kit::text(
+                env.ctx,
+                &action.label(),
+                row.left() + 12.0,
+                kit::baseline(measurer, row, m.font_ui),
+                m.font_ui,
+                p.text,
+            );
+            state.editor.welcome_actions.push((action, row));
+            y += row_h + 6.0;
+        }
+    }
+
+    let hint = "tip: drop files or a project onto the window";
     let hint_width = kit::width(measurer, hint, m.font_small);
     kit::text(
         env.ctx,

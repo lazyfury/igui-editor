@@ -41,6 +41,35 @@ impl AppState {
         self.dirty = true;
     }
 
+    /// Drops repository snapshots and overlays tied to the previous project.
+    pub(crate) fn reset_git_project(&mut self) {
+        self.git.status = RepoStatus::default();
+        self.git.loading = false;
+        self.git.pending = false;
+        self.git.selected = None;
+        self.git.diff = None;
+        self.git.diff_loading = false;
+        self.git.diff_visible = false;
+        self.git.diff_scroll = 0.0;
+        self.git.rows.clear();
+        self.git.scroll = 0.0;
+        self.git.scroll_max = 0.0;
+        self.git.error = None;
+        self.git.mode = GitMode::Changes;
+        self.git.commits.clear();
+        self.git.history_loading = false;
+        self.git.history_rows.clear();
+        self.git.detail = None;
+        self.git.detail_visible = false;
+        self.git.detail_loading = false;
+        self.git.detail_scroll = 0.0;
+        self.git.hover = None;
+        self.git.commit_open = false;
+        self.git.commit_message.set_text("");
+        self.git.commit_error = None;
+        self.dirty = true;
+    }
+
     pub fn set_git_mode(&mut self, mode: GitMode) {
         if self.git.mode != mode {
             self.git.mode = mode;

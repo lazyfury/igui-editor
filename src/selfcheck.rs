@@ -9,7 +9,7 @@
 //! Covered: startup, typing, save, undo/redo, the File menu, find/replace,
 //! Save As, opening through a dialog, Markdown split preview, mode cycling, the
 //! dirty-close modal, sidebar opening + focus return, drag selection, wheel
-//! scrolling, theme switching, Open Folder and session restore.
+//! scrolling, theme switching, opening projects and session restore.
 //!
 //! No OS-level capture is used anywhere.
 
@@ -1181,7 +1181,7 @@ fn check(dir: &Path) -> Result<(), String> {
                 doc.path()
             ));
         }
-        if state.session.recent.first() != Some(&canonical_out) {
+        if state.session.recent_files.first() != Some(&canonical_out) {
             return Err("Save As did not update the recent list".into());
         }
     }
@@ -2651,7 +2651,7 @@ fn check(dir: &Path) -> Result<(), String> {
         return Err("⇧⌘L did not repaint with the light palette".into());
     }
 
-    // -- Open Folder through a dialog -----------------------------------
+    // -- Open Project through a dialog -----------------------------------
     harness.dialogs.push(Some(dir.join("src")));
     harness.shortcut(
         Key::Character('o'),
@@ -2663,7 +2663,7 @@ fn check(dir: &Path) -> Result<(), String> {
     );
     let frame = harness.frame()?;
     if !harness.dialogs.calls().contains(&Call::OpenFolder) {
-        return Err("⇧⌘O did not ask the dialog layer for a folder".into());
+        return Err("⇧⌘O did not ask the dialog layer for a project".into());
     }
     if harness
         .app
@@ -2674,11 +2674,11 @@ fn check(dir: &Path) -> Result<(), String> {
         .and_then(|name| name.to_str())
         != Some("src")
     {
-        return Err("Open Folder did not retarget the sidebar root".into());
+        return Err("Open Project did not retarget the sidebar root".into());
     }
     expect(&texts(&frame), "lib.rs", "sidebar now lists the new root")?;
 
-    // -- File > Close Folder clears tabs and the session folder ------------
+    // -- File > Close Project clears tabs and the session project ----------
     if cfg!(target_os = "macos") {
         harness.app.state_mut().run(Action::CloseFolder);
     } else {
@@ -2689,20 +2689,20 @@ fn check(dir: &Path) -> Result<(), String> {
             .iter()
             .find(|(menu, _)| *menu == Menu::File)
             .map(|(_, rect)| rect.center())
-            .ok_or("no File menu hit rect after opening a folder")?;
+            .ok_or("no File menu hit rect after opening a project")?;
         harness.click(file_item);
         harness.frame()?;
         let close_folder_item = {
             let state = harness.app.state();
             if !Action::CloseFolder.enabled(&state) {
-                return Err("Close Folder is disabled while a folder is open".into());
+                return Err("Close Project is disabled while a project is open".into());
             }
             let (_, items) = crate::ui::menu::popup_layout(&state, measurer.as_ref());
             items
                 .iter()
                 .find(|(action, _)| *action == Some(Action::CloseFolder))
                 .map(|(_, rect)| rect.center())
-                .ok_or("the File menu has no Close Folder item")?
+                .ok_or("the File menu has no Close Project item")?
         };
         harness.click(close_folder_item);
     }
@@ -2718,28 +2718,28 @@ fn check(dir: &Path) -> Result<(), String> {
     {
         let state = harness.app.state();
         if state.ws.folder_open || state.ws.folder().is_some() {
-            return Err("Close Folder left the workspace folder open".into());
+            return Err("Close Project left the project open".into());
         }
         if !state.ws.tabs.is_empty() || state.ws.active_doc().is_some() {
-            return Err("Close Folder must clear the open tabs".into());
+            return Err("Close Project must clear the open tabs".into());
         }
-        if state.session.folder.is_some() {
-            return Err("Close Folder did not clear the persisted session folder".into());
+        if state.session.project.is_some() {
+            return Err("Close Project did not clear the persisted session project".into());
         }
         if !state.session.tabs.is_empty() {
-            return Err("Close Folder did not clear the persisted tabs".into());
+            return Err("Close Project did not clear the persisted tabs".into());
         }
         if Action::CloseFolder.enabled(&state) {
-            return Err("Close Folder is still enabled with no folder".into());
+            return Err("Close Project is still enabled with no project".into());
         }
     }
     // Reopen it and put a file back for the session-restore assertion below.
-    harness.app.state_mut().set_root(dir.join("src"));
+    harness.app.state_mut().open_project(dir.join("src"));
     harness.frame()?;
     harness.app.state_mut().open_path(canonical_notes.clone());
     harness.frame()?;
     if !harness.app.state().ws.folder_open {
-        return Err("reopening the folder after Close Folder failed".into());
+        return Err("reopening the project after Close Project failed".into());
     }
 
     // -- session restore -------------------------------------------------
@@ -2794,7 +2794,7 @@ fn check(dir: &Path) -> Result<(), String> {
         }
         if state
             .session
-            .recent
+            .recent_files
             .iter()
             .all(|path| path != &canonical_out)
         {
@@ -2839,7 +2839,7 @@ fn check(dir: &Path) -> Result<(), String> {
             || state.ws.root.file_name().and_then(|name| name.to_str()) != Some("src")
         {
             return Err(format!(
-                "session restore lost the workspace folder ({:?})",
+                "session restore lost the workspace project ({:?})",
                 state.ws.root
             ));
         }
@@ -2889,7 +2889,7 @@ fn check(dir: &Path) -> Result<(), String> {
 
 /// Welcome/no-folder state, drag & drop, CLI folder and the recovery prompt.
 fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
-    // -- no folder, no document: welcome + empty sidebar -----------------
+    // -- no project, no document: welcome + empty sidebar ----------------
     let welcome_dir = dir.join("welcome");
     fs::create_dir_all(&welcome_dir).map_err(|error| format!("fixture: {error}"))?;
     let mut harness = Harness::new(
@@ -2900,22 +2900,22 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
     let frame = harness.frame()?;
     let painted = texts(&frame);
     expect(&painted, "igui-editor", "welcome title")?;
-    expect(&painted, "no folder open", "welcome subtitle")?;
-    expect(&painted, "Open Folder…", "welcome actions")?;
-    expect(&painted, "NO FOLDER OPEN", "sidebar empty state")?;
+    expect(&painted, "no project open", "welcome subtitle")?;
+    expect(&painted, "Open Project…", "welcome actions")?;
+    expect(&painted, "NO PROJECT OPEN", "sidebar empty state")?;
     expect(
         &painted,
-        "or drop files / folders here",
+        "or drop files or a project here",
         "sidebar drop hint",
     )?;
     {
         let state = harness.app.state();
         if state.ws.folder_open || !state.ws.tabs.is_empty() {
-            return Err("a folder-less startup must show the welcome state".into());
+            return Err("a project-less startup must show the welcome state".into());
         }
     }
 
-    // The theme toggle message must sit beside, not on top of, the folder hint.
+    // The theme toggle message must sit beside, not on top of, the project hint.
     let theme_hit = harness.app.state().theme_hit.center();
     harness.click(theme_hit);
     let frame = harness.frame()?;
@@ -2937,33 +2937,112 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
     harness.app.state_mut().drop_hover = false;
     harness.frame()?;
 
-    // Dropping a file opens a tab without opening a folder.
+    // Dropping a file opens a tab without opening a project.
     harness.app.drop_paths(vec![dir.join("notes.md")]);
     let frame = harness.frame()?;
     {
         let state = harness.app.state();
         if state.ws.folder_open {
-            return Err("dropping a file must not open a folder".into());
+            return Err("dropping a file must not open a project".into());
         }
         if state.ws.active_doc().map(|doc| doc.name()) != Some("notes.md") {
             return Err("dropping a file did not open it".into());
         }
+        if state
+            .session
+            .recent_projects
+            .iter()
+            .any(|path| path.ends_with("notes.md"))
+            || !state
+                .session
+                .recent_files
+                .iter()
+                .any(|path| path.ends_with("notes.md"))
+        {
+            return Err("a dropped file must be recorded as a recent file, not a project".into());
+        }
     }
     expect(&texts(&frame), "# Notes", "dropped file content")?;
 
-    // Dropping a folder opens it as the workspace.
+    // Dropping a folder opens it as the project.
     harness.app.drop_paths(vec![dir.join("src")]);
     let frame = harness.frame()?;
     {
         let state = harness.app.state();
         if !state.ws.folder_open {
-            return Err("dropping a folder did not open it".into());
+            return Err("dropping a folder did not open the project".into());
         }
         if state.ws.root.file_name().and_then(|name| name.to_str()) != Some("src") {
-            return Err(format!("dropped folder root is wrong: {:?}", state.ws.root));
+            return Err(format!(
+                "dropped project root is wrong: {:?}",
+                state.ws.root
+            ));
+        }
+        if !state
+            .session
+            .recent_projects
+            .iter()
+            .any(|path| path.ends_with("src"))
+        {
+            return Err("a dropped project must be recorded in recent projects".into());
         }
     }
-    expect(&texts(&frame), "lib.rs", "dropped folder sidebar")?;
+    expect(&texts(&frame), "lib.rs", "dropped project sidebar")?;
+
+    // Switching projects closes the old tabs and reinitializes project UI.
+    harness
+        .app
+        .state_mut()
+        .open_path(dir.join("src").join("lib.rs"));
+    harness.frame()?;
+    {
+        let mut state = harness.app.state_mut();
+        state
+            .terminal
+            .sessions
+            .push(crate::state::TerminalSession::default());
+        state.outline.hover = Some(3);
+        state.outline.scroll = 9.0;
+        state.problems.open = true;
+        state.dirty = true;
+    }
+    harness.app.state_mut().open_project(welcome_dir.clone());
+    let frame = harness.frame()?;
+    {
+        let state = harness.app.state();
+        if state.ws.root.file_name().and_then(|name| name.to_str()) != Some("welcome") {
+            return Err(format!(
+                "switching projects did not retarget the root: {:?}",
+                state.ws.root
+            ));
+        }
+        if !state.ws.tabs.is_empty() || state.ws.active_doc().is_some() {
+            return Err("switching projects must close the old tabs".into());
+        }
+        if !state.terminal.sessions.is_empty() {
+            return Err("switching projects must reset terminal sessions".into());
+        }
+        if state.outline.hover.is_some() || state.outline.scroll != 0.0 {
+            return Err("switching projects must reset the outline".into());
+        }
+        if state.problems.open {
+            return Err("switching projects must close the problems popup".into());
+        }
+        if !state
+            .session
+            .recent_projects
+            .iter()
+            .any(|path| path.ends_with("welcome"))
+        {
+            return Err("switching projects must update the recent-project list".into());
+        }
+    }
+    expect(
+        &texts(&frame),
+        "no document open",
+        "switched project welcome",
+    )?;
+    expect(&texts(&frame), "Project: src", "recent project on welcome")?;
     drop(harness);
 
     // -- CLI folder argument --------------------------------------------
@@ -2978,11 +3057,11 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
     {
         let state = harness.app.state();
         if !state.ws.folder_open || !state.ws.tabs.is_empty() {
-            return Err("a CLI folder must open the folder without a tab".into());
+            return Err("a CLI folder must open the project without a tab".into());
         }
     }
-    expect(&texts(&frame), "igui-editor", "CLI folder welcome")?;
-    expect(&texts(&frame), "lib.rs", "CLI folder sidebar")?;
+    expect(&texts(&frame), "igui-editor", "CLI project welcome")?;
+    expect(&texts(&frame), "lib.rs", "CLI project sidebar")?;
     drop(harness);
 
     // -- recovery prompt: restore ---------------------------------------

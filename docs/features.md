@@ -18,7 +18,7 @@ with author/date/subject, changed files and patch. Diff and commit details open
 as read-only tabs in the main editor (never persisted, never editable; the status
 bar shows `READ-ONLY`). Diff lines are colored (`+` accent, `-` error, hunk
 headers faint); change views append a full current-file preview after the diff. Refreshes happen on
-open/save/tab/folder changes, commit and via the panel button. Discard and
+open/save/tab/project changes, commit and via the panel button. Discard and
 network operations are intentionally not exposed.
 
 Git is a **built-in plugin** (`services/git.rs`) over a native worker
@@ -68,8 +68,8 @@ missing, a copy-only prompt names the tool and shows the install command
 **Roots and monorepos.** Workspace-level markers win over package markers, so
 `go.work`, `pnpm-workspace.yaml`, `Cargo.lock` and `rust-toolchain.toml` keep a
 repository on one server instead of one per package. Markers are searched above
-the open folder too, so opening a single file inside a monorepo still finds the
-workspace root. Servers without markers fall back to the open folder (or the
+the open project too, so opening a single file inside a monorepo still finds the
+workspace root. Servers without markers fall back to the open project (or the
 file's folder) only where the spec allows loose files.
 
 **Lifecycle.** One server runs per `(language, project root)`; up to four are
@@ -156,7 +156,7 @@ are still compile-time (no dylib ABI).
 
 ### Godot project
 
-Open a project folder (or any `.gd` file inside it); `.gd` tabs use the GDScript
+Open a project (or any `.gd` file inside it); `.gd` tabs use the GDScript
 syntax provider immediately, and opening one starts Godot's headless language
 server for the nearest `project.godot`. For example:
 
@@ -180,7 +180,7 @@ toggles. Hairlines separate the dock groups and the active panel gets an accent
 underline, so the current dock layout is readable without opening a menu.
 Clicking a button toggles that panel; clicking Explorer or Git while the left
 dock shows the other tab switches tabs instead of closing the dock. The open
-folder's name sits next to the toggles and the active file label sits to its
+project name sits next to the toggles and the active file label sits to its
 left; both truncate from the left when space runs out. The generic toggles
 remain in the View menu, and every panel is bindable through `keymaps.json`
 (`view.explorer`, `view.git`, `view.outline`, `view.terminal`).
@@ -279,9 +279,9 @@ contents do not, and sessions are not restored after a restart.
   `mdown`, `mkd`) with Editor role and `Alternate` rank. Finder double-click,
   `open -a`, “Open With” and cold launch all feed the same native request queue.
 - **Dock Recent**: right-click the Dock icon for `New File…`, an `Open Recent`
-  submenu built from the last 8 session paths, and `Clear Menu`. Missing files
-  are hidden/disabled; opening/saving also notes the file in the system Recent
-  Items via `NSDocumentController`.
+  submenu built from recent projects first and then recent files, and
+  `Clear Menu`. Missing paths are hidden; opening/saving also notes the item in
+  the system Recent Items via `NSDocumentController`.
 - **Quit guard**: `⌘Q` with dirty tabs returns `NSTerminateLater` and shows the
   in-app **Discard & Quit / Cancel** confirmation; a clean app quits directly.
   Closing the window is close-to-hide (`windowShouldClose:` on winit's window
@@ -407,22 +407,33 @@ clickable.
 | > 32 MB | opening refused with a status-bar error |
 | preview > 512 KB | first 512 KB rendered + "truncated" banner |
 
-## Workspace, welcome and drag & drop
+## Projects, welcome and drag & drop
 
-- **No folder open** (first launch, **File → Close Folder**, or after closing
-  the folder's tabs): the editor shows a welcome panel with actions (Open File / Open Folder / New
-  Buffer / Quick Open / Search when a folder is open), and the sidebar shows
-  `NO FOLDER OPEN` with the same actions plus a drop hint. Opening a file works
-  without a folder; Quick Open and project search ask for one first.
-- **Open Folder…** (`⇧⌘O`) or dropping a folder sets the sidebar root and
-  persists it in the session. **File → Close Folder** clears the folder, all
-  open tabs and the persisted root (asking first if a tab is dirty). Dropping files
-  opens them in tabs; dropping both opens the folder first, then the files.
-  While a drag hovers the window, a themed “Drop to open” overlay covers the
-  viewport.
-- Closing the last tab returns to the welcome state (no hidden untitled buffer).
-- Status bar without a document shows `no document` plus the folder name (or
-  `no folder open`).
+- **No project open** (first launch or **File → Close Project**): the editor
+  shows a welcome panel with Open File / Open Project / New Buffer, plus Quick
+  Open and Search when a project is open. It also lists the last few **recent
+  projects**. The sidebar shows `NO PROJECT OPEN` with the same actions and a
+  drop hint.
+- **Open Project…** (`⇧⌘O`) or dropping a folder opens the project root in the
+  sidebar, records it in **recent projects**, and persists it in the session.
+  **File → Close Project** clears the project root, every tab, the terminal and
+  the project-scoped Git/LSP/outline state (dirty tabs ask first).
+- **Switching projects** (opening another project, or dropping another folder)
+  closes the old project. The terminal is re-created in the new root when its
+  panel was open, LSP sessions restart, and the outline, problems popup and Git
+  snapshot are reset. Dirty tabs open the **Switch project** confirmation.
+- **Dropping files** opens them in tabs without opening a project, and records
+  each one in the separate **recent files** list. Dropping a project and files
+  together opens the project first, then the files. While a drag hovers the
+  window, a themed “Drop to open” overlay covers the viewport.
+- The File menu lists **recent projects** and **recent files** separately;
+  **Clear Recent** empties both. Project mode bumps the session format to 14:
+  pre-v14 mixed `recent.*` entries are dropped and the two lists are rebuilt.
+- Opening a file works without a project; Quick Open and project search ask for
+  one first. Closing the last tab returns to the welcome state while the project
+  stays open.
+- Status bar without a document shows `no document` plus the project name (or
+  `no project open`).
 
 ## Quick Open (`⌘P`)
 
@@ -432,7 +443,7 @@ Indexing skips `.git`, `target`, `node_modules`, `dist`, `build`, `.venv`,
 hidden entries; capped at 20k files. `↑↓` select, `Enter` opens, `Esc` closes,
 typing filters live; the panel shows file count and match preview.
 
-## Search in Folder (`⇧⌘F`)
+## Search in Project (`⇧⌘F`)
 
 Background literal search (case/whole-word toggles) over the workspace, reusing
 the Quick Open ignore rules. Skips binary files and files over 1 MB; caps at
@@ -488,13 +499,13 @@ remembered per document and the last ratio is persisted.
   original name/path and are marked dirty so the first save writes them back.
 - **Window state**: size, position and the maximized flag are persisted and
   restored (fullscreen is not persisted).
-- Session format is version 13 (`trust_local_servers` stores the local-server
-  trust switch; v12 added `window.max`, v10 added the current-tab/window
-  geometry set, v9 `outline_width`, v8 `outline`, v7 `keymap`, v6
-  `terminal_open`, `terminal_height`, v5 `sidebar_tab`, v4 `soft_wrap`); older
-  files still load
-  (v1 infers the folder from the first tab, and sessions without `active` fall
-  back to the last opened tab).
+- Session format is version 14 (separate `recent_project.*` / `recent_file.*`
+  lists; v13 added `trust_local_servers`, v12 added `window.max`, v10 added the
+  current-tab/window geometry set, v9 `outline_width`, v8 `outline`, v7
+  `keymap`, v6 `terminal_open`, `terminal_height`, v5 `sidebar_tab`, v4
+  `soft_wrap`); older files still load, and pre-v14 mixed `recent.*` entries are
+  discarded. v1 infers the project from the first tab, and sessions without
+  `active` fall back to the last opened tab.
 
 ## Theme: "geek", compact, no corners
 

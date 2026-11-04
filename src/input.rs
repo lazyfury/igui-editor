@@ -137,6 +137,7 @@ pub fn modal_key(state: &mut AppState, key: Key) -> EventResult {
             let confirm = match state.modal {
                 Some(Modal::ReplaceInFiles { .. }) => ModalButton::Apply,
                 Some(Modal::CloseFolder { .. }) => ModalButton::Discard,
+                Some(Modal::SwitchProject { .. }) => ModalButton::Discard,
                 Some(Modal::CloseTabs { .. }) => ModalButton::Discard,
                 Some(Modal::ExternalChange { .. }) => ModalButton::Reload,
                 Some(Modal::Quit { .. }) => ModalButton::Cancel,

@@ -64,8 +64,8 @@ Start here; load only the document you need.
 
 ```bash
 cargo run --release                          # restore the last session, else welcome
-cargo run --release -- src/app.rs            # open a file (its directory becomes the folder)
-cargo run --release -- src                    # open a folder
+cargo run --release -- src/app.rs            # open a file (its directory becomes the project)
+cargo run --release -- src                    # open a project
 cargo run --release -- --light README.md      # light palette
 cargo run --release -- /path/to/godot_project # open a Godot project
 ```

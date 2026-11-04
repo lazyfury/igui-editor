@@ -112,7 +112,7 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
         ctx,
         layout.query,
         SearchFocus::Query,
-        "Search in folder…",
+        "Search in project…",
     );
     paint_field(
         state,
@@ -218,7 +218,7 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
 
     if count == 0 {
         let message = if state.search.query.text().trim().is_empty() {
-            "type to search the folder"
+            "type to search the project"
         } else if state.search_busy() {
             "searching…"
         } else {

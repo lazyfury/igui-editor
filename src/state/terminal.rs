@@ -127,7 +127,11 @@ impl AppState {
                 .unwrap_or_else(|| PathBuf::from("."));
             match self.spawn_terminal_session(cwd) {
                 Ok(index) => self.terminal.active = index,
-                Err(_) => self.terminal.open = false,
+                Err(_) => {
+                    self.terminal.open = false;
+                    self.terminal.focused = false;
+                    self.session.terminal_open = false;
+                }
             }
         }
     }

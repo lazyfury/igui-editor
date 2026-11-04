@@ -297,7 +297,8 @@ impl AppState {
             }
             Action::ToggleTerminal => self.toggle_terminal(),
             Action::SetLanguage(name) => self.set_language(name),
-            Action::OpenRecent(path) => self.open_path(path),
+            Action::OpenRecentProject(path) => self.open_project(path),
+            Action::OpenRecentFile(path) => self.open_path(path),
             Action::ClearRecent => self.clear_recent(),
             Action::NextTab => {
                 let len = self.ws.tabs.len();

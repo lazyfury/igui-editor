@@ -106,6 +106,7 @@ impl EditorApp {
         } else {
             Mode::Light
         });
+        let cli_file = open.as_ref().filter(|path| path.is_file()).cloned();
         let workspace = workspace_for(open, &session);
         // A lazily bound wake handle: the PTY is restored below, before the
         // window exists, and must still be able to ask for frames later.
@@ -144,12 +145,18 @@ impl EditorApp {
             }
             state.status(format!("{} language pack(s) skipped", errors.len()));
         }
-        // Keep the session's folder in sync with what actually opened (CLI
-        // folder/file, a restored folder, or none).
-        let folder = state.ws.folder().map(Path::to_path_buf);
-        if state.session.folder != folder {
-            state.session.folder = folder;
+        // Keep the session's project in sync with what actually opened (CLI
+        // folder, a restored project, or none).
+        let project = state.ws.folder().map(Path::to_path_buf);
+        if state.session.project != project {
+            state.session.project = project;
             state.config_dirty = true;
+        }
+        if let Some(project) = state.ws.folder() {
+            state.session.push_recent_project(project);
+        }
+        if let Some(file) = cli_file {
+            state.session.push_recent_file(&file);
         }
         let recovered = state.recovery.list();
         if !recovered.is_empty() {
@@ -290,9 +297,26 @@ impl EditorApp {
         self.pump_native_requests();
         // Keep native Dock Recent / quit state in step with the session. Both
         // are Objective-C calls; only touch them when the value changed.
-        let recent_changed = self.state.borrow().session.recent != self.recent;
+        let recent_changed = {
+            let state = self.state.borrow();
+            let projects = &state.session.recent_projects;
+            let files = &state.session.recent_files;
+            let project_count = projects.len().min(crate::state::MAX_RECENT);
+            let file_count = files
+                .len()
+                .min(crate::state::MAX_RECENT.saturating_sub(project_count));
+            self.recent.len() != project_count + file_count
+                || self.recent[..project_count] != projects[..project_count]
+                || self.recent[project_count..] != files[..file_count]
+        };
         if recent_changed {
-            let recent = self.state.borrow().session.recent.clone();
+            let recent = {
+                let state = self.state.borrow();
+                let mut recent = state.session.recent_projects.clone();
+                recent.extend(state.session.recent_files.iter().cloned());
+                recent.truncate(crate::state::MAX_RECENT);
+                recent
+            };
             crate::macos::set_recent(&recent);
             self.recent = recent;
         }
@@ -1287,7 +1311,7 @@ impl EditorApp {
         let mut state = self.state.borrow_mut();
         match pending.kind {
             DialogKind::Open => state.open_path(path),
-            DialogKind::OpenFolder => state.set_root(path),
+            DialogKind::OpenFolder => state.open_project(path),
             DialogKind::SaveAs => {
                 // Keep the suggested name's extension when the picker returns
                 // a bare name and the suggestion has one.
@@ -1581,11 +1605,10 @@ impl EditorApp {
 
 /// Session-aware startup.
 ///
-/// - An explicit CLI **folder** opens it as the workspace (no tab).
-/// - An explicit CLI **file** opens it, with its directory as the workspace.
-/// - Otherwise the stored folder is restored (v1 sessions infer it from the
-///   first tab), then the stored tabs are reopened.
-/// - With neither, the app starts in the welcome state: no folder, no buffer.
+/// - An explicit CLI **folder** opens it as the project (no tab).
+/// - An explicit CLI **file** opens with its directory as the project.
+/// - Otherwise the stored project is restored, then the stored tabs reopen.
+/// - With neither, the app starts in the welcome state: no project, no buffer.
 fn workspace_for(open: Option<PathBuf>, session: &Session) -> Workspace {
     if let Some(path) = open {
         if path.is_dir() {
@@ -1597,12 +1620,12 @@ fn workspace_for(open: Option<PathBuf>, session: &Session) -> Workspace {
         });
     }
     let mut workspace = Workspace::detached();
-    let folder = session
-        .folder
+    let project = session
+        .project
         .clone()
         .filter(|path| path.is_dir())
         .or_else(|| {
-            // v1 sessions have no `folder` key: keep the old behaviour.
+            // v1 sessions have no project key: keep the old behaviour.
             if session.version < 2 {
                 session
                     .tabs
@@ -1613,8 +1636,8 @@ fn workspace_for(open: Option<PathBuf>, session: &Session) -> Workspace {
                 None
             }
         });
-    if let Some(folder) = folder {
-        let _ = workspace.set_folder(folder);
+    if let Some(project) = project {
+        let _ = workspace.set_folder(project);
     }
     for path in &session.tabs {
         if path.is_file() {
@@ -1881,7 +1904,7 @@ mod tests {
             })
             .collect();
         let session = Session {
-            folder: Some(std::fs::canonicalize(&dir).unwrap()),
+            project: Some(std::fs::canonicalize(&dir).unwrap()),
             tabs: paths.clone(),
             active_tab: Some(paths[1].clone()),
             ..Session::default()

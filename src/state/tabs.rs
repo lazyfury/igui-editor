@@ -177,7 +177,7 @@ impl AppState {
             return;
         };
         if !self.ws.folder_open || !path.starts_with(&self.ws.root) {
-            self.error("file is outside the open folder");
+            self.error("file is outside the open project");
             return;
         }
         let Some(parent) = path.parent() else {

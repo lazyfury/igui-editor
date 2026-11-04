@@ -2,7 +2,7 @@
 
 | Key | Action |
 |---|---|
-| `⌘O` / `⇧⌘O` | open file / open folder (sidebar root) |
+| `⌘O` / `⇧⌘O` | open file / open project (sidebar root) |
 | `⌘S` / `⇧⌘S` | save / save as |
 | `⌘N` | new buffer (untitled) |
 | `⇧⌘N` | new file on disk (quick prompt) |

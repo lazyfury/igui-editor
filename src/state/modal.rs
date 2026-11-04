@@ -60,8 +60,21 @@ impl AppState {
         }
         if let Modal::CloseFolder { .. } = modal {
             self.modal = None;
+            self.pending_project = None;
             if button == ModalButton::Discard {
                 self.close_folder_now();
+            }
+            self.dirty = true;
+            return;
+        }
+        if let Modal::SwitchProject { .. } = modal {
+            self.modal = None;
+            if button == ModalButton::Discard {
+                if let Some(path) = self.pending_project.take() {
+                    self.switch_project(path);
+                }
+            } else {
+                self.pending_project = None;
             }
             self.dirty = true;
             return;

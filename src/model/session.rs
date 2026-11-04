@@ -22,7 +22,7 @@ const MAX_RECENT: usize = 8;
 /// Persisted application state. Missing/corrupt files fall back to defaults.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Session {
-    /// Format version (currently `13`); unknown keys are ignored so
+    /// Format version (currently `14`); unknown keys are ignored so
     /// older/newer files keep loading.
     pub version: u32,
     /// `"dark"` or `"light"`.
@@ -31,9 +31,12 @@ pub struct Session {
     pub outline: bool,
     /// Right outline panel width.
     pub outline_width: f32,
-    /// The open workspace folder (`None` = no folder open).
-    pub folder: Option<PathBuf>,
-    pub recent: Vec<PathBuf>,
+    /// The open project root (`None` = no project open).
+    pub project: Option<PathBuf>,
+    /// Recently opened projects (directories).
+    pub recent_projects: Vec<PathBuf>,
+    /// Recently opened files, including files dropped onto the window.
+    pub recent_files: Vec<PathBuf>,
     pub tabs: Vec<PathBuf>,
     /// Path of the tab that was active when the session was saved.
     ///
@@ -85,13 +88,14 @@ pub struct WindowGeometry {
 impl Default for Session {
     fn default() -> Self {
         Self {
-            version: 13,
+            version: 14,
             theme: "dark".into(),
             sidebar: true,
             outline: true,
             outline_width: 224.0,
-            folder: None,
-            recent: Vec::new(),
+            project: None,
+            recent_projects: Vec::new(),
+            recent_files: Vec::new(),
             tabs: Vec::new(),
             active_tab: None,
             font: 13.0,
@@ -133,7 +137,8 @@ impl Session {
             version: 1,
             ..Self::default()
         };
-        let mut recent: BTreeMap<usize, PathBuf> = BTreeMap::new();
+        let mut recent_projects: BTreeMap<usize, PathBuf> = BTreeMap::new();
+        let mut recent_files: BTreeMap<usize, PathBuf> = BTreeMap::new();
         let mut tabs: BTreeMap<usize, PathBuf> = BTreeMap::new();
         let mut window: [Option<f32>; 4] = [None; 4];
         let mut languages: BTreeMap<usize, (Option<PathBuf>, Option<String>)> = BTreeMap::new();
@@ -153,7 +158,7 @@ impl Session {
                 "outline_width" => {
                     session.outline_width = value.parse().unwrap_or(session.outline_width)
                 }
-                "folder" => session.folder = Some(PathBuf::from(value)),
+                "project" | "folder" => session.project = Some(PathBuf::from(value)),
                 "active" => session.active_tab = Some(PathBuf::from(value)),
                 "font" => session.font = value.parse().unwrap_or(session.font),
                 "tab" => session.tab = value.parse().unwrap_or(session.tab),
@@ -196,11 +201,19 @@ impl Session {
                 "window.y" => window[3] = value.parse().ok(),
                 "window.max" => session.window_maximized = value == "1",
                 "version" => session.version = value.parse().unwrap_or(session.version),
-                key if key.starts_with("recent.") => {
-                    if let Ok(index) = key["recent.".len()..].parse::<usize>() {
-                        recent.insert(index, PathBuf::from(value));
+                key if key.starts_with("recent_project.") => {
+                    if let Ok(index) = key["recent_project.".len()..].parse::<usize>() {
+                        recent_projects.insert(index, PathBuf::from(value));
                     }
                 }
+                key if key.starts_with("recent_file.") => {
+                    if let Ok(index) = key["recent_file.".len()..].parse::<usize>() {
+                        recent_files.insert(index, PathBuf::from(value));
+                    }
+                }
+                // Pre-project sessions mixed projects and files in `recent.*`.
+                // Drop those entries and rebuild both lists for v14.
+                key if key.starts_with("recent.") => {}
                 key if key.starts_with("tabs.") => {
                     if let Ok(index) = key["tabs.".len()..].parse::<usize>() {
                         tabs.insert(index, PathBuf::from(value));
@@ -221,7 +234,10 @@ impl Session {
             .into_values()
             .filter_map(|(path, name)| Some((path?, name?)))
             .collect();
-        session.recent = recent.into_values().take(MAX_RECENT).collect();
+        if session.version >= 14 {
+            session.recent_projects = recent_projects.into_values().take(MAX_RECENT).collect();
+            session.recent_files = recent_files.into_values().take(MAX_RECENT).collect();
+        }
         session.tabs = tabs.into_values().take(MAX_RECENT).collect();
         session
     }
@@ -229,13 +245,13 @@ impl Session {
     pub fn render(&self) -> String {
         let mut out = String::new();
         // Always write the current format; parsing older files still works.
-        out.push_str("version=13\n");
+        out.push_str("version=14\n");
         out.push_str(&format!("theme={}\n", self.theme));
         out.push_str(&format!("sidebar={}\n", u8::from(self.sidebar)));
         out.push_str(&format!("outline={}\n", u8::from(self.outline)));
         out.push_str(&format!("outline_width={}\n", self.outline_width));
-        if let Some(folder) = &self.folder {
-            out.push_str(&format!("folder={}\n", escape(&folder.to_string_lossy())));
+        if let Some(project) = &self.project {
+            out.push_str(&format!("project={}\n", escape(&project.to_string_lossy())));
         }
         if let Some(active) = &self.active_tab {
             out.push_str(&format!("active={}\n", escape(&active.to_string_lossy())));
@@ -273,9 +289,15 @@ impl Session {
             out.push_str(&format!("window.y={}\n", window.position.1));
         }
         out.push_str(&format!("window.max={}\n", u8::from(self.window_maximized)));
-        for (index, path) in self.recent.iter().take(MAX_RECENT).enumerate() {
+        for (index, path) in self.recent_projects.iter().take(MAX_RECENT).enumerate() {
             out.push_str(&format!(
-                "recent.{index}={}\n",
+                "recent_project.{index}={}\n",
+                escape(&path.to_string_lossy())
+            ));
+        }
+        for (index, path) in self.recent_files.iter().take(MAX_RECENT).enumerate() {
+            out.push_str(&format!(
+                "recent_file.{index}={}\n",
                 escape(&path.to_string_lossy())
             ));
         }
@@ -293,11 +315,24 @@ impl Session {
         fsutil::atomic_write(path, self.render().as_bytes(), None)
     }
 
-    /// Moves `path` to the front of the recent list (deduplicated, capped).
-    pub fn push_recent(&mut self, path: &Path) {
-        self.recent.retain(|candidate| candidate != path);
-        self.recent.insert(0, path.to_path_buf());
-        self.recent.truncate(MAX_RECENT);
+    /// Moves a project root to the front of the recent-project list.
+    pub fn push_recent_project(&mut self, path: &Path) {
+        self.recent_projects.retain(|candidate| candidate != path);
+        self.recent_projects.insert(0, path.to_path_buf());
+        self.recent_projects.truncate(MAX_RECENT);
+    }
+
+    /// Moves a file to the front of the recent-file list.
+    pub fn push_recent_file(&mut self, path: &Path) {
+        self.recent_files.retain(|candidate| candidate != path);
+        self.recent_files.insert(0, path.to_path_buf());
+        self.recent_files.truncate(MAX_RECENT);
+    }
+
+    /// Clears both recent lists.
+    pub fn clear_recents(&mut self) {
+        self.recent_projects.clear();
+        self.recent_files.clear();
     }
 
     /// Replaces the restored-tab list.
@@ -399,8 +434,9 @@ mod tests {
         let session = Session {
             theme: "light".into(),
             sidebar: false,
-            folder: Some(PathBuf::from("/tmp/project")),
-            recent: vec![PathBuf::from("/tmp/a=b.rs"), PathBuf::from("/tmp/c d.md")],
+            project: Some(PathBuf::from("/tmp/project")),
+            recent_projects: vec![PathBuf::from("/tmp/project")],
+            recent_files: vec![PathBuf::from("/tmp/a=b.rs"), PathBuf::from("/tmp/c d.md")],
             tabs: vec![PathBuf::from("/tmp/a=b.rs")],
             active_tab: Some(PathBuf::from("/tmp/a=b.rs")),
             font: 15.0,
@@ -440,7 +476,8 @@ mod tests {
         let session = Session::load(&temp_path("missing"));
         assert_eq!(session.theme, "dark");
         assert!(session.sidebar);
-        assert!(session.recent.is_empty());
+        assert!(session.recent_projects.is_empty());
+        assert!(session.recent_files.is_empty());
     }
 
     #[test]
@@ -448,12 +485,12 @@ mod tests {
         let path = temp_path("escape");
         let weird = PathBuf::from("/tmp/back\\slash and space");
         let session = Session {
-            recent: vec![weird.clone()],
+            recent_files: vec![weird.clone()],
             ..Session::default()
         };
         session.save(&path).unwrap();
         let loaded = Session::load(&path);
-        assert_eq!(loaded.recent, vec![weird]);
+        assert_eq!(loaded.recent_files, vec![weird]);
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
@@ -497,16 +534,16 @@ mod tests {
     fn recent_is_deduplicated_and_capped() {
         let mut session = Session::default();
         for index in 0..12 {
-            session.push_recent(Path::new(&format!("/tmp/file-{index}")));
+            session.push_recent_file(Path::new(&format!("/tmp/file-{index}")));
         }
-        session.push_recent(Path::new("/tmp/file-11"));
-        assert_eq!(session.recent.len(), MAX_RECENT);
-        assert_eq!(session.recent[0], PathBuf::from("/tmp/file-11"));
+        session.push_recent_file(Path::new("/tmp/file-11"));
+        assert_eq!(session.recent_files.len(), MAX_RECENT);
+        assert_eq!(session.recent_files[0], PathBuf::from("/tmp/file-11"));
         let unique = session
-            .recent
+            .recent_files
             .iter()
             .collect::<std::collections::HashSet<_>>();
-        assert_eq!(unique.len(), session.recent.len());
+        assert_eq!(unique.len(), session.recent_files.len());
     }
 
     #[test]
@@ -514,6 +551,7 @@ mod tests {
         let session = Session::parse("theme=neon\nsidebar=1\nrecent.nope=/x\nno equals\n");
         assert_eq!(session.theme, "dark");
         assert!(session.sidebar);
-        assert!(session.recent.is_empty());
+        assert!(session.recent_projects.is_empty());
+        assert!(session.recent_files.is_empty());
     }
 }

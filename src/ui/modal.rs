@@ -24,8 +24,10 @@ pub const CLOSE_BUTTONS: [ModalButton; 3] =
 pub const REPLACE_BUTTONS: [ModalButton; 2] = [ModalButton::Cancel, ModalButton::Apply];
 /// Buttons for closing several tabs (no per-tab Save).
 pub const CLOSE_TABS_BUTTONS: [ModalButton; 2] = [ModalButton::Cancel, ModalButton::Discard];
-/// Buttons for closing a folder and its tabs.
+/// Buttons for closing a project and its tabs.
 pub const CLOSE_FOLDER_BUTTONS: [ModalButton; 2] = [ModalButton::Cancel, ModalButton::Discard];
+/// Buttons for switching projects after discarding dirty tabs.
+pub const SWITCH_PROJECT_BUTTONS: [ModalButton; 2] = [ModalButton::Cancel, ModalButton::Discard];
 /// Buttons for an external-change prompt.
 pub const EXTERNAL_BUTTONS: [ModalButton; 2] = [ModalButton::Cancel, ModalButton::Reload];
 /// Buttons for the macOS quit prompt.
@@ -36,6 +38,7 @@ fn buttons_for(modal: Modal) -> &'static [ModalButton] {
         Modal::CloseDirtyTab { .. } => &CLOSE_BUTTONS,
         Modal::CloseTabs { .. } => &CLOSE_TABS_BUTTONS,
         Modal::CloseFolder { .. } => &CLOSE_FOLDER_BUTTONS,
+        Modal::SwitchProject { .. } => &SWITCH_PROJECT_BUTTONS,
         Modal::ExternalChange { .. } => &EXTERNAL_BUTTONS,
         Modal::Quit { .. } => &QUIT_BUTTONS,
         Modal::ReplaceInFiles { .. } => &REPLACE_BUTTONS,
@@ -108,12 +111,27 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
             )
         }
         Modal::CloseFolder { dirty } => (
-            "Close folder".to_string(),
+            "Close project".to_string(),
             format!(
-                "Close the folder and {dirty} unsaved tab{}? Unsaved changes will be lost.",
+                "Close the project and {dirty} unsaved tab{}? Unsaved changes will be lost.",
                 if dirty == 1 { "" } else { "s" }
             ),
         ),
+        Modal::SwitchProject { dirty } => {
+            let name = state
+                .pending_project
+                .as_ref()
+                .and_then(|path| path.file_name())
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "another project".into());
+            (
+                "Switch project".to_string(),
+                format!(
+                    "Switch to {name} and close {dirty} unsaved tab{}? Unsaved changes will be lost.",
+                    if dirty == 1 { "" } else { "s" }
+                ),
+            )
+        }
         Modal::Quit { dirty } => (
             "Unsaved changes".to_string(),
             format!(
@@ -189,6 +207,9 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
             ModalButton::Cancel if matches!(modal, Modal::ExternalChange { .. }) => "Keep",
             ModalButton::Discard if matches!(modal, Modal::Quit { .. }) => "Discard & Quit",
             ModalButton::Discard if matches!(modal, Modal::CloseFolder { .. }) => "Discard & Close",
+            ModalButton::Discard if matches!(modal, Modal::SwitchProject { .. }) => {
+                "Discard & Switch"
+            }
             ModalButton::Cancel => "Cancel",
             ModalButton::Discard => "Discard",
             ModalButton::Save => "Save",

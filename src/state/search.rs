@@ -10,7 +10,7 @@ impl AppState {
             return;
         }
         if !self.ws.folder_open {
-            self.error("open a folder first (⇧⌘O)");
+            self.error("open a project first (⇧⌘O)");
             return;
         }
         self.settings_open = false;

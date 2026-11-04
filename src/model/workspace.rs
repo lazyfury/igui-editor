@@ -14,7 +14,7 @@ pub const MAX_OPEN_BYTES: u64 = 32 * 1024 * 1024;
 
 #[derive(Debug)]
 pub struct Workspace {
-    /// Folder shown in the sidebar; `None` means "no folder open" (files can
+    /// Project root shown in the sidebar; `None` means no project (files can
     /// still be opened as standalone tabs).
     pub root: PathBuf,
     /// Whether `root` is an open folder (drives the sidebar and project tools).
@@ -43,8 +43,8 @@ impl Workspace {
         }
     }
 
-    /// A workspace with **no folder open** (welcome state). Files can still be
-    /// opened; the sidebar shows "no folder" until one is chosen.
+    /// A workspace with **no project open** (welcome state). Files can still be
+    /// opened; the sidebar shows "no project" until one is chosen.
     pub fn detached() -> Self {
         Self {
             root: home_dir(),
@@ -73,6 +73,12 @@ impl Workspace {
     /// The open folder, if any.
     pub fn folder(&self) -> Option<&Path> {
         self.folder_open.then_some(self.root.as_path())
+    }
+
+    /// Drops every open tab without touching the project root.
+    pub fn clear_tabs(&mut self) {
+        self.tabs.clear();
+        self.active = 0;
     }
 
     /// Closes the sidebar folder and its open tabs. Returns whether a folder

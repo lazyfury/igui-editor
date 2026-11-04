@@ -84,7 +84,8 @@ Keep the existing `Action` as the first command set, then split it into stable
 command ids:
 
 ```text
-file.save, file.saveAs, file.open, file.openFolder, file.closeTab
+file.save, file.saveAs, file.open, file.openProject (alias file.openFolder),
+file.closeProject (alias file.closeFolder), file.closeTab
 edit.undo, edit.redo, edit.cut, edit.copy, edit.paste, edit.selectAll
 edit.cutLine, edit.copyLine, edit.deleteLine, edit.duplicateLine
 edit.moveLineUp, edit.moveLineDown, edit.toggleComment

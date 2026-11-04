@@ -1233,6 +1233,13 @@ impl LspController {
         self.stop_all();
     }
 
+    /// Drops every project-scoped server and result while keeping language
+    /// intelligence enabled for the next project.
+    pub fn reset_project(&mut self) {
+        self.stop_all();
+        self.changed = true;
+    }
+
     fn stop_all(&mut self) {
         self.sessions.clear();
         self.active = None;

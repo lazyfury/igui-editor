@@ -6,7 +6,7 @@ impl AppState {
     /// Opens the quick-open palette (folder required).
     pub fn open_quick_open(&mut self) {
         if !self.ws.folder_open {
-            self.error("open a folder first (⇧⌘O)");
+            self.error("open a project first (⇧⌘O)");
             return;
         }
         if self.quick_open.open {
@@ -48,7 +48,7 @@ impl AppState {
             return;
         };
         let query = self.quick_open.query.text().to_string();
-        let recent = &self.session.recent;
+        let recent = &self.session.recent_files;
         self.quick_open.results = index
             .query(&query, |path| recent.iter().any(|entry| entry == path))
             .into_iter()

@@ -199,13 +199,13 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         return;
     }
 
-    // Empty state: no folder open yet (welcome screen in the editor).
+    // Empty state: no project open yet (welcome screen in the editor).
     if !state.ws.folder_open {
         state.sidebar.actions.clear();
         let left = rect.left() + 12.0;
         kit::text(
             env.ctx,
-            "NO FOLDER OPEN",
+            "NO PROJECT OPEN",
             left,
             header.bottom() + 22.0,
             m.font_small,
@@ -213,7 +213,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         );
         let mut y = header.bottom() + 44.0;
         for (action, label) in [
-            (crate::state::Action::OpenFolder, "Open Folder…"),
+            (crate::state::Action::OpenFolder, "Open Project…"),
             (crate::state::Action::Open, "Open File…"),
             (crate::state::Action::New, "New Buffer"),
         ] {
@@ -244,7 +244,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         }
         let hint = kit::truncate(
             measurer,
-            "or drop files / folders here",
+            "or drop files or a project here",
             m.font_small,
             rect.width() - 24.0,
         );

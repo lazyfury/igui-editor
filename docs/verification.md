@@ -43,7 +43,7 @@ file**, then asserts:
    and wheel scrolling work,
 10. the footer `DARK`/`LIGHT` chip and `⇧⌘L` both repaint with the other
     palette, `⇧⌘O` retargets the sidebar root, and a fresh app restores the
-    theme, the open tabs and current tab, the recent list and every editor
+    theme, the open tabs and current tab, the recent projects/files lists and every editor
     setting from the session file,
 11. an idle app with a terminal panel open requests **no** further frames
     (`needs_frame` is false; async workers are given a bounded settle window),
@@ -58,7 +58,8 @@ overflow scrolling, and settings restored from the session.
 M5 checks: a temporary JSON language pack highlights a `.lua` fixture; the
 footer language type (bottom-right) opens a popup above the status bar, and
 lua → rust → Auto changes token colors and the footer label; overrides survive a
-session restore; File → Close Folder clears the tabs and the persisted folder;
+session restore; File → Close Project clears the tabs, terminal and persisted
+project; switching projects resets terminal/LSP/outline and closes the old tabs;
 replace-in-files (cancel is a no-op, apply rewrites a non-open file, an
 open tab is skipped); and scroll sync moves the preview from the editor and the
 editor back from the preview (including the disable toggle).
@@ -83,12 +84,12 @@ M6 checks: tab drag-reorder and the right-click Close menu, soft-wrap layout
 (long-line split, wrapped click / Up / Down, `⌥Z`), clean/dirty external reload
 with the Keep/Reload modal, and the session soft-wrap setting persisted.
 
-M4 checks: welcome/no-folder state and empty sidebar, drop overlay, dropping a
-file vs a folder, CLI folder argument, Quick Open (filter → open), project
+M4 checks: welcome/no-project state and empty sidebar, drop overlay, dropping a
+file vs a project, CLI folder argument, Quick Open (filter → open), project
 search (debounced worker → result → jump selects the match), split-divider drag
 + double-click reset + persisted ratio, autosave write, recovery snapshot
 creation/removal, the startup restore/discard prompt, window geometry
-persistence, and folder/split/window restored from the session.
+persistence, and project/split/window restored from the session.
 
 Unit tests additionally cover the frame wake path: PTY output invokes the wake
 callback, `FrameClock` fires once per deadline, and `AppState::next_wake` picks
