@@ -35,8 +35,9 @@ impl PanelGroup {
 }
 
 impl Panel {
-    /// Header order: left dock, right dock, bottom dock.
-    pub const ALL: [Panel; 4] = [Panel::Explorer, Panel::Git, Panel::Outline, Panel::Terminal];
+    /// Header order: the Git tab, then the left, right and bottom dock
+    /// toggles.
+    pub const ALL: [Panel; 4] = [Panel::Git, Panel::Explorer, Panel::Outline, Panel::Terminal];
 
     pub const fn group(self) -> PanelGroup {
         match self {
@@ -140,6 +141,14 @@ mod tests {
             Session::default(),
             std::env::temp_dir().join("igui-editor-panel-test.conf"),
         )
+    }
+
+    #[test]
+    fn git_comes_first_then_the_dock_toggles() {
+        assert_eq!(
+            Panel::ALL,
+            [Panel::Git, Panel::Explorer, Panel::Outline, Panel::Terminal]
+        );
     }
 
     #[test]

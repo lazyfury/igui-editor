@@ -292,7 +292,36 @@ fn paint_bar(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         .first()
         .map(|(_, button)| button.left() - 12.0)
         .unwrap_or(rect.right() - PANEL_INSET);
-    let max_label = (right - rect.left() - 16.0)
+
+    // The open folder's name sits next to the dock toggles; the active file
+    // label sits to its left. Both truncate from the left so the tail (the
+    // project folder, the file name) stays readable.
+    let mut label_right = right;
+    if state.ws.folder_open {
+        let project = state
+            .ws
+            .root
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| state.ws.root.display().to_string());
+        let max_project = (rect.width() * 0.30).max(0.0);
+        let project = kit::truncate_left(measurer, &project, m.font_small, max_project);
+        let width = kit::width(measurer, &project, m.font_small);
+        if width > 0.0 && label_right - width > rect.left() + 16.0 {
+            kit::text_right(
+                env.ctx,
+                measurer,
+                &project,
+                label_right,
+                baseline,
+                m.font_small,
+                p.dim,
+            );
+            label_right -= width + 14.0;
+        }
+    }
+
+    let max_label = (label_right - rect.left() - 16.0)
         .min(rect.width() * 0.5)
         .max(0.0);
     let label = match state.ws.active_doc() {
@@ -312,7 +341,7 @@ fn paint_bar(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             env.ctx,
             measurer,
             &label,
-            right,
+            label_right,
             baseline,
             m.font_small,
             p.faint,

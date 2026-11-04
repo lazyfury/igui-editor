@@ -186,25 +186,6 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         state.sidebar.tabs.push((tab.id, hit));
         tab_x += width;
     }
-    if state.sidebar_tab == "explorer" && state.ws.folder_open {
-        let root_name = state
-            .ws
-            .root
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| state.ws.root.display().to_string());
-        let available = (rect.right() - 10.0 - tab_x).max(0.0);
-        let root_name = kit::truncate_left(measurer, &root_name, m.font_small, available);
-        kit::text_right(
-            env.ctx,
-            measurer,
-            &root_name,
-            rect.right() - 10.0,
-            baseline,
-            m.font_small,
-            p.dim,
-        );
-    }
     kit::hline(
         env.ctx,
         rect.left(),

@@ -305,34 +305,10 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         );
     }
 
-    let cwd = state
-        .terminal
-        .active()
-        .map(|session| session.cwd.display().to_string())
-        .unwrap_or_default();
-    let cwd_right = if state.terminal.close_hit != Rect::ZERO {
-        state.terminal.close_hit.left() - 8.0
-    } else {
-        rect.right() - 10.0
-    };
     if state.terminal.close_hit != Rect::ZERO {
         let c = state.terminal.close_hit.center();
         kit::text(env.ctx, "×", c.x - 4.0, c.y + 5.0, m.font_ui, p.dim);
     }
-    kit::text_right(
-        env.ctx,
-        env.measurer,
-        &kit::truncate_left(
-            env.measurer,
-            &cwd,
-            m.font_small,
-            (cwd_right - right_limit).max(0.0) + 80.0,
-        ),
-        cwd_right,
-        rect.top() + 18.0,
-        m.font_small,
-        p.faint,
-    );
 
     let body = Rect::from_min_size(
         Vec2::new(rect.left() + 8.0, rect.top() + HEADER),

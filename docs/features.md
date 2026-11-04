@@ -174,16 +174,16 @@ token colors.
 
 ## Header panel groups
 
-The right side of the header is a compact row of icon buttons, grouped by the
-edge each panel is docked to: **left** (Explorer, Git), **right** (Outline) and
-**bottom** (Terminal). Hairlines separate the groups and the active panel gets
-an accent underline, so the current dock layout is readable without opening a
-menu. Clicking a button toggles that panel; clicking Explorer or Git while the
-left dock shows the other tab switches tabs instead of closing the dock. The
-active file label sits to their left and truncates from the left when space runs
-out. The generic toggles remain in the View menu, and every panel is
-bindable through `keymaps.json` (`view.explorer`, `view.git`, `view.outline`,
-`view.terminal`).
+The right side of the header is a compact row of icon buttons: **Git**, then
+the **left** (Explorer), **right** (Outline) and **bottom** (Terminal) dock
+toggles. Hairlines separate the dock groups and the active panel gets an accent
+underline, so the current dock layout is readable without opening a menu.
+Clicking a button toggles that panel; clicking Explorer or Git while the left
+dock shows the other tab switches tabs instead of closing the dock. The open
+folder's name sits next to the toggles and the active file label sits to its
+left; both truncate from the left when space runs out. The generic toggles
+remain in the View menu, and every panel is bindable through `keymaps.json`
+(`view.explorer`, `view.git`, `view.outline`, `view.terminal`).
 
 Icons are Lucide SVGs vendored under `assets/icons/lucide` (ISC). They are
 compiled in, parsed once by the engine's `igui_svg` renderer and stroked by

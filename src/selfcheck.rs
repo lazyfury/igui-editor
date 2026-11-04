@@ -179,6 +179,44 @@ fn check_header_panels(harness: &mut Harness, frame: &RecordedFrame) -> Result<(
             buttons.len()
         ));
     }
+    for (index, (panel, _)) in buttons.iter().enumerate() {
+        if *panel != Panel::ALL[index] {
+            return Err(format!(
+                "header panel {:?} painted out of order (expected {:?})",
+                panel,
+                Panel::ALL[index]
+            ));
+        }
+    }
+    let project = {
+        let state = harness.app.state();
+        state.ws.folder_open.then(|| {
+            state
+                .ws
+                .root
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| state.ws.root.display().to_string())
+        })
+    };
+    if let Some(project) = project {
+        let mut painted = false;
+        for command in frame.commands() {
+            if let DrawCommand::DrawText { text, position, .. } = command {
+                if *text == project {
+                    if position.y > menubar_h + 1.0 {
+                        return Err(format!(
+                            "the project folder name is painted outside the header at {position:?}"
+                        ));
+                    }
+                    painted = true;
+                }
+            }
+        }
+        if !painted {
+            return Err("the header did not paint the project folder name".into());
+        }
+    }
     for (panel, rect) in &buttons {
         if rect.height() < 20.0 || rect.left() < 0.0 || rect.right() > viewport_right + 0.5 {
             return Err(format!(
@@ -3591,6 +3629,30 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
     let faint = crate::theme::Theme::new(Mode::Dark).p.faint.to_rgba8();
     if !draw_text_has_color(&frame, "TERMINAL", accent) {
         return Err("focused terminal header was not accented".into());
+    }
+    // The app header owns the project name; the terminal header must not paint
+    // the session cwd over the session tabs.
+    {
+        let state = harness.app.state();
+        let header = state.terminal.header_rect;
+        let folder = state.ws.root.display().to_string();
+        let name = state
+            .ws
+            .root
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        for command in frame.commands() {
+            if let DrawCommand::DrawText { text, position, .. } = command {
+                if header.contains(*position)
+                    && (text.contains(&folder) || (!name.is_empty() && text.contains(&name)))
+                {
+                    return Err(format!(
+                        "terminal header repeats the project folder name: {text:?}"
+                    ));
+                }
+            }
+        }
     }
     // The parser grid is the source of truth, and every cell is painted on a
     // fixed column grid (mixing per-glyph advances with the vt100 columns was

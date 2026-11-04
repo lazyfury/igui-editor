@@ -286,9 +286,11 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    `ui::icon` only caches the parsed documents and paints them in the active
    palette color, so icons stay crisp at any DPI. `state::panels` is the single table
    for toggleable panels: dock group, icon, label, command and open state. The
-   header's right side lays those panels out as grouped buttons from one
-   function and records the hit rectangles during paint; the same table also
-   drives the sidebar tabs' icons and the Outline/Terminal headers.
+   header's right side lays those panels out with Git first, then the left,
+   right and bottom dock toggles, with the open folder's name beside them and
+   the active file label to its left; one function computes the geometry and
+   records the hit rectangles during paint. The same table also drives the
+   sidebar tabs' icons and the Outline/Terminal headers.
 
 ## Theme spec (geek / compact / no corners)
 
