@@ -104,6 +104,26 @@ Acceptance:
 - Docs match the implemented session version and feature state.
 - No stale “next candidate” item that is already implemented.
 
+## Follow-up task log
+
+### Task 1: incremental line index (done)
+
+- [x] Track only the affected line starts after an edit, undo or redo instead of
+      rebuilding the whole index from the text.
+- [x] Keep insertion-at-line-start, newline deletion, merge and split cases
+      covered by tests.
+- [x] Compare against a full rebuild in a unit test helper.
+- [x] Benchmark before/after (same fixture): typing `1.41 ms/frame` →
+      `1.04 ms/frame` (single run, noisy; Markdown parse/layout/paint were
+      unchanged).
+- [x] `scripts/check.sh` passes with 234 unit tests + 2 doc tests.
+
+Acceptance:
+
+- `line_starts` matches a full rebuild after typing, newline insertion,
+  backspace, undo and redo.
+- The editor/self-check pipeline remains green.
+
 ## Deferred to the next feature slice
 
 These are intentionally not part of this plan's implementation phases:
@@ -126,6 +146,7 @@ These are intentionally not part of this plan's implementation phases:
 | Session 1 | 4 terminal focus | done | Terminal paste/copy/clipboard routes are focus-aware. |
 | Session 1 | 5 UI/URL | done | Sidebar row cache, URL scheme allowlist, Windows non-shell opener. |
 | Session 1 | 6 docs | done | Docs updated; final `scripts/check.sh` passed with 232 unit tests + 2 doc tests. |
+| Session 2 | Follow-up 1 | done | Incremental line index; 234 unit tests; typing bench 1.41 → 1.04 ms/frame. |
 
 ## Final acceptance checklist
 

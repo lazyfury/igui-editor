@@ -1062,11 +1062,11 @@ impl Document {
         let first_line = self.line_of(edit.start);
         let end = edit.start + edit.inserted.len();
         self.text.replace_range(edit.start..end, &edit.removed);
+        self.update_line_starts(edit.start, edit.inserted.len(), &edit.removed);
         let last_line = self.line_of((edit.start + edit.removed.len()).min(self.text.len()));
         self.edit_span = Some((first_line, last_line));
         self.caret = edit.before.caret.min(self.text.len());
         self.anchor = edit.before.anchor.min(self.text.len());
-        self.rebuild_lines();
         self.dirty = self.saved_cursor != Some(self.undo.cursor);
         self.rev += 1;
         true
@@ -1080,11 +1080,11 @@ impl Document {
         let first_line = self.line_of(edit.start);
         let end = edit.start + edit.removed.len();
         self.text.replace_range(edit.start..end, &edit.inserted);
+        self.update_line_starts(edit.start, edit.removed.len(), &edit.inserted);
         let last_line = self.line_of((edit.start + edit.inserted.len()).min(self.text.len()));
         self.edit_span = Some((first_line, last_line));
         self.caret = edit.after.caret.min(self.text.len());
         self.anchor = edit.after.anchor.min(self.text.len());
-        self.rebuild_lines();
         self.undo.cursor += 1;
         self.dirty = self.saved_cursor != Some(self.undo.cursor);
         self.rev += 1;
@@ -1229,13 +1229,14 @@ impl Document {
             anchor: self.anchor,
         };
         let first_line = self.line_of(start);
+        let removed_len = end - start;
         self.text.replace_range(start..end, insert);
+        self.update_line_starts(start, removed_len, insert);
         let after_end = start + insert.len();
         let last_line = self.line_of(after_end.min(self.text.len()));
         self.edit_span = Some((first_line, last_line));
         self.caret = floor_boundary(&self.text, after.caret);
         self.anchor = floor_boundary(&self.text, after.anchor);
-        self.rebuild_lines();
         self.rev += 1;
         // A new edit truncates the redo history at `undo.cursor`; if the save
         // point lived in that truncated branch it can no longer be reached.
@@ -1257,6 +1258,42 @@ impl Document {
             },
         });
         self.dirty = true;
+    }
+
+    /// Updates the line-start index after replacing `removed_len` bytes at
+    /// `start` with `insert`. This is the incremental counterpart to
+    /// [`Document::rebuild_lines`] used by every edit/undo/redo.
+    fn update_line_starts(&mut self, start: usize, removed_len: usize, insert: &str) {
+        let end = start + removed_len;
+        let delta = insert.len() as isize - removed_len as isize;
+        let prefix_end = self
+            .line_starts
+            .partition_point(|&line_start| line_start <= start);
+        // An insertion at `start` keeps the line that already begins there.
+        // A replacement removes old starts inside `(start, end]`, including a
+        // line that begins exactly at `end`, because the replacement may merge
+        // it with the preceding text.
+        let suffix_start = if removed_len == 0 {
+            prefix_end
+        } else {
+            self.line_starts
+                .partition_point(|&line_start| line_start <= end)
+        };
+
+        let new_starts = insert.bytes().filter(|byte| *byte == b'\n').count();
+        let mut starts = Vec::with_capacity(
+            prefix_end + new_starts + self.line_starts.len().saturating_sub(suffix_start),
+        );
+        starts.extend_from_slice(&self.line_starts[..prefix_end]);
+        for (index, byte) in insert.bytes().enumerate() {
+            if byte == b'\n' {
+                starts.push(start + index + 1);
+            }
+        }
+        for &line_start in &self.line_starts[suffix_start..] {
+            starts.push((line_start as isize + delta) as usize);
+        }
+        self.line_starts = starts;
     }
 
     fn rebuild_lines(&mut self) {
@@ -1719,6 +1756,57 @@ mod tests {
             "discarding the saved branch must not make the old base clean"
         );
         let _ = std::fs::remove_file(path);
+    }
+
+    fn assert_line_index(doc: &Document) {
+        let mut expected = vec![0];
+        for (index, byte) in doc.text().bytes().enumerate() {
+            if byte == b'\n' {
+                expected.push(index + 1);
+            }
+        }
+        assert_eq!(doc.line_starts, expected);
+    }
+
+    #[test]
+    fn incremental_line_index_matches_a_full_rebuild() {
+        let mut doc = doc("one\ntwo\nthree\n");
+        assert_line_index(&doc);
+
+        doc.set_caret(doc.byte_at(1, 1));
+        doc.insert_text("X");
+        assert_eq!(doc.line(1), "tXwo");
+        assert_line_index(&doc);
+
+        doc.insert_text("\nnew");
+        assert_eq!(doc.line_count(), 5);
+        assert_eq!(doc.line(1), "tX");
+        assert_eq!(doc.line(2), "newwo");
+        assert_line_index(&doc);
+
+        doc.set_caret(doc.byte_at(0, 3));
+        doc.insert_text("\n");
+        assert_line_index(&doc);
+
+        doc.set_caret(doc.byte_at(2, 0));
+        doc.backspace();
+        assert_line_index(&doc);
+
+        doc.undo();
+        doc.undo();
+        doc.redo();
+        assert_line_index(&doc);
+    }
+
+    #[test]
+    fn line_index_handles_insertion_at_a_line_start() {
+        let mut doc = doc("a\nb");
+        let line_start = doc.line_start(1);
+        doc.set_caret(line_start);
+        doc.insert_text("x");
+        assert_eq!(doc.text(), "a\nxb");
+        assert_eq!(doc.line_count(), 2);
+        assert_line_index(&doc);
     }
 
     #[test]
