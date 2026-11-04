@@ -202,7 +202,7 @@ pub fn build(open: Option<PathBuf>, mode: Option<Mode>) -> App {
     builder.logic(logic).build()
 }
 
-/// Runs the editor until the window closes.
+/// Runs the editor until the app exits.
 pub fn run(open: Option<PathBuf>, mode: Option<Mode>) {
     build(open, mode).run();
 }

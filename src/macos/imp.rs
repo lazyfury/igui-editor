@@ -19,7 +19,7 @@ use objc2::runtime::{AnyClass, AnyObject, Bool, Imp, NSObject, NSObjectProtocol,
 use objc2::{define_class, msg_send, sel, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSApplicationTerminateReply, NSDocumentController, NSEventModifierFlags, NSMenu,
-    NSMenuItem, NSScreen, NSWindow,
+    NSMenuItem, NSScreen,
 };
 use objc2_foundation::{
     ns_string, NSAppleEventDescriptor, NSAppleEventManager, NSArray, NSRect, NSString, NSURL,
@@ -52,9 +52,6 @@ thread_local! {
     static SET_DELEGATE_IMP: Cell<Option<Imp>> = const { Cell::new(None) };
     static WINDOW_CLOSE_IMP: Cell<Option<Imp>> = const { Cell::new(None) };
     static WINDOW_CLOSE_HOOKED: Cell<bool> = const { Cell::new(false) };
-    /// The AppKit window, retained by AppKit for the process lifetime. A raw
-    /// pointer avoids a thread-local destructor at process exit.
-    static MAIN_WINDOW: Cell<Option<*mut AnyObject>> = const { Cell::new(None) };
     static MENU_TARGET: RefCell<Option<ManuallyDrop<Retained<AppMenuTarget>>>> = const { RefCell::new(None) };
     static MAIN_MENU: RefCell<Option<ManuallyDrop<Retained<NSMenu>>>> = const { RefCell::new(None) };
     /// Cursor offset from the window frame origin while a custom header drag is
@@ -195,38 +192,24 @@ pub fn install_dock() {
     };
     let class = AnyObject::class(delegate.as_ref());
     add_delegate_methods(class);
-    remember_window(&app);
     install_window_close_guard(&app);
-}
-
-fn remember_window(app: &NSApplication) {
-    if let Some(window) = app.keyWindow() {
-        MAIN_WINDOW.with(|slot| slot.set(Some(Retained::as_ptr(&window) as *mut AnyObject)));
-    }
-}
-
-fn main_window() -> Option<&'static NSWindow> {
-    MAIN_WINDOW
-        .with(Cell::get)
-        .map(|pointer| unsafe { &*(pointer as *const NSWindow) })
 }
 
 /// Close-to-hide: the window disappears but the app (and its buffers, LSP and
 /// PTYs) stays alive. Dock activation brings it back.
+///
+/// Target the stored winit window rather than `NSApp.keyWindow`: at startup the
+/// app may not be active yet, so there is no key window to remember or hide.
 pub fn hide_window() {
-    if let Some(window) = main_window() {
-        window.orderOut(None);
-    }
+    with_window(|window| window.set_visible(false));
 }
 
 pub fn show_window() {
-    if let Some(window) = main_window() {
-        window.makeKeyAndOrderFront(None);
-        if let Some(mtm) = MainThreadMarker::new() {
-            NSApplication::sharedApplication(mtm).activate();
-        }
-        wake();
+    with_window(|window| window.set_visible(true));
+    if let Some(mtm) = MainThreadMarker::new() {
+        NSApplication::sharedApplication(mtm).activate();
     }
+    wake();
 }
 
 unsafe extern "C-unwind" fn reopen_imp(
