@@ -104,15 +104,14 @@ Files: `src/state/quick_open.rs`, `src/model/workspace_index.rs`,
 `src/state/search.rs` as the worker pattern, `src/state/watch.rs` for
 invalidation.
 
-Step A (small, land first):
-
-- `open_quick_open` reuses `self.quick_open.index` when it is `Some`; only build
-  when missing. The poll already sets `index = None` on structural changes.
-- Use `entry.file_type()` instead of `entry.metadata()` in the walk (avoids one
-  stat per file).
-- Add an index test with a temp tree (ignored dirs, hidden entries, depth cap).
-
-Step B (perceived responsiveness):
+- [x] **Step A — landed.** `open_quick_open` reuses `self.quick_open.index`
+  when it belongs to the current root; only a missing or foreign index is
+  rebuilt. The poll still sets `index = None` on structural changes. The walk
+  uses `entry.file_type()` for the normal dir/file decision (no stat per entry)
+  and keeps the `entry.metadata()` fallback for symlinks. State tests cover
+  reuse, a missing index and a changed root; the walk tests still cover ignored
+  and hidden entries.
+- [ ] **Step B — pending (perceived responsiveness).**
 
 - Build the index on a worker (mirror `model/search.rs`: `mpsc`, generation or
   `AtomicBool`, cancel on project switch). Paint the palette immediately with an
@@ -329,7 +328,7 @@ the palette; selfcheck covers open/filter/run/escape.
 | Session 4 | 0.3 Index/archive | done | `improvement-log.md` added; plan rewritten for Session 4. |
 | Session 4 | 0.1–0.2 Docs truth | pending | |
 | Session 4 | 1.1 Tab restore | done | Tabs no longer capped by `MAX_RECENT` (parse/render/`set_tabs`); recents stay at 8. 2 new session tests, gate green: 358 unit + 2 doc tests, selfcheck. |
-| Session 4 | 1.2 Quick Open | pending | Step A before Step B. |
+| Session 4 | 1.2 Quick Open | in progress | Step A done: the palette reuses the index for the same root; the walk uses `file_type()` with a symlink `metadata()` fallback. Step B (background worker) pending. Gate green: 362 unit + 2 doc tests, selfcheck. |
 | Session 4 | 1.3 Autosave | pending | |
 | Session 4 | 2.1 Command table | pending | Keystone for 3.6. |
 | Session 4 | 2.2 `pub(crate)` | pending | |

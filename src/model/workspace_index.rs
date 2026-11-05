@@ -63,15 +63,26 @@ impl FileIndex {
                 if name.starts_with('.') {
                     continue;
                 }
-                let Ok(metadata) = entry.metadata() else {
+                let Ok(file_type) = entry.file_type() else {
                     continue;
                 };
-                if metadata.is_dir() {
+                // `file_type` answers the normal dir/file question without a
+                // stat per entry. Symlinks keep the previous `metadata()`
+                // fallback so their handling does not change.
+                let (is_dir, is_file) = if file_type.is_symlink() {
+                    match entry.metadata() {
+                        Ok(metadata) => (metadata.is_dir(), metadata.is_file()),
+                        Err(_) => continue,
+                    }
+                } else {
+                    (file_type.is_dir(), file_type.is_file())
+                };
+                if is_dir {
                     if IGNORED_DIRS.contains(&name.as_str()) {
                         continue;
                     }
                     stack.push((entry.path(), depth + 1));
-                } else if metadata.is_file() {
+                } else if is_file {
                     files.push(entry.path());
                     if files.len() >= MAX_FILES {
                         break;
@@ -177,6 +188,33 @@ mod tests {
         assert!(!names.iter().any(|name| name.starts_with("target")));
         assert!(!names.iter().any(|name| name.contains(".git")));
         assert!(!names.iter().any(|name| name.contains(".hidden")));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_entries_keep_the_previous_walk_behavior() {
+        use std::os::unix::fs::symlink;
+
+        let dir = fixture("symlink");
+        symlink(dir.join("src"), dir.join("linked-src")).unwrap();
+        symlink(dir.join("README.md"), dir.join("linked-readme.md")).unwrap();
+        let index = FileIndex::build(&dir);
+        let names: Vec<String> = index
+            .files
+            .iter()
+            .map(|path| {
+                path.strip_prefix(&dir)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        assert!(names.contains(&"README.md".to_string()));
+        assert!(names.contains(&"src/main.rs".to_string()));
+        // `DirEntry::metadata` does not follow links, so symlinks stay skipped
+        // exactly as they were before the `file_type()` fast path.
+        assert!(!names.iter().any(|name| name.starts_with("linked-")));
         let _ = fs::remove_dir_all(dir);
     }
 
