@@ -76,7 +76,7 @@ terminal split panes; terminal profiles; further Git write operations.
 - Shipped binary 4.8 MB → 4.41 MB (6 MB budget).
 - `scripts/check.sh`: 379 unit + 2 doc tests, `--selfcheck` green; release gate
   green.
-- 8 commits, one logical change each.
+- 11 commits, one logical change each.
 
 Deferred on purpose (recorded so they are not lost):
 
