@@ -199,6 +199,7 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
                     }
                     true
                 }
+                Key::Escape => doc.collapse_extra(),
                 Key::Space => {
                     doc.insert_text(" ");
                     true
@@ -261,12 +262,20 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
             // committed IME text is inserted verbatim, so a CJK commit can never
             // grow a pair.
             let mut chars = text.chars();
-            let decision = match (chars.next(), chars.next()) {
+            let typed = match (chars.next(), chars.next()) {
                 (Some(ch), None) => Some(ch),
                 _ => None,
-            }
-            .filter(|_| state.settings.auto_pairs)
-            .map(|ch| (ch, state.typed_insert(ch)));
+            };
+            // Pairing is a single-selection behaviour: while several occurrence
+            // selections are active the character is inserted at every site
+            // instead, so every keystroke keeps editing all of them.
+            let multi = state
+                .ws
+                .active_doc()
+                .is_some_and(|doc| !doc.extra_selections().is_empty());
+            let decision = typed
+                .filter(|_| state.settings.auto_pairs && !multi)
+                .map(|ch| (ch, state.typed_insert(ch)));
             if let Some(doc) = state.ws.active_doc_mut() {
                 if !doc.is_read_only() {
                     match decision {
@@ -640,7 +649,19 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     let sb = m.scrollbar;
     let show_gutter = state.settings.line_numbers;
 
-    let (gutter_w, line_count, scroll_x, scroll_y, caret, selection, preedit, doc_id, rev, len) = {
+    let (
+        gutter_w,
+        line_count,
+        scroll_x,
+        scroll_y,
+        caret,
+        selection,
+        extra,
+        preedit,
+        doc_id,
+        rev,
+        len,
+    ) = {
         let doc = state.ws.active_doc().expect("checked above");
         (
             if show_gutter {
@@ -653,6 +674,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             doc.scroll_y,
             doc.caret(),
             doc.selection(),
+            doc.extra_selections().to_vec(),
             state.editor.preedit.clone(),
             doc.id(),
             doc.rev(),
@@ -958,48 +980,52 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         env.ctx.restore();
     }
 
-    // Selection rectangles, per visual row.
-    if let Some((sel_start, sel_end)) = selection {
+    // Selection rectangles, per visual row: the primary selection and every
+    // secondary occurrence selection added with ⌘D.
+    if selection.is_some() || !extra.is_empty() {
         env.ctx.save();
         env.ctx.clip_rect(text_rect);
         let doc = state.ws.active_doc().expect("checked above");
-        for vis in &vis {
-            let line_text = doc.line(vis.line);
-            let line_start = doc.line_start(vis.line);
-            let line_end = doc.line_end(vis.line);
-            let row_start_byte = line_start + vis.start_byte;
-            let row_end_byte = line_start + vis.end_byte;
-            let from = sel_start.max(row_start_byte);
-            let to = sel_end.min(row_end_byte);
-            let covers_newline =
-                vis.end_byte >= line_text.len() && sel_end > line_end && sel_start <= line_end;
-            if from > to || (from == to && !covers_newline) {
-                continue;
-            }
-            let row_start_x = x_in_line(measurer, line_text, vis.start_byte, font, tab, family);
-            let row_end_x = x_in_line(measurer, line_text, vis.end_byte, font, tab, family);
-            let x0 = if sel_start <= row_start_byte {
-                0.0
-            } else {
-                x_in_line(measurer, line_text, from - line_start, font, tab, family) - row_start_x
-            };
-            let x1 = if sel_end >= row_end_byte {
-                if covers_newline {
-                    text_rect.width()
-                } else {
-                    row_end_x - row_start_x
+        for (sel_start, sel_end) in selection.into_iter().chain(extra.iter().copied()) {
+            for vis in &vis {
+                let line_text = doc.line(vis.line);
+                let line_start = doc.line_start(vis.line);
+                let line_end = doc.line_end(vis.line);
+                let row_start_byte = line_start + vis.start_byte;
+                let row_end_byte = line_start + vis.end_byte;
+                let from = sel_start.max(row_start_byte);
+                let to = sel_end.min(row_end_byte);
+                let covers_newline =
+                    vis.end_byte >= line_text.len() && sel_end > line_end && sel_start <= line_end;
+                if from > to || (from == to && !covers_newline) {
+                    continue;
                 }
-            } else {
-                x_in_line(measurer, line_text, to - line_start, font, tab, family) - row_start_x
-            };
-            let y = row_y(vis.row);
-            env.ctx.fill_rect(
-                Rect::from_min_size(
-                    Vec2::new(text_rect.left() + pad + x0 - scroll_x, y),
-                    Size::new((x1 - x0).max(1.0), line_h),
-                ),
-                p.selection,
-            );
+                let row_start_x = x_in_line(measurer, line_text, vis.start_byte, font, tab, family);
+                let row_end_x = x_in_line(measurer, line_text, vis.end_byte, font, tab, family);
+                let x0 = if sel_start <= row_start_byte {
+                    0.0
+                } else {
+                    x_in_line(measurer, line_text, from - line_start, font, tab, family)
+                        - row_start_x
+                };
+                let x1 = if sel_end >= row_end_byte {
+                    if covers_newline {
+                        text_rect.width()
+                    } else {
+                        row_end_x - row_start_x
+                    }
+                } else {
+                    x_in_line(measurer, line_text, to - line_start, font, tab, family) - row_start_x
+                };
+                let y = row_y(vis.row);
+                env.ctx.fill_rect(
+                    Rect::from_min_size(
+                        Vec2::new(text_rect.left() + pad + x0 - scroll_x, y),
+                        Size::new((x1 - x0).max(1.0), line_h),
+                    ),
+                    p.selection,
+                );
+            }
         }
         env.ctx.restore();
     }
@@ -1344,53 +1370,63 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         env.ctx.restore();
     }
 
-    // Caret.
+    // Caret: the primary one, plus a thinner bar for every empty secondary
+    // selection a multiple edit left behind, so the other sites stay visible.
     {
-        let doc = state.ws.active_doc().expect("checked above");
-        let line = doc.line_of(caret);
-        let row = if wrap_on {
-            state
-                .editor
-                .wrap
-                .row_of(line, caret_col)
-                .unwrap_or(caret_row)
-        } else {
-            line
-        };
-        let row_start_x = if wrap_on {
-            state.editor.wrap.row(row).map_or(0.0, |row| {
-                x_in_line(
+        let focused = state.focus == Focus::Editor;
+        let mut bars: Vec<Rect> = Vec::with_capacity(1 + extra.len());
+        {
+            let doc = state.ws.active_doc().expect("checked above");
+            let caret_bar = |byte: usize| -> Rect {
+                let line = doc.line_of(byte);
+                let column = doc.text()[doc.line_start(line)..byte].chars().count();
+                let row = if wrap_on {
+                    state.editor.wrap.row_of(line, column).unwrap_or(caret_row)
+                } else {
+                    line
+                };
+                let row_start_x = if wrap_on {
+                    state.editor.wrap.row(row).map_or(0.0, |row| {
+                        x_in_line(
+                            measurer,
+                            doc.line(row.line),
+                            row.start_byte,
+                            font,
+                            tab,
+                            family,
+                        )
+                    })
+                } else {
+                    0.0
+                };
+                let x = x_in_line(
                     measurer,
-                    doc.line(row.line),
-                    row.start_byte,
+                    doc.line(line),
+                    byte - doc.line_start(line),
                     font,
                     tab,
                     family,
+                ) - row_start_x;
+                Rect::from_min_size(
+                    Vec2::new(text_rect.left() + pad + x - scroll_x, row_y(row)),
+                    Size::new(if focused { 2.0 } else { 1.0 }, line_h),
                 )
-            })
-        } else {
-            0.0
-        };
-        let x = x_in_line(
-            measurer,
-            doc.line(line),
-            caret - doc.line_start(line),
-            font,
-            tab,
-            family,
-        ) - row_start_x;
-        let y = row_y(row);
-        let focused = state.focus == Focus::Editor;
-        let caret_rect = Rect::from_min_size(
-            Vec2::new(text_rect.left() + pad + x - scroll_x, y),
-            Size::new(if focused { 2.0 } else { 1.0 }, line_h),
-        );
-        state.editor.caret_rect = caret_rect;
+            };
+            bars.push(caret_bar(caret));
+            for &(start, _) in extra.iter().filter(|(start, end)| start == end) {
+                let mut bar = caret_bar(start);
+                bar.size.width = 1.0;
+                bars.push(bar);
+            }
+        }
         env.ctx.save();
         env.ctx.clip_rect(text_rect);
-        env.ctx
-            .fill_rect(caret_rect, if focused { p.accent } else { p.faint });
+        for bar in &bars {
+            env.ctx
+                .fill_rect(*bar, if focused { p.accent } else { p.faint });
+        }
         env.ctx.restore();
+        state.editor.caret_rect = bars.first().copied().unwrap_or(Rect::ZERO);
     }
 
     // Matched bracket underlines.

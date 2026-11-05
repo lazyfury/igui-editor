@@ -89,6 +89,35 @@ fn eq_ignore_case(a: &str, b: &str, case_sensitive: bool) -> bool {
     }
 }
 
+/// Start of the first whole-word, case-sensitive occurrence of `needle` at or
+/// after `from`.
+///
+/// Used by Select Next Occurrence: it stops at the first hit so a repeated press
+/// stays cheap on a large document, and it never wraps (unlike Find, the search
+/// has a visible end). Overlapping hits are skipped, not returned.
+pub fn next_occurrence(text: &str, needle: &str, from: usize) -> Option<usize> {
+    if needle.is_empty() {
+        return None;
+    }
+    let mut index = from.min(text.len());
+    while index > 0 && !text.is_char_boundary(index) {
+        index -= 1;
+    }
+    while let Some(offset) = text[index..].find(needle) {
+        let start = index + offset;
+        let end = start + needle.len();
+        let before = text[..start].chars().next_back();
+        let after = text[end..].chars().next();
+        if !before.is_some_and(is_word_char) && !after.is_some_and(is_word_char) {
+            return Some(start);
+        }
+        // Step one *character* past the hit so overlapping occurrences of the
+        // same word are still considered, and the loop always advances.
+        index = start + needle.chars().next().map_or(1, char::len_utf8);
+    }
+    None
+}
+
 fn is_word_char(ch: char) -> bool {
     ch.is_alphanumeric() || ch == '_'
 }
@@ -135,6 +164,29 @@ mod tests {
             whole_word: true,
         };
         assert_eq!(find_all(text, &matcher), vec![(0, 3), (21, 24)]);
+    }
+
+    #[test]
+    fn next_occurrence_advances_whole_words_only() {
+        let text = "one two one one\n_one one_";
+        assert_eq!(next_occurrence(text, "one", 0), Some(0));
+        assert_eq!(next_occurrence(text, "one", 3), Some(8));
+        assert_eq!(next_occurrence(text, "one", 11), Some(12));
+        // `_one one_` has no standalone occurrence.
+        assert_eq!(next_occurrence(text, "one", 16), None);
+        assert_eq!(next_occurrence(text, "", 0), None);
+        assert_eq!(next_occurrence(text, "one", text.len()), None);
+        // A byte offset inside a character does not panic.
+        assert_eq!(next_occurrence("你 one", "one", 1), Some(4));
+    }
+
+    #[test]
+    fn next_occurrence_skips_overlapping_hits() {
+        // Every "aa" in these inputs touches another word character.
+        assert_eq!(next_occurrence("aaa", "aa", 0), None);
+        assert_eq!(next_occurrence("aaaa", "aa", 0), None);
+        assert_eq!(next_occurrence("aa aa", "aa", 0), Some(0));
+        assert_eq!(next_occurrence("aa aa", "aa", 1), Some(3));
     }
 
     #[test]

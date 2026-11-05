@@ -429,6 +429,7 @@ impl Keymap {
 
     fn add_vscode(&mut self) {
         self.bind(Scope::Editor, "primary+shift+k", Action::DeleteLine);
+        self.bind(Scope::Editor, "primary+d", Action::SelectNextOccurrence);
         self.bind(Scope::Editor, "primary+/", Action::ToggleComment);
         self.bind(Scope::Editor, "alt+up", Action::MoveLineUp);
         self.bind(Scope::Editor, "alt+down", Action::MoveLineDown);
@@ -448,6 +449,8 @@ impl Keymap {
 
     fn add_ide(&mut self) {
         self.bind(Scope::Editor, "primary+d", Action::DuplicateLine);
+        // JetBrains' "add selection for next occurrence".
+        self.bind(Scope::Editor, "alt+j", Action::SelectNextOccurrence);
         self.bind(Scope::Editor, "primary+/", Action::ToggleComment);
         if cfg!(target_os = "macos") {
             self.bind(Scope::Editor, "primary+backspace", Action::DeleteLine);
@@ -578,6 +581,7 @@ fn action_from_id(id: &str) -> Option<Action> {
         "edit.copy" | "copy" => Action::Copy,
         "edit.paste" | "paste" => Action::Paste,
         "edit.selectAll" | "selectAll" => Action::SelectAll,
+        "edit.selectNextOccurrence" | "selectNextOccurrence" => Action::SelectNextOccurrence,
         "edit.deleteLine" | "deleteLine" => Action::DeleteLine,
         "edit.duplicateLine" | "duplicateLine" => Action::DuplicateLine,
         "edit.moveLineUp" | "moveLineUp" => Action::MoveLineUp,
@@ -733,6 +737,20 @@ mod tests {
         assert_eq!(
             keymap.resolve(Scope::Terminal, &[chord("primary+shift+k")]),
             Resolution::None
+        );
+        assert_eq!(
+            keymap.resolve(Scope::Editor, &[chord("primary+d")]),
+            Resolution::Command(Action::SelectNextOccurrence)
+        );
+        // JetBrains keeps primary+D for duplicate and uses Alt+J here.
+        let ide = Keymap::for_id(KeymapId::JetBrains);
+        assert_eq!(
+            ide.resolve(Scope::Editor, &[chord("primary+d")]),
+            Resolution::Command(Action::DuplicateLine)
+        );
+        assert_eq!(
+            ide.resolve(Scope::Editor, &[chord("alt+j")]),
+            Resolution::Command(Action::SelectNextOccurrence)
         );
     }
 

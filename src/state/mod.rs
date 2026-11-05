@@ -181,6 +181,9 @@ pub enum Action {
     Copy,
     Paste,
     SelectAll,
+    /// Selects the word at the caret, then each further occurrence of it
+    /// (multi-site editing). `⌘D` in VS Code, `Alt+J` in JetBrains.
+    SelectNextOccurrence,
     Find,
     FindReplace,
     FindNext,
@@ -248,6 +251,7 @@ impl Action {
             Action::Copy => "Copy".into(),
             Action::Paste => "Paste".into(),
             Action::SelectAll => "Select All".into(),
+            Action::SelectNextOccurrence => "Select Next Occurrence".into(),
             Action::Find => "Find…".into(),
             Action::FindReplace => "Find and Replace…".into(),
             Action::FindNext => "Find Next".into(),
@@ -334,6 +338,7 @@ impl Action {
                 doc.is_some_and(|doc| !doc.is_read_only()) && state.clipboard.is_some()
             }
             Action::SelectAll => doc.is_some(),
+            Action::SelectNextOccurrence => doc.is_some(),
             Action::FindNext | Action::FindPrevious => doc.is_some(),
             Action::CycleView => doc.is_some(),
             Action::DeleteLine
@@ -432,6 +437,7 @@ pub fn items(menu: Menu, state: &AppState) -> Vec<Option<Action>> {
             Some(Action::Paste),
             None,
             Some(Action::SelectAll),
+            Some(Action::SelectNextOccurrence),
             None,
             Some(Action::FormatDocument),
             Some(Action::Find),

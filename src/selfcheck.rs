@@ -3379,6 +3379,93 @@ fn check_typing(dir: &Path) -> Result<(), String> {
     harness.key(Key::Enter);
     expect_doc(&harness, "- item\n", 7)?;
 
+    // Select Next Occurrence (Edit menu / ⌘D): the word, then each further
+    // occurrence, with every site edited by one keystroke and one undo step.
+    fresh(&mut harness)?;
+    harness.type_text("one two one\none");
+    {
+        let mut state = harness.app.state_mut();
+        state
+            .ws
+            .active_doc_mut()
+            .ok_or("no active document")?
+            .set_caret(1);
+        state.run(Action::SelectNextOccurrence);
+    }
+    if harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .and_then(|doc| doc.selected_text())
+        != Some("one")
+    {
+        return Err("the first Select Next Occurrence did not select the word".into());
+    }
+    {
+        let mut state = harness.app.state_mut();
+        state.run(Action::SelectNextOccurrence);
+        let doc = state.ws.active_doc().ok_or("no active document")?;
+        if doc.extra_selections() != [(8, 11)] {
+            return Err(format!(
+                "the second occurrence was not selected: {:?}",
+                doc.extra_selections()
+            ));
+        }
+    }
+    // Both sites are painted as selections in this frame.
+    let frame = harness.frame()?;
+    let selection = harness.app.state().theme.p.selection.to_rgba8();
+    let painted = frame
+        .commands()
+        .iter()
+        .filter(|command| {
+            matches!(command, DrawCommand::FillRect { paint, .. } if paint.color.to_rgba8() == selection)
+        })
+        .count();
+    if painted < 2 {
+        return Err(format!(
+            "only {painted} occurrence selection(s) were painted"
+        ));
+    }
+    harness.type_text("x");
+    expect_doc(&harness, "x two x\none", 1)?;
+    {
+        let mut state = harness.app.state_mut();
+        let doc = state.ws.active_doc().ok_or("no active document")?;
+        if doc.extra_selections() != [(7, 7)] {
+            return Err(format!(
+                "the second site lost its caret after typing: {:?}",
+                doc.extra_selections()
+            ));
+        }
+        state.run(Action::Undo);
+        let doc = state.ws.active_doc().ok_or("no active document")?;
+        if doc.text() != "one two one\none" {
+            return Err(format!(
+                "undoing a multiple edit did not restore the text: {:?}",
+                doc.text()
+            ));
+        }
+    }
+    // Esc drops the extra carets.
+    {
+        let mut state = harness.app.state_mut();
+        state.run(Action::SelectNextOccurrence);
+        state.run(Action::SelectNextOccurrence);
+    }
+    harness.type_text("y");
+    harness.key(Key::Escape);
+    if !harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .is_some_and(|doc| doc.extra_selections().is_empty())
+    {
+        return Err("Esc did not collapse the extra selections".into());
+    }
+
     // Committed IME text is content: it must never grow a pair.
     fresh(&mut harness)?;
     harness.event(InputEvent::Ime(igui_core::ImeEvent::Commit("你".into())));
@@ -3400,7 +3487,7 @@ fn check_typing(dir: &Path) -> Result<(), String> {
         state.settings_changed();
     }
 
-    println!("selfcheck: typing ok (auto pairs, list continuation)");
+    println!("selfcheck: typing ok (auto pairs, list continuation, next occurrence)");
     Ok(())
 }
 

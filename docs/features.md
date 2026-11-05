@@ -570,6 +570,24 @@ counter shows a trailing `+` when the cap is reached. **Replace** changes the
 current match; **Replace All** applies every non-overlapping match as one
 undoable batch (one undo step, one line-index rebuild).
 
+## Select Next Occurrence (`⌘D`, Edit menu)
+
+`⌘D` (`Alt+J` in the JetBrains profile) selects the word at the caret; pressing
+it again selects the next whole-word, case-sensitive occurrence of that text in
+the same document. The set is painted like the primary selection, and every
+typed character, Backspace and Delete then edits all sites as one undo step.
+
+- The search runs forward from the last site and does not wrap; past the last
+  occurrence the status bar reports `no more occurrences` and the selection
+  stays as it is.
+- Overlapping and partial hits are skipped (`cat` does not match `category` or
+  `cat_`).
+- After an edit the sites become carets (thin 1 px bars) so the next keystroke
+  still edits every one of them.
+- `Esc`, any caret movement, or any other command collapses back to a single
+  selection; so does Undo. Pressing `⌘D` again afterwards starts a fresh set
+  from the word at the caret.
+
 ## Typing aids (auto pairs and Markdown lists)
 
 **Auto Pairs** (Settings → Auto Pairs, on by default) only reacts to a single

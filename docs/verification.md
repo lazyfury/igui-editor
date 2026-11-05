@@ -96,8 +96,10 @@ Typing checks (`check_typing`): an opener pairs with the caret inside and its
 closer steps over, Backspace between the halves deletes both, Enter between an
 empty pair opens an indented block, a selection is wrapped and stays selected,
 a Markdown bullet continues on Enter and an empty item ends the list, committed
-IME text is inserted verbatim (never paired), and the Auto Pairs setting turns
-the behaviour off again.
+IME text is inserted verbatim (never paired), Select Next Occurrence selects the
+word then the next occurrence (both painted), typing edits every site and Undo
+restores the text, `Esc` collapses the extra carets, and the Auto Pairs setting
+turns pairing off again.
 
 M6 checks: tab drag-reorder and the right-click Close menu, Explorer context
 menu actions for files/folders/blank space (new file, new folder, rename,

@@ -157,6 +157,16 @@ impl AppState {
                     doc.select_all();
                 }
             }
+            Action::SelectNextOccurrence => {
+                let found = self
+                    .ws
+                    .active_doc_mut()
+                    .is_some_and(|doc| doc.select_next_occurrence());
+                if !found {
+                    self.status("no more occurrences");
+                }
+                self.find.dirty = true;
+            }
             Action::Find => self.open_find(false),
             Action::FindReplace => {
                 if self.find.open {

@@ -16,7 +16,7 @@
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
-use super::{fsutil, grapheme, typing};
+use super::{find, fsutil, grapheme, typing};
 
 /// How a document indents a new block level.
 ///
@@ -93,6 +93,15 @@ enum Kind {
     Backspace,
     Delete,
     Other,
+}
+
+/// How an empty selection in a multiple edit grows before it is replaced
+/// (`None` = insert at the caret, the usual case).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Widen {
+    None,
+    Backward,
+    Forward,
 }
 
 #[derive(Clone, Debug)]
@@ -256,6 +265,12 @@ pub struct Document {
     preview_start: Option<usize>,
     /// Indentation detected from the file, if it has any indented line.
     indent: Option<IndentStyle>,
+    /// Secondary selections added by Select Next Occurrence, in document order.
+    /// A replacement collapses them to zero-length ranges (carets), so a
+    /// multi-site edit keeps working while typing and Backspace keep editing
+    /// every site. Any caret movement or non-multiple edit drops them, so they
+    /// are never remapped by the movement code.
+    extra: Vec<(usize, usize)>,
 }
 
 impl Document {
@@ -281,6 +296,7 @@ impl Document {
             view_key: None,
             view_kind: None,
             preview_start: None,
+            extra: Vec::new(),
             indent: None,
         }
     }
@@ -315,6 +331,7 @@ impl Document {
             view_key: None,
             view_kind: None,
             preview_start: None,
+            extra: Vec::new(),
             indent: None,
         };
         doc.caret = floor_boundary(&doc.text, caret);
@@ -370,6 +387,7 @@ impl Document {
             view_key: None,
             view_kind: None,
             preview_start: None,
+            extra: Vec::new(),
             indent: None,
         };
         doc.indent = IndentStyle::detect(&doc.text);
@@ -715,17 +733,55 @@ impl Document {
     }
 
     pub fn set_caret(&mut self, byte: usize) {
+        self.extra.clear();
         self.caret = floor_boundary(&self.text, byte);
         self.anchor = self.caret;
     }
 
     pub fn select_all(&mut self) {
+        self.extra.clear();
         self.anchor = 0;
         self.caret = self.text.len();
     }
 
     pub fn extend_to(&mut self, byte: usize) {
+        self.extra.clear();
         self.caret = floor_boundary(&self.text, byte);
+    }
+
+    /// Secondary selections (Select Next Occurrence), in document order.
+    pub fn extra_selections(&self) -> &[(usize, usize)] {
+        &self.extra
+    }
+
+    /// Drops the secondary selections. Returns whether there were any.
+    pub fn collapse_extra(&mut self) -> bool {
+        let had = !self.extra.is_empty();
+        self.extra.clear();
+        had
+    }
+
+    /// Selects the word under the caret, or adds the next whole-word occurrence
+    /// of the current selection as an equal-length secondary selection.
+    ///
+    /// After a multiple edit the remaining carets are dropped and the word at the
+    /// caret starts a fresh set: the previous sites are already edited, and a
+    /// mixed caret/selection list would make the next keystroke surprising. The
+    /// search runs forward and never wraps, so pressing the command after the
+    /// final hit does nothing (the caller reports it).
+    pub fn select_next_occurrence(&mut self) -> bool {
+        let Some((start, end)) = self.selection() else {
+            self.collapse_extra();
+            self.select_word_at(self.caret);
+            return self.has_selection();
+        };
+        let needle = self.text[start..end].to_string();
+        let last_end = self.extra.last().map_or(end, |range| range.1);
+        let Some(next) = find::next_occurrence(&self.text, &needle, last_end) else {
+            return false;
+        };
+        self.extra.push((next, next + (end - start)));
+        true
     }
 
     /// 0-based line and 0-based character column of the caret.
@@ -759,6 +815,7 @@ impl Document {
     }
 
     pub fn select_word_at(&mut self, byte: usize) {
+        self.extra.clear();
         let byte = floor_boundary(&self.text, byte);
         let mut start = byte;
         while start > 0 {
@@ -1028,6 +1085,7 @@ impl Document {
     /// Selects the whole logical line containing `byte` (triple-click). The
     /// selection includes the trailing newline when there is one.
     pub fn select_line_at(&mut self, byte: usize) {
+        self.extra.clear();
         let line = self.line_of(byte);
         self.anchor = self.line_start(line);
         self.caret = if line + 1 < self.line_count() {
@@ -1039,6 +1097,53 @@ impl Document {
 
     // -- edits ---------------------------------------------------------------
 
+    /// Replaces the primary and every secondary selection with `insert` as one
+    /// undo step, then re-seeds the secondary selections as carets after their
+    /// own replacement.
+    ///
+    /// `widen` lets Backspace/Delete turn an empty multi-selection into one
+    /// that covers a grapheme on each side. Returns false when nothing moved,
+    /// so the caller can fall back to the ordinary single-selection edit.
+    fn replace_selections(&mut self, insert: &str, widen: Widen) -> bool {
+        if self.extra.is_empty() {
+            return false;
+        }
+        let mut ranges = Vec::with_capacity(self.extra.len() + 1);
+        ranges.push(self.selection().unwrap_or((self.caret, self.caret)));
+        ranges.extend(self.extra.iter().copied());
+        for range in &mut ranges {
+            if range.0 == range.1 {
+                *range = match widen {
+                    Widen::None => *range,
+                    Widen::Backward => (grapheme::prev_boundary(&self.text, range.0), range.0),
+                    Widen::Forward => (
+                        range.0,
+                        grapheme::next_boundary(&self.text, range.1).min(self.text.len()),
+                    ),
+                };
+            }
+        }
+        if ranges.iter().all(|range| range.0 == range.1) && insert.is_empty() {
+            return false;
+        }
+        let primary = ranges[0];
+        // Every range is replaced, so each site collapses to a caret that the
+        // following edits keep using. Offsets shift by the replacements before
+        // them.
+        let mut shift = insert.len() as isize - (primary.1 - primary.0) as isize;
+        let mut shifted = Vec::with_capacity(self.extra.len());
+        for range in &ranges[1..] {
+            let caret = (range.0 as isize + shift).max(0) as usize + insert.len();
+            shifted.push((caret, caret));
+            shift += insert.len() as isize - (range.1 - range.0) as isize;
+        }
+        if self.replace_ranges(&ranges, insert) == 0 {
+            return false;
+        }
+        self.extra = shifted;
+        true
+    }
+
     pub fn insert_text(&mut self, insert: &str) {
         if self.read_only {
             return;
@@ -1047,10 +1152,12 @@ impl Document {
         if insert.is_empty() {
             return;
         }
-        let (start, end) = self.selection().unwrap_or((self.caret, self.caret));
-        let single = insert.chars().count() == 1 && !insert.contains('\n');
-        let kind = if single { Kind::Type } else { Kind::Other };
-        self.replace(start, end, &insert, kind);
+        if !self.replace_selections(&insert, Widen::None) {
+            let (start, end) = self.selection().unwrap_or((self.caret, self.caret));
+            let single = insert.chars().count() == 1 && !insert.contains('\n');
+            let kind = if single { Kind::Type } else { Kind::Other };
+            self.replace(start, end, &insert, kind);
+        }
         if self.indent.is_none() && insert.contains('\n') {
             self.indent = IndentStyle::detect(&self.text);
         }
@@ -1101,6 +1208,7 @@ impl Document {
         if self.has_selection() || !self.text[self.caret..].starts_with(ch) {
             return false;
         }
+        self.extra.clear();
         self.caret += ch.len_utf8();
         self.anchor = self.caret;
         true
@@ -1198,6 +1306,9 @@ impl Document {
         if self.read_only {
             return;
         }
+        if self.replace_selections("", Widen::Backward) {
+            return;
+        }
         if let Some((start, end)) = self.selection() {
             self.replace(start, end, "", Kind::Other);
             return;
@@ -1233,6 +1344,9 @@ impl Document {
 
     pub fn delete_forward(&mut self) {
         if self.read_only {
+            return;
+        }
+        if self.replace_selections("", Widen::Forward) {
             return;
         }
         if let Some((start, end)) = self.selection() {
@@ -1441,6 +1555,7 @@ impl Document {
         self.edit_span = Some((first_line, last_line));
         self.caret = edit.before.caret.min(self.text.len());
         self.anchor = edit.before.anchor.min(self.text.len());
+        self.extra.clear();
         self.dirty = self.saved_cursor != Some(self.undo.cursor);
         self.rev += 1;
         true
@@ -1459,6 +1574,7 @@ impl Document {
         self.edit_span = Some((first_line, last_line));
         self.caret = edit.after.caret.min(self.text.len());
         self.anchor = edit.after.anchor.min(self.text.len());
+        self.extra.clear();
         self.undo.cursor += 1;
         self.dirty = self.saved_cursor != Some(self.undo.cursor);
         self.rev += 1;
@@ -1565,6 +1681,7 @@ impl Document {
     }
 
     fn move_to(&mut self, byte: usize, select: bool) {
+        self.extra.clear();
         self.caret = floor_boundary(&self.text, byte);
         if !select {
             self.anchor = self.caret;
@@ -1611,6 +1728,7 @@ impl Document {
         self.edit_span = Some((first_line, last_line));
         self.caret = floor_boundary(&self.text, after.caret);
         self.anchor = floor_boundary(&self.text, after.anchor);
+        self.extra.clear();
         self.rev += 1;
         // A new edit truncates the redo history at `undo.cursor`; if the save
         // point lived in that truncated branch it can no longer be reached.
@@ -1982,6 +2100,87 @@ mod tests {
         let mut plain = doc("text");
         plain.set_caret(plain.text().len());
         assert!(!plain.insert_list_newline());
+    }
+
+    #[test]
+    fn select_next_occurrence_adds_equal_length_selections() {
+        let mut doc = doc("one two one\none");
+        doc.set_caret(1);
+        assert!(doc.select_next_occurrence());
+        assert_eq!(doc.selected_text(), Some("one"));
+        assert_eq!(doc.extra_selections(), &[] as &[(usize, usize)]);
+        assert!(doc.select_next_occurrence());
+        assert_eq!(doc.extra_selections(), &[(8, 11)]);
+        assert!(doc.select_next_occurrence());
+        assert_eq!(doc.extra_selections(), &[(8, 11), (12, 15)]);
+        // There is no fourth occurrence: the last state stays.
+        assert!(!doc.select_next_occurrence());
+        assert_eq!(doc.extra_selections(), &[(8, 11), (12, 15)]);
+    }
+
+    #[test]
+    fn typing_with_multiple_selections_edits_every_occurrence() {
+        let mut doc = doc("one two one\none");
+        doc.set_caret(1);
+        doc.select_next_occurrence();
+        doc.select_next_occurrence();
+        doc.select_next_occurrence();
+        doc.insert_text("1");
+        assert_eq!(doc.text(), "1 two 1\n1");
+        // The secondary selections collapse to carets that follow the edit, so
+        // a second keystroke still edits all three sites.
+        assert_eq!(doc.extra_selections(), &[(7, 7), (9, 9)]);
+        doc.insert_text("2");
+        assert_eq!(doc.text(), "12 two 12\n12");
+        assert_eq!(doc.extra_selections(), &[(9, 9), (12, 12)]);
+        // One backspace removes one character at every site.
+        doc.backspace();
+        assert_eq!(doc.text(), "1 two 1\n1");
+        assert_eq!(doc.extra_selections(), &[(7, 7), (9, 9)]);
+        // Any caret movement collapses back to a single selection.
+        doc.set_caret(0);
+        assert!(doc.extra_selections().is_empty());
+    }
+
+    #[test]
+    fn select_next_occurrence_restarts_after_a_multiple_edit() {
+        let mut doc = doc("ab ab ab ab");
+        doc.set_caret(0);
+        doc.select_next_occurrence();
+        doc.select_next_occurrence();
+        doc.insert_text("x");
+        assert_eq!(doc.text(), "x x ab ab");
+        assert_eq!(doc.extra_selections(), &[(3, 3)]);
+        // The leftover carets are dropped and the word at the caret starts a
+        // fresh set instead of a mixed caret/selection list.
+        assert!(doc.select_next_occurrence());
+        assert_eq!(doc.selected_text(), Some("x"));
+        assert!(doc.extra_selections().is_empty());
+    }
+
+    #[test]
+    fn multi_selection_edits_are_one_undo_step_each() {
+        let mut doc = doc("a a a");
+        doc.set_caret(0);
+        doc.select_next_occurrence();
+        doc.select_next_occurrence();
+        doc.select_next_occurrence();
+        assert_eq!(doc.extra_selections(), &[(2, 3), (4, 5)]);
+        doc.insert_text("bb");
+        assert_eq!(doc.text(), "bb bb bb");
+        assert!(doc.undo());
+        assert_eq!(doc.text(), "a a a");
+        assert!(doc.extra_selections().is_empty());
+    }
+
+    #[test]
+    fn select_next_occurrence_prefers_the_whole_word() {
+        let mut doc = doc("cat category cat_ cat.");
+        doc.set_caret(1);
+        doc.select_next_occurrence();
+        assert!(doc.select_next_occurrence());
+        // `category` and `cat_` are not whole-word hits.
+        assert_eq!(doc.extra_selections(), &[(18, 21)]);
     }
 
     #[test]

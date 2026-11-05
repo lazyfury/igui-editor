@@ -16,7 +16,7 @@ remaining scope.
 | Text input | Characters via host `TextInput`; Space/Tab are named keys handled by the editor; IME preedit/commit |
 | Editing | Insert, newline with indentation, backspace/delete, block indent/outdent, undo/redo with coalescing |
 | Movement | Arrows, word left/right, smart Home, End, document start/end, wrapped-row Up/Down |
-| Selection | Shift movement, mouse drag, double-click word, triple-click line, Select All, Alt-click extend |
+| Selection | Shift movement, mouse drag, double-click word, triple-click line, Select All, Alt-click extend, Select Next Occurrence (multi-site edit) |
 | Clipboard | Cut/copy/paste; empty-selection cut/copy operates on the current line |
 | Files | Open/save/save-as, tabs, close guards, external-change reload, autosave/recovery |
 | Tabs | `primary+1…8` select by index, `primary+9` last, `Ctrl+Tab` / `Ctrl+Shift+Tab` cycle |
@@ -42,7 +42,10 @@ remaining scope.
 - No modal editor state. A real Vim profile needs Normal/Visual/Insert,
   operators and counts; mapping `dd` to "delete line" alone would be misleading.
 - No `PageUp`/`PageDown` in `igui_core::Key` (the model has `Document::page`),
-  and no multi-cursor or column selection.
+  no arbitrary multi-cursor and no column selection. Multiple *occurrence*
+  selections (Select Next Occurrence) exist: they are equal-length ranges that
+  collapse to carets after an edit, and any caret movement or `Esc` returns to
+  a single selection.
 - Word-delete, duplicate/move-line and comment-toggle commands are implemented.
 - The active profile persists in the session, and the Settings panel exposes the
   Keymap row. Per-chord overrides live in `<config>/keymaps.json`.
@@ -86,7 +89,8 @@ command ids:
 ```text
 file.save, file.saveAs, file.open, file.openProject (alias file.openFolder),
 file.closeProject (alias file.closeFolder), file.closeTab
-edit.undo, edit.redo, edit.cut, edit.copy, edit.paste, edit.selectAll
+edit.undo, edit.redo, edit.cut, edit.copy, edit.paste, edit.selectAll,
+edit.selectNextOccurrence
 edit.cutLine, edit.copyLine, edit.deleteLine, edit.duplicateLine
 edit.moveLineUp, edit.moveLineDown, edit.toggleComment, editor.format
 motion.left, motion.right, motion.wordLeft, motion.wordRight
@@ -142,17 +146,21 @@ Global app commands
 #### VS Code (platform-aware)
 
 - mac: `Cmd` primary; `Option` word movement; `Cmd+Shift+K` delete line;
-  `Cmd+X` empty-selection line cut; `Cmd+/` comment.
+  `Cmd+D` select next occurrence; `Cmd+X` empty-selection line cut; `Cmd+/`
+  comment.
 - Windows/Linux: `Ctrl` primary; `Ctrl+Backspace` word delete;
-  `Ctrl+Shift+K` delete line; `Shift+Alt+Down` duplicate line.
+  `Ctrl+Shift+K` delete line; `Ctrl+D` select next occurrence;
+  `Shift+Alt+Down` duplicate line.
 - Existing app keys (`Cmd+P`, `Shift+Cmd+F`, etc.) remain app commands.
 - Keep `Cmd+I` as the completion binding on macOS because the OS reserves
   Ctrl+Space for input sources; allow `Ctrl+Space` where it reaches the app.
 
 #### JetBrains
 
-- mac: `Cmd` primary; `Cmd+D` duplicate; `Cmd+Backspace` delete line.
-- Windows/Linux: `Ctrl+D` duplicate; `Ctrl+Y` delete line.
+- mac: `Cmd` primary; `Cmd+D` duplicate; `Cmd+Backspace` delete line;
+  `Alt+J` select next occurrence.
+- Windows/Linux: `Ctrl+D` duplicate; `Ctrl+Y` delete line; `Alt+J` select next
+  occurrence.
 - `Ctrl+X`/`Cmd+X` with empty selection cuts the line (already implemented and
   shared with VS Code).
 - Smart Home/End and word movement follow the platform convention.
