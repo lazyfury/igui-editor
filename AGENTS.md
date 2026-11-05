@@ -128,6 +128,7 @@ Read the minimum set; do not preload the whole tree.
 | Headless verification | `src/selfcheck.rs` | [`docs/verification.md`](docs/verification.md). |
 | Packaging / release profile | `packaging/`, `Cargo.toml` | [`docs/packaging.md`](docs/packaging.md). |
 | Docs-only change | `docs/README.md` | Keep README short; update links. |
+| Reduction work (scope cuts, reliability) | `docs/reduction-plan.md` | Session 5 plan and progress log. |
 
 ## Commands
 

@@ -18,6 +18,7 @@ Progressive disclosure: read the smallest document that answers your question.
 | Milestones and gaps | [roadmap.md](roadmap.md) |
 | Review/optimization log | [review.md](review.md) |
 | Current improvement work plan | [improvement-plan.md](improvement-plan.md) |
+| Session 5 reduction work plan | [reduction-plan.md](reduction-plan.md) |
 | Delivered improvement history (cycles 1–3) | [improvement-log.md](improvement-log.md) |
 
 ## Maintenance rules
