@@ -41,6 +41,7 @@ impl AppState {
             doc_id: doc.id(),
             rev: doc.rev(),
             path,
+            caret: doc.caret(),
             old_name: old_name.clone(),
             new_name: String::new(),
         };

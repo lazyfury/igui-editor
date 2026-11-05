@@ -91,6 +91,7 @@ pub struct RenameContext {
     pub doc_id: u64,
     pub rev: u64,
     pub path: PathBuf,
+    pub caret: usize,
     pub old_name: String,
     /// Chosen in the prompt; empty while only preparing.
     pub new_name: String,
@@ -2492,6 +2493,7 @@ impl LspController {
             doc_id: doc.id(),
             rev: doc.rev(),
             path,
+            caret: doc.caret(),
             old_name: old_name.to_string(),
             new_name: String::new(),
         });
@@ -2531,6 +2533,7 @@ impl LspController {
             doc_id: doc.id(),
             rev: doc.rev(),
             path: path.clone(),
+            caret: doc.caret(),
             old_name: old_name.to_string(),
             new_name: new_name.to_string(),
         });

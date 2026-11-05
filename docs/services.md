@@ -192,7 +192,7 @@ its own language-server binary.
   Network → Language Server; `IGUI_EDITOR_GODOT_LSP` overrides the address, and
   after the default port fails the client falls back to the port stored in the
   newest `editor_settings-4.x.tres` (`IGUI_EDITOR_GODOT_SETTINGS` overrides the
-  file)) and serves one client. There is deliberately **no headless fallback**: a second
+  file) and serves one client. There is deliberately **no headless fallback**: a second
   editor would compete over the project's `.godot` import state and would not be
   the editor the user is working in. If nothing listens, the session reports
   *no language server at 127.0.0.1:6005; open the project in the editor* and

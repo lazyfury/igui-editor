@@ -21,6 +21,7 @@
 | `⇧⌘F` | search in folder |
 | `⌘⌥O` | toggle the right outline panel |
 | `F1` / `F12` | LSP hover / go to definition (or `⌘⇧I` / `⌘⇧D`) |
+| `⇧F12` / `F2` | find references / rename the symbol at the caret |
 | `⌘I` / `Ctrl+I` | LSP completion (also `Ctrl+Space` when available) |
 | `⌘,` | settings panel |
 | `⌘F` / `⌥⌘F` | find / jump to the replace field |
