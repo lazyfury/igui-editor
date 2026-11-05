@@ -130,12 +130,12 @@ diagnostics/semantic tokens/outline. The same switch is the
   comment snippets as well as `[method …]`/`[member …]` references converted
   by Godot's LSP. Raw `[codeblock lang=…]`, `[gdscript]` and `[codeblocks]`
   wrappers are also accepted as a fallback.
-- `F1` shows server hover, `F12` jumps to definition, and `⇧F12` lists every
-  reference to the symbol at the caret in a centered overlay (workspace-relative
-  `file:line` plus a one-line preview). `↑↓` select, `Enter` or a click jumps,
-  `Esc` closes. (macOS top-row media keys
-  may need `Fn`; `⌘⇧I` / `⌘⇧D` are also available), and `⌘I` (`Ctrl+I` on
-  Linux/Windows) opens completion. Typing an identifier also activates
+- `F1` shows server hover and `F12` jumps to definition (macOS top-row media
+  keys may need `Fn`; `⌘⇧I` / `⌘⇧D` are also available). `⇧F12` lists every
+  reference to the symbol at the caret in a centered overlay
+  (workspace-relative `file:line` plus a one-line preview); `↑↓` select,
+  `Enter` or a click jumps, `Esc` closes. `⌘I` (`Ctrl+I` on Linux/Windows)
+  opens completion. Typing an identifier also activates
   completion after a 140 ms debounce. Characters declared by the server's
   `completionProvider.triggerCharacters` fire immediately: `.` everywhere and
   `$` / `%` for GDScript node references (Godot's list plus `%`, which the
