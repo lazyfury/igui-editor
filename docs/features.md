@@ -217,8 +217,12 @@ cargo run --release -- "/path/to/godot_project/new_script.gd"
 ```
 
 `IGUI_EDITOR_GODOT_LSP` can point at another editor language-server address
-(`host:port`, `:port` or `port`; default `127.0.0.1:6005`). The editor is left
-running; the client only owns the socket. Godot's server sends diagnostics,
+(`host:port`, `:port` or `port`; default `127.0.0.1:6005`). If the port was
+changed in Godot's Editor Settings, the client also reads
+`network/language_server/remote_port` from the newest `editor_settings-4.x.tres`
+after the default port fails to connect (`IGUI_EDITOR_GODOT_SETTINGS` points at
+a settings file directly). The editor is left running; the client only owns the
+socket. Godot's server sends diagnostics,
 hover, completion, definition and document symbols; 4.7 also advertises
 signature help, references, occurrence highlights and prepareRename/rename,
 which the client uses when the server offers them. Semantic tokens, formatting,

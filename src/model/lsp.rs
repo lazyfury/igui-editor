@@ -325,7 +325,10 @@ impl LspClient {
                 // the editor the user is working in.
                 if let Some(attach) = spec.attach.as_ref() {
                     let (host, port) = attach.resolve();
-                    let Some(stream) = connect_attach(attach) else {
+                    // Godot stores a custom language-server port in its editor
+                    // settings; try it when the declared attach port is empty.
+                    let discover = spec.id == "gdscript";
+                    let Some(stream) = connect_attach(attach, discover) else {
                         return Err(io::Error::new(
                             io::ErrorKind::ConnectionRefused,
                             format!(
@@ -529,11 +532,35 @@ fn start_tcp_io(
 
 /// Connects to a language server that is already listening (Godot's editor).
 /// A short timeout keeps a missing editor from stalling the UI thread.
-fn connect_attach(attach: &AttachTarget) -> Option<TcpStream> {
+///
+/// With `discover`, a failed default port falls back to the port stored in
+/// Godot's editor settings (unless the environment override is set explicitly).
+fn connect_attach(attach: &AttachTarget, discover: bool) -> Option<TcpStream> {
+    let (host, port) = attach.resolve();
+    if let Some(stream) = try_attach(&host, port) {
+        return Some(stream);
+    }
+    if !discover {
+        return None;
+    }
+    let overridden = attach
+        .env
+        .as_deref()
+        .and_then(std::env::var_os)
+        .is_some_and(|value| !value.is_empty());
+    if overridden {
+        return None;
+    }
+    let discovered = crate::services::godot::discover_lsp_port()?;
+    (discovered != port)
+        .then(|| try_attach(&host, discovered))
+        .flatten()
+}
+
+fn try_attach(host: &str, port: u16) -> Option<TcpStream> {
     use std::net::ToSocketAddrs;
 
-    let (host, port) = attach.resolve();
-    let address = (host.as_str(), port).to_socket_addrs().ok()?.next()?;
+    let address = (host, port).to_socket_addrs().ok()?.next()?;
     let stream = TcpStream::connect_timeout(&address, Duration::from_millis(500)).ok()?;
     let _ = stream.set_nodelay(true);
     Some(stream)
@@ -4336,7 +4363,7 @@ mod tests {
             port,
             env: None,
         };
-        assert!(connect_attach(&attach).is_none());
+        assert!(connect_attach(&attach, false).is_none());
     }
 
     #[test]

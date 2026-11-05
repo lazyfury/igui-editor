@@ -189,8 +189,10 @@ its own language-server binary.
   files that were never opened as tabs (generated files, `git checkout`).
 - **Godot attaches only** (`ServerRescan`): Godot's GDScript LSP lives inside
   the running editor, speaks LSP over TCP (`127.0.0.1:6005`, Editor Settings →
-  Network → Language Server; `IGUI_EDITOR_GODOT_LSP` overrides the address) and
-  serves one client. There is deliberately **no headless fallback**: a second
+  Network → Language Server; `IGUI_EDITOR_GODOT_LSP` overrides the address, and
+  after the default port fails the client falls back to the port stored in the
+  newest `editor_settings-4.x.tres` (`IGUI_EDITOR_GODOT_SETTINGS` overrides the
+  file)) and serves one client. There is deliberately **no headless fallback**: a second
   editor would compete over the project's `.godot` import state and would not be
   the editor the user is working in. If nothing listens, the session reports
   *no language server at 127.0.0.1:6005; open the project in the editor* and

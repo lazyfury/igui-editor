@@ -130,3 +130,142 @@ mod tests {
         assert_eq!(decoded, spec);
     }
 }
+
+/// File the Godot editor uses for editor-wide settings, per platform.
+fn settings_dirs() -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) {
+        #[cfg(target_os = "macos")]
+        dirs.push(home.join("Library/Application Support/Godot"));
+        #[cfg(not(target_os = "macos"))]
+        {
+            let config = std::env::var_os("XDG_CONFIG_HOME")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| home.join(".config"));
+            dirs.push(config.join("godot"));
+        }
+    }
+    if let Some(appdata) = std::env::var_os("APPDATA").map(std::path::PathBuf::from) {
+        dirs.push(appdata.join("Godot"));
+    }
+    dirs
+}
+
+/// The configured GDScript language-server port, if the editor settings are
+/// readable.
+///
+/// `IGUI_EDITOR_GODOT_SETTINGS` points at a settings file directly (portable
+/// installs and tests). Otherwise the newest `editor_settings-<version>.tres`
+/// in the platform settings directory wins.
+pub fn discover_lsp_port() -> Option<u16> {
+    if let Some(path) = std::env::var_os("IGUI_EDITOR_GODOT_SETTINGS")
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.is_file())
+    {
+        if let Ok(text) = std::fs::read_to_string(path) {
+            return lsp_port_from_settings(&text);
+        }
+    }
+    settings_dirs()
+        .into_iter()
+        .find_map(|dir| discover_lsp_port_in(&dir))
+}
+
+/// Reads the newest settings file in `dir`.
+fn discover_lsp_port_in(dir: &std::path::Path) -> Option<u16> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut newest: Option<((u32, u32), std::path::PathBuf)> = None;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(version) = settings_version(&name) else {
+            continue;
+        };
+        if newest.as_ref().is_none_or(|(best, _)| version > *best) {
+            newest = Some((version, entry.path()));
+        }
+    }
+    let (_, path) = newest?;
+    let text = std::fs::read_to_string(path).ok()?;
+    lsp_port_from_settings(&text)
+}
+
+/// `editor_settings-4.7.tres` → `(4, 7)`; the unversioned legacy file sorts
+/// first, and `editor_settings-4.tres` is `(4, 0)`.
+fn settings_version(name: &str) -> Option<(u32, u32)> {
+    if name == "editor_settings.tres" {
+        return Some((0, 0));
+    }
+    let rest = name
+        .strip_prefix("editor_settings-")?
+        .strip_suffix(".tres")?;
+    let mut parts = rest.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next().and_then(|part| part.parse().ok()).unwrap_or(0);
+    Some((major, minor))
+}
+
+/// Parses `network/language_server/remote_port = 6005` from a `.tres` file.
+fn lsp_port_from_settings(text: &str) -> Option<u16> {
+    text.lines().rev().find_map(|line| {
+        let (key, value) = line.split_once('=')?;
+        if key.trim() != "network/language_server/remote_port" {
+            return None;
+        }
+        value.trim().parse::<u16>().ok().filter(|port| *port > 0)
+    })
+}
+
+#[cfg(test)]
+mod discovery_tests {
+    use super::*;
+
+    #[test]
+    fn parses_the_remote_port_and_ignores_other_network_settings() {
+        let settings = r#"
+[network]
+
+network/debug/remote_port = 6007
+network/language_server/remote_host = "127.0.0.1"
+network/language_server/remote_port = 6105
+"#;
+        assert_eq!(lsp_port_from_settings(settings), Some(6105));
+        assert_eq!(
+            lsp_port_from_settings("network/debug/remote_port = 6007"),
+            None
+        );
+        assert_eq!(
+            lsp_port_from_settings("network/language_server/remote_port = 0"),
+            None
+        );
+    }
+
+    #[test]
+    fn newest_editor_settings_file_wins() {
+        let dir = std::env::temp_dir().join(format!(
+            "igui-editor-godot-settings-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("editor_settings-4.6.tres"),
+            "network/language_server/remote_port = 6005\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("editor_settings-4.7.tres"),
+            "network/language_server/remote_port = 6123\n",
+        )
+        .unwrap();
+        assert_eq!(discover_lsp_port_in(&dir), Some(6123));
+        assert_eq!(settings_version("editor_settings-4.7.tres"), Some((4, 7)));
+        assert_eq!(settings_version("editor_settings-4.tres"), Some((4, 0)));
+        assert_eq!(settings_version("editor_settings.tres"), Some((0, 0)));
+        assert_eq!(settings_version("editor_settings-4.7.tmp"), None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

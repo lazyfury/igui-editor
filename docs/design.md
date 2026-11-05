@@ -367,7 +367,10 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    `network/language_server/remote_port` — overridable with
    `IGUI_EDITOR_GODOT_LSP`): the client connects with a 500 ms timeout and speaks
    JSON-RPC to the user's editor without owning a child process (dropping the
-   session must not kill it). There is **no headless fallback**: it gave the
+   session must not kill it). If the default port is empty, the client reads
+   `network/language_server/remote_port` from the newest editor settings file
+   before reporting the "open the project in the editor" hint; an explicit env
+   override always wins and disables discovery. There is **no headless fallback**: it gave the
    client a second editor competing over the same import state, and it was not
    the editor the user was working in. If nothing listens the session says so
    and retries every 2 s. The catches are documented: the editor's language
