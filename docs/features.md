@@ -638,6 +638,22 @@ one undo step. It never reflows code, and lines inside a GDScript triple-quoted
 string are left untouched because their leading whitespace is content. The
 status bar reports `formatted: tabs` or `formatted: 4 spaces`.
 
+## Saving (`⌘S`, autosave)
+
+Every save tidies the buffer before writing, so the file and the editor never
+disagree:
+
+- trailing spaces and tabs are removed from every line;
+- the file ends with a newline (added only when it is missing);
+- **Markdown is exempt from the trim** — two trailing spaces are a hard line
+  break; only the final newline is added;
+- a blank buffer is left exactly as it is.
+
+The cleanup is one undo step with the caret kept where it was, so `⌘Z` right
+after a save restores the pre-save text (and marks the tab dirty again).
+Autosave uses the same `Document::save` path, so it tidies too. Line endings are
+still preserved (CRLF stays CRLF).
+
 ## Soft wrap (`⌥Z`, View menu)
 
 Off by default and persisted in the session. Long logical lines are split into

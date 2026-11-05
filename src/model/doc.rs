@@ -655,6 +655,9 @@ impl Document {
     }
 
     /// Writes the buffer back to its file. Untitled buffers have no path.
+    ///
+    /// The buffer is tidied first ([`Document::tidy`]), so what is on disk and
+    /// what the editor shows stay identical.
     pub fn save(&mut self) -> std::io::Result<()> {
         if self.read_only {
             return Err(std::io::Error::new(
@@ -668,6 +671,7 @@ impl Document {
                 "untitled buffer has no path; use Save As",
             ));
         };
+        self.tidy();
         let permissions = std::fs::metadata(&path)
             .ok()
             .map(|metadata| metadata.permissions());
@@ -676,6 +680,62 @@ impl Document {
         self.dirty = false;
         self.saved_cursor = Some(self.undo.cursor);
         Ok(())
+    }
+
+    /// Cleans the buffer up the way a save should leave it: trailing spaces and
+    /// tabs removed from every line and a final newline.
+    ///
+    /// Applied as one undo step with the caret kept in place, so the cleanup is
+    /// visible and reversible. A Markdown buffer keeps its trailing spaces,
+    /// because two of them are a hard line break. Returns whether anything
+    /// changed.
+    fn tidy(&mut self) -> bool {
+        // Nothing to tidy in a blank buffer: there is no content to trim and a
+        // lone newline is not an improvement.
+        if self.read_only || self.text.trim().is_empty() {
+            return false;
+        }
+        let mut edits: Vec<(usize, usize, String)> = Vec::new();
+        if !self.is_markdown() {
+            for line in 0..self.line_count() {
+                let end = self.line_end(line);
+                let keep = self.line_start(line)
+                    + self.text[self.line_start(line)..end]
+                        .trim_end_matches([' ', '\t'])
+                        .len();
+                if keep < end {
+                    edits.push((keep, end, String::new()));
+                }
+            }
+        }
+        if !self.text.ends_with('\n') {
+            edits.push((self.text.len(), self.text.len(), "\n".into()));
+        }
+        if edits.is_empty() {
+            return false;
+        }
+        let caret = remap_removed(self.caret, &edits);
+        let anchor = remap_removed(self.anchor, &edits);
+        if self.replace_edits(&edits) == 0 {
+            return false;
+        }
+        self.caret = floor_boundary(&self.text, caret);
+        self.anchor = floor_boundary(&self.text, anchor);
+        true
+    }
+
+    /// Whether the file is Markdown by extension (see [`Document::tidy`]).
+    fn is_markdown(&self) -> bool {
+        self.path
+            .as_deref()
+            .and_then(Path::extension)
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                matches!(
+                    extension.to_ascii_lowercase().as_str(),
+                    "md" | "markdown" | "mdown" | "mkd"
+                )
+            })
     }
 
     pub fn line_count(&self) -> usize {
@@ -1882,6 +1942,24 @@ fn gdscript_multiline_opens(line: &str) -> Option<&'static str> {
     (code.matches(delimiter).count() % 2 == 1).then_some(delimiter)
 }
 
+/// Maps a byte offset in the old text to the same position once every range in
+/// `edits` has been removed.
+fn remap_removed(byte: usize, edits: &[(usize, usize, String)]) -> usize {
+    let mut shift = 0usize;
+    for (start, end, _) in edits {
+        if byte <= *start {
+            break;
+        }
+        if byte >= *end {
+            shift += end - start;
+            continue;
+        }
+        // Inside a removed range: clamp to where it started.
+        return start - shift;
+    }
+    byte.saturating_sub(shift)
+}
+
 fn floor_boundary(text: &str, byte: usize) -> usize {
     let mut byte = byte.min(text.len());
     while byte > 0 && !text.is_char_boundary(byte) {
@@ -2535,6 +2613,58 @@ mod tests {
             doc.is_dirty(),
             "discarding the saved branch must not make the old base clean"
         );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn save_trims_trailing_whitespace_and_adds_a_final_newline() {
+        let dir = std::env::temp_dir().join(format!("igui-editor-tidy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("tidy.txt");
+        std::fs::write(&path, "one  \ntwo\t \n three   ").unwrap();
+
+        let mut doc = Document::open(1, &path).unwrap();
+        doc.set_caret(2);
+        doc.save().unwrap();
+        assert_eq!(doc.text(), "one\ntwo\n three\n");
+        // The caret stays on the character it was on.
+        assert_eq!(doc.caret(), 2);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "one\ntwo\n three\n"
+        );
+        // The cleanup is one undo step and the save point moves with it.
+        assert!(!doc.is_dirty());
+        assert!(doc.undo());
+        assert_eq!(doc.text(), "one  \ntwo\t \n three   ");
+        assert!(doc.is_dirty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn save_keeps_markdown_hard_breaks_but_ends_with_a_newline() {
+        let dir = std::env::temp_dir().join(format!("igui-editor-tidymd-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("hard-break.MD");
+        std::fs::write(&path, "line one  \nline two").unwrap();
+
+        let mut doc = Document::open(1, &path).unwrap();
+        doc.save().unwrap();
+        // Two trailing spaces are a hard line break: they survive the trim.
+        assert_eq!(doc.text(), "line one  \nline two\n");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn save_leaves_a_blank_buffer_alone() {
+        let path =
+            std::env::temp_dir().join(format!("igui-editor-tidy-blank-{}", std::process::id()));
+        std::fs::write(&path, "   \n\t\n").unwrap();
+        let mut doc = Document::open(1, &path).unwrap();
+        doc.save().unwrap();
+        assert_eq!(doc.text(), "   \n\t\n");
         let _ = std::fs::remove_file(path);
     }
 

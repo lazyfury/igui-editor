@@ -3487,7 +3487,28 @@ fn check_typing(dir: &Path) -> Result<(), String> {
         state.settings_changed();
     }
 
-    println!("selfcheck: typing ok (auto pairs, list continuation, next occurrence)");
+    // Saving tidies the file through the real ⌘S path: trailing whitespace is
+    // removed and the file ends with a newline (Markdown hard breaks are kept,
+    // see `model::doc`).
+    let tidy_path = dir.join("tidy.rs");
+    fs::write(&tidy_path, "fn main() {   \n    let x = 1;   ")
+        .map_err(|error| format!("fixture: {error}"))?;
+    harness.app.state_mut().open_path(tidy_path.clone());
+    harness.frame()?;
+    harness.shortcut(
+        Key::Character('s'),
+        Modifiers {
+            meta: true,
+            ..Modifiers::NONE
+        },
+    );
+    harness.frame()?;
+    let saved = fs::read_to_string(&tidy_path).map_err(|error| format!("read back: {error}"))?;
+    if saved != "fn main() {\n    let x = 1;\n" {
+        return Err(format!("⌘S did not tidy the file: {saved:?}"));
+    }
+
+    println!("selfcheck: typing ok (auto pairs, list continuation, next occurrence, tidy save)");
     Ok(())
 }
 
