@@ -259,7 +259,8 @@ The right sidebar shows LSP document symbols (`textDocument/documentSymbol`) for
 the active document. Rust files inside a Cargo project get functions, methods,
 structs/enums, fields, variables and nested items from `rust-analyzer`; GDScript
 files get functions, classes, signals, constants and variables from Godot's
-server. The list updates after edits. Rows use the Explorer's tree rhythm
+server; signals use their own `S` marker (Godot reports them as
+`SymbolKind.Event`). The list updates after edits. Rows use the Explorer's tree rhythm
 (28 px rows, 14 px labels, shared marker/hover/selection painting), and the
 nearest preceding symbol to the caret is highlighted. Clicking a row moves the
 caret to the symbol and reveals it in the editor. The left edge is a shared drag

@@ -5032,6 +5032,11 @@ while True:
                 "kind": 13,
                 "range": {"start": {"line": 1, "character": 4}, "end": {"line": 1, "character": 18}},
                 "selectionRange": {"start": {"line": 1, "character": 8}, "end": {"line": 1, "character": 18}},
+            }, {
+                "name": "changed",
+                "kind": 24,
+                "range": {"start": {"line": 2, "character": 4}, "end": {"line": 2, "character": 10}},
+                "selectionRange": {"start": {"line": 2, "character": 4}, "end": {"line": 2, "character": 10}},
             }],
         }]})
 "#,
@@ -5095,7 +5100,7 @@ fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
         if state.lsp.semantic_for(&path).len() != 2 {
             return Err("LSP semantic tokens were not received".into());
         }
-        if state.lsp.symbols_for(&path).len() != 2 {
+        if state.lsp.symbols_for(&path).len() != 3 {
             return Err("LSP document symbols were not received".into());
         }
     }
@@ -5299,11 +5304,12 @@ fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
     }
 
     let frame = harness.frame()?;
-    if harness.app.state().outline.rows.len() < 2
+    if harness.app.state().outline.rows.len() < 3
         || !texts(&frame).iter().any(|text| text == "OUTLINE")
         || !texts(&frame).iter().any(|text| text == "diagnostic")
+        || !texts(&frame).iter().any(|text| text == "S")
     {
-        return Err("outline panel did not paint document symbols".into());
+        return Err("outline panel did not paint document symbols and the signal glyph".into());
     }
     let outline_row = harness.app.state().outline.rows[1].1.center();
     harness.click(outline_row);

@@ -262,6 +262,8 @@ fn symbol_glyph(kind: u32) -> &'static str {
         7 | 8 => "P",
         13 => "v",
         14 => "c",
+        // Godot reports GDScript signals as SymbolKind.Event (24).
+        24 => "S",
         22 => "e",
         26 => "t",
         _ => "·",
@@ -272,7 +274,7 @@ fn symbol_color(kind: u32, p: &crate::theme::Palette) -> igui_core::Color {
     match kind {
         5 | 10 | 11 | 23 | 26 => p.syntax.type_name,
         6 | 12 | 9 => p.syntax.function,
-        7 | 8 => p.syntax.property,
+        7 | 8 | 24 => p.syntax.property,
         13 => p.syntax.variable,
         14 | 22 => p.syntax.constant,
         2..=4 => p.syntax.keyword,
@@ -332,5 +334,18 @@ pub fn hover_at(state: &mut AppState, pos: Vec2) {
     if state.outline.hover != hover {
         state.outline.hover = hover;
         state.dirty = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gdscript_signals_get_their_own_marker() {
+        assert_eq!(symbol_glyph(24), "S");
+        assert_ne!(symbol_glyph(24), symbol_glyph(13));
+        let p = crate::theme::Theme::dark().p;
+        assert_eq!(symbol_color(24, &p), p.syntax.property);
     }
 }
