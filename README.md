@@ -149,8 +149,6 @@ reproduce them.
   search and replace-in-files with confirmation and conflict checks.
 - **Markdown** — edit/split/preview-only per document; headings, inline styles,
   nested lists/quotes, code blocks, tables with alignment, scroll sync.
-- **Image assets** — image files open in a read-only preview tab (PNG decoded,
-  fit to the pane); **Image Preview** is on by default.
 - **Language** — Rust/C/C++/JS/TS/Go/GDScript/Python/JSON/TOML/Markdown
   highlighting, data-only JSON language packs, and LSP for Rust/Go/TS/JS/C/C++/
   Python/GDScript (diagnostics, hover, completion, definition, symbols).
@@ -186,7 +184,6 @@ Module ownership and the full file map: [docs/code-map.md](docs/code-map.md).
 Delivered through M14: shell/editing/tabs, native dialogs, find/replace,
 Markdown preview, syntax/packs, Quick Open/project search, split/scroll sync,
 tab drag/context menu, soft wrap, external changes, Git, PTY terminal, LSP
-(Rust/Godot), macOS integration, settings, recovery and read-only image-asset
-preview tabs.
+(Rust/Godot), macOS integration, settings and recovery.
 
 Known gaps and next candidates are tracked in [docs/roadmap.md](docs/roadmap.md).

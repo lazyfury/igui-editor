@@ -38,10 +38,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     // Right-aligned facts first, so the left side knows exactly how much room
     // it has (a message must never run under them).
     let mut right = rect.right() - 10.0;
-    let image = state.ws.active_doc().is_some_and(|doc| doc.is_image_view());
-    let kind = if image {
-        "IMG"
-    } else if crate::state::ViewMode::for_path(state.ws.active_doc().and_then(|doc| doc.path()))
+    let kind = if crate::state::ViewMode::for_path(state.ws.active_doc().and_then(|doc| doc.path()))
         == crate::state::ViewMode::Edit
     {
         "TXT"
@@ -54,14 +51,10 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         crate::state::ViewMode::Preview => "PREVIEW",
     };
     let mode = format!("{kind} · {view}");
-    let language = if image {
-        "IMAGE".into()
-    } else {
-        state
-            .language_name()
-            .map(|name| name.to_uppercase())
-            .unwrap_or_else(|| "TEXT".into())
-    };
+    let language = state
+        .language_name()
+        .map(|name| name.to_uppercase())
+        .unwrap_or_else(|| "TEXT".into());
     let size = state
         .ws
         .active_doc()
@@ -188,9 +181,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             _ => "VIM VISUAL",
         });
     }
-    if !image {
-        facts.extend([size.as_str(), "UTF-8", spaces.as_str()]);
-    }
+    facts.extend([size.as_str(), "UTF-8", spaces.as_str()]);
     let wrap_effective = state.session.soft_wrap
         && state.ws.active_doc().is_some_and(|doc| {
             doc.text().len() <= crate::model::wrap::MAX_WRAP_BYTES

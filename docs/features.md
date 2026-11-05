@@ -477,26 +477,6 @@ asks for confirmation, then rewrites files atomically:
 - caps at 200 files per run; failures are listed, the rest still applies;
 - there is no cross-file undo — commit or back up first.
 
-## Image assets
-
-Opening an image file from the Explorer, Quick Open, a drop or the CLI mounts a
-**read-only image preview tab** instead of trying to decode the bytes as UTF-8.
-The preview fits the asset into the editor pane with its aspect ratio, paints a
-thin border and shows the pixel dimensions; the status bar reads `READ-ONLY`,
-so Save/Format/Edit commands leave the file untouched. This is an asset viewer,
-not image editing (still out of scope).
-
-**Image Preview** is on by default and can be turned off in Settings; the tab
-then shows a one-line explanation instead of decoding. PNG is decoded through
-the engine's `igui_assets` codec and uploaded as a backend texture in `update` —
-painters only read the cached handle, and no file IO happens during a frame.
-Other binary image extensions still open the image tab (so the bytes are not
-shown as binary text) and explain, without a red error status, that only PNG can
-be displayed. **SVG is not an image tab**: it is text, so it opens in the normal
-editor as SVG source. The cache is keyed by path and invalidated when the
-external-change poll sees a reload; switching away and back does not re-read the
-file.
-
 ## Scroll sync (`⇧⌘Y`, View menu)
 
 In Split view the editor and rendered preview stay in step. Markdown blocks
@@ -518,7 +498,6 @@ setting is persisted in the session. Preview-only and Edit modes ignore it.
 | Auto Pairs | on / off (see [Typing aids](#typing-aids-auto-pairs-and-markdown-lists)) |
 | Syntax Highlight | on / off |
 | Autosave | on / off |
-| Image Preview | on / off (read-only image asset tabs; default on) |
 | Sidebar Width | 180–420 px |
 | Hidden Files | on / off (dot entries in the Explorer; default off) |
 | Ignored Files | OFF / DIM / HIDE (generated + temp files; default DIM) |
@@ -617,8 +596,7 @@ prompt open with `line must be 1..=<count>` and editing clears that error. `Esc`
 or a click outside closes it without moving; a click inside is consumed.
 
 macOS uses literal `Ctrl+G` and `Cmd+L`; other platforms use `Ctrl+L`, so
-`Ctrl+G` stays Find Next. Image preview tabs have no lines, report that as a
-status and never open the prompt.
+`Ctrl+G` stays Find Next.
 
 ## Select Next Occurrence (`⌘D`, Edit menu)
 
@@ -767,8 +745,8 @@ remembered per document and the last ratio is persisted.
   are marked dirty so the first save writes them back.
 - **Window state**: size, position and the maximized flag are persisted and
   restored (fullscreen is not persisted).
-- Session format is version 17 (v17 added `image_preview`;
-  v16 added `show_hidden` and `ignored_files`;
+- Session format is version 18 (v18 removed the image-preview key; v17 added
+  `image_preview`; v16 added `show_hidden` and `ignored_files`;
   v15 added `bottom_tab` and
   `indent_tabs`; v14 split
   `recent_project.*` / `recent_file.*`; v13 added `trust_local_servers`, v12

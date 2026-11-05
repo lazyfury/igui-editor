@@ -53,7 +53,6 @@ mod find;
 mod format;
 mod git;
 mod goto_line;
-mod images;
 mod keymap;
 mod lsp;
 mod modal;
@@ -75,7 +74,6 @@ mod watch;
 mod workspace;
 
 pub use dock::{DockId, Panel};
-pub use images::{ImageStatus, ImageStore};
 pub use outline::{MarkdownOutline, MARKDOWN_HEADING_KIND};
 pub use references::ReferencesUi;
 
@@ -340,7 +338,7 @@ impl Action {
             Action::SelectAll => doc.is_some(),
             Action::SelectNextOccurrence => doc.is_some(),
             Action::FindNext | Action::FindPrevious => doc.is_some(),
-            Action::GotoLine => doc.is_some_and(|doc| !doc.is_image_view()),
+            Action::GotoLine => doc.is_some(),
             Action::CycleView => doc.is_some(),
             Action::DeleteLine
             | Action::DuplicateLine
@@ -1307,8 +1305,6 @@ pub struct AppState {
     pub(crate) built_view: ViewMode,
     /// Whether the shell currently mounts the documentation view.
     pub(crate) built_docs: bool,
-    /// Whether the shell currently mounts the image preview tab.
-    pub(crate) built_image: bool,
     /// Split ratio the shell was last built for.
     pub(crate) built_split: f32,
     /// Set when the next frame should repaint (paint cache invalidation).
@@ -1329,8 +1325,6 @@ pub struct AppState {
     pub(crate) config_path: PathBuf,
     pub(crate) config_dirty: bool,
     pub(crate) preview: PreviewUi,
-    /// Decoded image assets for the read-only image tab.
-    pub(crate) images: ImageStore,
     /// Window title last pushed to the platform.
     pub(crate) title: String,
     // -- M3 --------------------------------------------------------------
@@ -1503,7 +1497,6 @@ impl AppState {
             needs_rebuild: false,
             built_view: ViewMode::Edit,
             built_docs: false,
-            built_image: false,
             built_split: 0.5,
             dirty: true,
             focus: Focus::Editor,
@@ -1518,7 +1511,6 @@ impl AppState {
             config_path,
             config_dirty: false,
             preview: PreviewUi::default(),
-            images: ImageStore::default(),
             title,
             settings,
             services,
@@ -1704,7 +1696,6 @@ fn settings_from_session(session: &Session) -> Settings {
         auto_pairs: session.auto_pairs,
         syntax: session.syntax,
         autosave: session.autosave,
-        image_preview: session.image_preview,
         lsp: session.lsp,
         trust_local_servers: session.trust_local_servers,
         sidebar_width: session.sidebar_width,

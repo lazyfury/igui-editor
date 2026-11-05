@@ -275,17 +275,17 @@ Files: `src/keymap.rs`, `src/state/actions.rs`, `src/state/goto_line.rs` +
 - Selfcheck drives the host shortcut (`Ctrl+G` on macOS, `Ctrl+L` elsewhere),
   the prefill, a valid jump and Esc; state and keymap unit tests cover the rest.
 
-### 3.3 Preview links and local images (F14)
+### 3.3 Preview links (F14; images stay `▢ alt`)
 
 Files: `src/model/markdown.rs`, `src/ui/preview.rs`, `src/state/lsp.rs`
-(scheme allowlist), `src/state/images.rs` if an image is reused.
+(scheme allowlist).
 
 - Record link hit rectangles in the preview layout (same geometry for paint and
   click; no second layout).
 - External links: reuse the existing web/mail scheme allowlist; refuse
   `file:`/`javascript:`.
-- Relative `.md` links open in a tab; local images render through the existing
-  decoded-image path when cheap, or stay `▢ alt` with a documented limitation.
+- Relative `.md` links open in a tab; local images stay `▢ alt` (the image
+  preview was removed in Session 5).
 - Cull off-screen link/image primitives; keep the large-file debounce.
 
 Acceptance: `check.sh`; selfcheck click on a link opens the target; `bench.sh`

@@ -263,13 +263,6 @@ impl AppState {
     /// Re-opens the workspace after a tab change.
     pub fn after_tabs_changed(&mut self) {
         self.ws.validate_active();
-        let open: HashSet<PathBuf> = self
-            .ws
-            .tabs
-            .iter()
-            .filter_map(|doc| doc.path().map(Path::to_path_buf))
-            .collect();
-        self.images.prune(&open);
         self.tabs.reveal_active = true;
         self.request_git_refresh();
         self.sync_layout();

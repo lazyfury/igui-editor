@@ -216,8 +216,6 @@ impl UndoStack {
 pub enum ViewKind {
     Git,
     Docs,
-    /// A read-only image asset preview.
-    Image,
 }
 
 /// Line ending used by the file on disk.
@@ -455,10 +453,6 @@ impl Document {
         self.view_kind == Some(ViewKind::Docs)
     }
 
-    pub fn is_image_view(&self) -> bool {
-        self.view_kind == Some(ViewKind::Image)
-    }
-
     pub fn view_kind(&self) -> Option<ViewKind> {
         self.view_kind
     }
@@ -508,22 +502,6 @@ impl Document {
         doc.view_key = Some(key.into());
         doc.view_kind = Some(ViewKind::Docs);
         doc.rebuild_lines();
-        doc
-    }
-
-    /// A read-only tab for an image asset. The buffer stays empty: the image
-    /// view paints the decoded texture, and the path is what identifies it.
-    pub fn image_view(id: u64, path: impl Into<PathBuf>) -> Self {
-        let path = path.into();
-        let name = path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| path.to_string_lossy().into_owned());
-        let mut doc = Self::untitled(id, 1);
-        doc.path = Some(path);
-        doc.name = name;
-        doc.read_only = true;
-        doc.view_kind = Some(ViewKind::Image);
         doc
     }
 

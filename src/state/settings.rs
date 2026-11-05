@@ -253,7 +253,6 @@ impl AppState {
             Row::AutoPairs => on_off(self.settings.auto_pairs),
             Row::Syntax => on_off(self.settings.syntax),
             Row::Autosave => on_off(self.settings.autosave),
-            Row::ImagePreview => on_off(self.settings.image_preview),
             Row::LanguageIntelligence => on_off(self.settings.lsp),
             Row::TrustLocalServers => on_off(self.settings.trust_local_servers),
             Row::SidebarWidth => format!("{} px", self.settings.sidebar_width as i32),
@@ -320,18 +319,6 @@ impl AppState {
             Row::Autosave => {
                 self.settings.autosave = !self.settings.autosave;
                 self.settings_changed();
-            }
-            Row::ImagePreview => {
-                self.settings.image_preview = !self.settings.image_preview;
-                self.settings_changed();
-                self.status(format!(
-                    "image preview: {}",
-                    if self.settings.image_preview {
-                        "ON"
-                    } else {
-                        "OFF"
-                    }
-                ));
             }
             Row::LanguageIntelligence => {
                 self.set_lsp_enabled(!self.settings.lsp);
@@ -444,7 +431,6 @@ impl AppState {
         self.session.auto_pairs = self.settings.auto_pairs;
         self.session.syntax = self.settings.syntax;
         self.session.autosave = self.settings.autosave;
-        self.session.image_preview = self.settings.image_preview;
         self.session.lsp = self.settings.lsp;
         self.session.trust_local_servers = self.settings.trust_local_servers;
         self.session.sidebar_width = self.settings.sidebar_width;

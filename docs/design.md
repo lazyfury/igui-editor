@@ -446,23 +446,6 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    immediately (size-capped). This rejects stale results instead of corrupting a
    file, at the cost of asking the user to retry after a concurrent edit.
 
-44. **Image assets get a read-only preview tab, on by default.** Opening a PNG
-   (or another recognized image extension) mounts `ui::image` instead of the
-   text editor, so binary data never reaches `Document::open`. The tab is a
-   normal document for tabs/session/dirty-close (read-only, empty buffer, path
-   identity), while `state::images` owns IO: `update` decodes PNG through the
-   engine's `igui_assets` codec, uploads the RGBA8 bytes through a
-   backend-neutral closure installed by the host (`SharedBackend` in the window;
-   recording/headless runs leave it unset) and caches the `TextureId` by path.
-   Painters only read the cached handle and fit it to the pane, so `ui/` still
-   does no file IO and no frame pays a decode. Non-PNG binary formats keep the
-   tab and show a neutral limitation (not `state.error`) instead of falling back
-   to binary text; SVG is excluded from the image set because it is text and
-   opens in the editor. The external-change poll invalidates the cache and the
-   tab re-reads once. The
-   **Image Preview** setting (session v17) defaults on and only changes the
-   presentation, not which files open in the tab.
-
 ## Theme spec (geek / compact / no corners)
 
 Rules:
@@ -588,9 +571,8 @@ caret, vim application cursor mode, live PTY repaint, vt100 scrollback,
 inclusive cell selection/copy, multiple shell tabs and a tabbed bottom dock that
 shares one header with the workspace-wide PROBLEMS panel.
 
-**M14 (done)** — read-only image-asset preview tabs (PNG decoded through
-`igui_assets` and uploaded as a texture), **Image Preview** setting on by
-default, session v17.
+**M14 (superseded)** — image-asset preview tabs were removed in the Session 5
+reduction; the editor is not an asset viewer.
 
 Next candidates: Git discard/branch/network operations, Dock reopen, cross-file
 undo and incremental preview layout for very large documents.

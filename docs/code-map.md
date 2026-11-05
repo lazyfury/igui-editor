@@ -32,7 +32,6 @@ src/
   model/fs_tree.rs    lazy sidebar tree (dirs first, visibility filter per session)
   model/ignore.rs     Explorer ignore rules + OFF/DIM/HIDE mode for tool files
   model/fsutil.rs     atomic temp+fsync+rename writer shared by model IO
-  model/image.rs      image-asset extension detection for the preview tab
   model/markdown.rs   Markdown event stream -> flat block model
   model/session.rs    key=value session file (atomic write, escaping, v17)
   model/watch.rs      directory snapshots, change diffs, watcher globs
@@ -49,7 +48,6 @@ src/
   ui/problems.rs      bottom-dock PROBLEMS list (workspace diagnostics, jump)
   ui/tooling.rs       missing-tool prompt (copy-only install command)
   ui/docs_view.rs     dedicated read-only docs tab view (wrap + link hit-test)
-  ui/image.rs         read-only image asset tab (fit + texture; no file IO)
   ui/outline.rs       right document-symbol outline
   ui/tree.rs          shared Explorer/outline tree row renderer
   ui/icon.rs          embedded Lucide icons, cached igui_svg documents + painter
@@ -69,7 +67,6 @@ src/
   state/{settings,view,reliability,services,new_file,quick_open,references,rename_symbol}.rs
                       settings, layout, autosave/recovery and prompt state
   state/watch.rs      external-change poll: visible directories -> FileEvents
-  state/images.rs     image decode/texture cache for the read-only image tab
   state/schedule.rs   time-based wakeup deadlines (status/hover/autosave/poll)
   theme.rs            geek palette + compact metrics
   kit.rs              control-node construction and text/line helpers

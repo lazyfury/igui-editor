@@ -10,7 +10,6 @@ pub mod git;
 pub mod goto_line;
 pub mod handle;
 pub mod icon;
-pub mod image;
 pub mod lsp;
 pub mod menu;
 pub mod modal;

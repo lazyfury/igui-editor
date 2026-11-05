@@ -26,7 +26,7 @@ const MAX_RECENT: usize = 8;
 /// Persisted application state. Missing/corrupt files fall back to defaults.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Session {
-    /// Format version (currently `17`); unknown keys are ignored so
+    /// Format version (currently `18`); unknown keys are ignored so
     /// older/newer files keep loading.
     pub version: u32,
     /// `"dark"` or `"light"`.
@@ -70,8 +70,6 @@ pub struct Session {
     pub autosave: bool,
     /// Language servers enabled.
     pub lsp: bool,
-    /// Decode and display image assets in a read-only preview tab.
-    pub image_preview: bool,
     /// Allow repository-local language-server binaries.
     pub trust_local_servers: bool,
     /// Per-path language overrides (provider name).
@@ -104,7 +102,7 @@ pub struct WindowGeometry {
 impl Default for Session {
     fn default() -> Self {
         Self {
-            version: 17,
+            version: 18,
             theme: "dark".into(),
             sidebar: true,
             outline: true,
@@ -127,7 +125,6 @@ impl Default for Session {
             split: 0.5,
             autosave: true,
             lsp: true,
-            image_preview: true,
             trust_local_servers: false,
             languages: Vec::new(),
             sync_scroll: true,
@@ -197,7 +194,6 @@ impl Session {
                 "split" => session.split = value.parse().unwrap_or(session.split),
                 "autosave" => session.autosave = value == "1",
                 "lsp" => session.lsp = value == "1",
-                "image_preview" => session.image_preview = value == "1",
                 "trust_local_servers" => session.trust_local_servers = value == "1",
                 "sync_scroll" => session.sync_scroll = value == "1",
                 "soft_wrap" => session.soft_wrap = value == "1",
@@ -275,7 +271,7 @@ impl Session {
     pub fn render(&self) -> String {
         let mut out = String::new();
         // Always write the current format; parsing older files still works.
-        out.push_str("version=17\n");
+        out.push_str("version=18\n");
         out.push_str(&format!("theme={}\n", self.theme));
         out.push_str(&format!("sidebar={}\n", u8::from(self.sidebar)));
         out.push_str(&format!("outline={}\n", u8::from(self.outline)));
@@ -299,7 +295,6 @@ impl Session {
         out.push_str(&format!("split={}\n", self.split));
         out.push_str(&format!("autosave={}\n", u8::from(self.autosave)));
         out.push_str(&format!("lsp={}\n", u8::from(self.lsp)));
-        out.push_str(&format!("image_preview={}\n", u8::from(self.image_preview)));
         out.push_str(&format!(
             "trust_local_servers={}\n",
             u8::from(self.trust_local_servers)
@@ -485,7 +480,6 @@ mod tests {
             split: 0.6,
             autosave: false,
             lsp: false,
-            image_preview: false,
             trust_local_servers: true,
             show_hidden: true,
             ignored_files: "hide".into(),
@@ -527,13 +521,13 @@ mod tests {
     }
 
     #[test]
-    fn old_sessions_default_image_preview_to_on() {
-        let path = temp_path("image-default");
+    fn sessions_with_a_removed_key_still_load() {
+        let path = temp_path("removed-key");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, "version=16\ntheme=dark\n").unwrap();
+        fs::write(&path, "version=17\ntheme=light\nimage_preview=0\n").unwrap();
         let session = Session::load(&path);
-        assert!(session.image_preview);
-        assert_eq!(session.version, 16);
+        assert_eq!(session.version, 17);
+        assert_eq!(session.theme, "light");
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 

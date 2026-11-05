@@ -9,7 +9,7 @@
 use super::*;
 
 impl AppState {
-    /// Opens the Go to Line prompt. Image previews have no lines.
+    /// Opens the Go to Line prompt.
     pub fn open_goto_line(&mut self) {
         if self.goto_line.open
             || self.new_file.open
@@ -21,10 +21,6 @@ impl AppState {
         let Some(doc) = self.ws.active_doc() else {
             return;
         };
-        if doc.is_image_view() {
-            self.status("image preview has no lines");
-            return;
-        }
         let line = doc.line_col().0 + 1;
         self.settings_open = false;
         self.quick_open.open = false;

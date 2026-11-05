@@ -43,8 +43,9 @@ shortcuts now have one source, saves are atomic with EOL preservation, find and
 Replace All are bounded/batched, terminal clipboard commands are focus-aware,
 sidebar rows are cached and external URLs are scheme-restricted.
 
-Delivered (M14): read-only image-asset preview tabs with a default-on **Image
-Preview** setting (PNG decoded and uploaded as a texture), session v17.
+Reduced (M15, Session 5): image-asset preview, Git staging/commit/history,
+Material file-type icons and the extra language-server specs were removed;
+undo history and crash snapshots are bounded. Session v18 drops `image_preview`.
 
 Next candidates: cross-file undo and incremental preview layout for very large
 documents.

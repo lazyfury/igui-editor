@@ -129,11 +129,8 @@ impl Workspace {
             }
         }
         let id = self.take_id();
-        let doc = if crate::model::image::is_image_path(&path) {
-            Document::image_view(id, &path)
-        } else {
-            Document::open(id, &path).map_err(|error| format!("{}: {error}", path.display()))?
-        };
+        let doc =
+            Document::open(id, &path).map_err(|error| format!("{}: {error}", path.display()))?;
         // Make sure the file is visible in the sidebar (expand its ancestors).
         if self.folder_open && path.starts_with(&self.root) {
             if let Some(parent) = path.parent() {
@@ -191,9 +188,6 @@ impl Workspace {
         let doc = match kind {
             ViewKind::Git => Document::view(id, name, text, key),
             ViewKind::Docs => Document::docs_view(id, name, text, key),
-            // Image tabs are opened by path through [`Workspace::open`]; a
-            // synthetic key/text image view is not a meaningful request.
-            ViewKind::Image => return self.active,
         };
         self.tabs.push(doc);
         self.active = self.tabs.len() - 1;

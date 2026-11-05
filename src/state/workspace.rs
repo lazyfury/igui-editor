@@ -80,7 +80,6 @@ impl AppState {
         self.problems = ProblemsUi::default();
         self.docs = DocsUi::default();
         self.docs_view = DocsViewUi::default();
-        self.images.clear();
         self.references = ReferencesUi::default();
         self.rename_symbol = RenameSymbolUi::default();
         self.reset_git_project();
@@ -162,9 +161,6 @@ impl AppState {
             self.external.insert(path.clone(), current);
             if current.is_none() {
                 let name = self.ws.tabs[index].name().to_string();
-                if self.ws.tabs[index].is_image_view() {
-                    self.images.invalidate(&path);
-                }
                 self.error(format!("{name} was deleted on disk"));
                 self.dirty = true;
                 continue;
@@ -200,24 +196,6 @@ impl AppState {
         else {
             return;
         };
-        let image_view = self.ws.tabs.get(tab).is_some_and(|doc| doc.is_image_view());
-        if image_view {
-            let name = self
-                .ws
-                .tabs
-                .get(tab)
-                .map(|doc| doc.name().to_string())
-                .unwrap_or_default();
-            self.images.invalidate(&path);
-            self.remember_disk(&path);
-            self.dirty = true;
-            if report {
-                self.status(format!("reloaded {name} from disk"));
-            } else {
-                self.status(format!("{name} changed on disk — reloaded"));
-            }
-            return;
-        }
         let Some(doc) = self.ws.tabs.get_mut(tab) else {
             return;
         };
