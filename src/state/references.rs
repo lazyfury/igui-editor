@@ -125,7 +125,7 @@ impl AppState {
 }
 
 /// Identifier at `caret` (byte offset), if any.
-fn word_at(doc: &Document, caret: usize) -> Option<String> {
+pub(crate) fn word_at(doc: &Document, caret: usize) -> Option<String> {
     let text = doc.text();
     let caret = caret.min(text.len());
     let mut start = caret;

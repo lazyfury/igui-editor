@@ -20,6 +20,7 @@ pub mod project_search;
 pub mod quick_open;
 pub mod recovery;
 pub mod references;
+pub mod rename_symbol;
 pub mod scroll;
 pub mod settings;
 pub mod sidebar;

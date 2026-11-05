@@ -158,6 +158,12 @@ diagnostics/semantic tokens/outline. The same switch is the
   under the caret are tinted after a 120 ms pause (`documentHighlight`) and
   cleared when the caret leaves the symbol, a selection starts, or the editor
   loses focus; edits refresh them because the ranges belong to the old text.
+- `F2` renames the symbol at the caret. `prepareRename` gates the prompt (native
+  symbols are rejected), then the server's workspace edit is applied after every
+  range is re-checked against the old name and the requesting document's
+  revision. Open tabs are edited as one undo step each (and stay dirty); files
+  that are not open are written immediately (8 MB cap). A rename touching more
+  than 50 files is refused.
 - When a hover is a Godot native class or member, the card shows **OPEN GODOT
   DOCS**; clicking it opens a **read-only editor tab** backed by Godot's
   `textDocument/nativeSymbol` response. The tab uses the normal file-tab strip,
@@ -213,8 +219,12 @@ cargo run --release -- "/path/to/godot_project/new_script.gd"
 `IGUI_EDITOR_GODOT_LSP` can point at another editor language-server address
 (`host:port`, `:port` or `port`; default `127.0.0.1:6005`). The editor is left
 running; the client only owns the socket. Godot's server sends diagnostics,
-hover, completion, definition and document symbols; semantic tokens are not
-provided by Godot, so the syntax palette remains in charge of token colors.
+hover, completion, definition and document symbols; 4.7 also advertises
+signature help, references, occurrence highlights and prepareRename/rename,
+which the client uses when the server offers them. Semantic tokens, formatting,
+code actions, folding ranges and workspace symbols are still `Method not found`
+in Godot, so the client does not request them; the syntax palette remains in
+charge of token colors.
 
 Godot's language server does not understand
 `workspace/didChangeWatchedFiles`, and its project scan (the source of the

@@ -58,6 +58,7 @@ mod quick_open;
 mod references;
 mod reliability;
 mod rename;
+mod rename_symbol;
 mod search;
 mod services;
 mod settings;
@@ -206,6 +207,7 @@ pub enum Action {
     LspCompletion,
     LspDefinition,
     LspReferences,
+    LspRename,
     /// Drops and restarts the active document's language server.
     LspRestart,
     ToggleTerminal,
@@ -268,6 +270,7 @@ impl Action {
             Action::LspCompletion => "Complete".into(),
             Action::LspDefinition => "Go to Definition".into(),
             Action::LspReferences => "Find All References".into(),
+            Action::LspRename => "Rename Symbol".into(),
             Action::LspRestart => "Restart Language Server".into(),
             Action::ToggleTerminal => "Terminal".into(),
             Action::Settings => "Settings…".into(),
@@ -348,6 +351,7 @@ impl Action {
             | Action::LspCompletion
             | Action::LspDefinition
             | Action::LspReferences
+            | Action::LspRename
             | Action::LspRestart => doc
                 .and_then(|doc| doc.path())
                 .is_some_and(|path| state.lsp.supports(path)),
@@ -1119,6 +1123,29 @@ impl Default for QuickOpenState {
     }
 }
 
+/// `F2` symbol-rename prompt and its server context.
+pub struct RenameSymbolUi {
+    pub open: bool,
+    pub old_name: String,
+    pub context: Option<model_lsp::RenameContext>,
+    pub name: TextEdit,
+    pub error: Option<String>,
+    pub preedit: Option<String>,
+}
+
+impl Default for RenameSymbolUi {
+    fn default() -> Self {
+        Self {
+            open: false,
+            old_name: String::new(),
+            context: None,
+            name: TextEdit::new(""),
+            error: None,
+            preedit: None,
+        }
+    }
+}
+
 /// Which search field owns typing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum SearchFocus {
@@ -1304,6 +1331,7 @@ pub struct AppState {
     pub drop_hover: bool,
     pub quick_open: QuickOpenState,
     pub references: ReferencesUi,
+    pub rename_symbol: RenameSymbolUi,
     pub new_file: NewFileState,
     /// Split-view nodes (for drag resizing) and the divider rectangle.
     /// Editor/preview control for the active view (vertical band anchor).
@@ -1480,6 +1508,7 @@ impl AppState {
             drop_hover: false,
             quick_open: QuickOpenState::default(),
             references: ReferencesUi::default(),
+            rename_symbol: RenameSymbolUi::default(),
             new_file: NewFileState::default(),
             search: SearchState::default(),
             content_node: None,

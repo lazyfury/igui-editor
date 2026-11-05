@@ -454,6 +454,7 @@ impl EditorApp {
         ui::new_file::paint(&mut state, measurer.as_ref(), ctx);
         ui::project_search::paint(&mut state, measurer.as_ref(), ctx);
         ui::references::paint(&mut state, measurer.as_ref(), ctx);
+        ui::rename_symbol::paint(&mut state, measurer.as_ref(), ctx);
         ui::lsp::paint(&mut state, measurer.as_ref(), ctx);
         ui::tooling::paint(&mut state, measurer.as_ref(), ctx);
         ui::drop::paint(&state, measurer.as_ref(), ctx);
@@ -570,6 +571,10 @@ impl EditorApp {
                 }
                 if state.git.diff_visible {
                     ui::git::click_diff(&mut state, *position);
+                    return EventResult::Handled;
+                }
+                if state.rename_symbol.open {
+                    ui::rename_symbol::click(&mut state, *position);
                     return EventResult::Handled;
                 }
                 if state.references.open {
@@ -935,6 +940,9 @@ impl EditorApp {
                 if state.tooling.prompt.is_some() {
                     return EventResult::Handled;
                 }
+                if state.rename_symbol.open {
+                    return EventResult::Handled;
+                }
                 if state.references.open {
                     let panel = ui::references::layout(&state).panel;
                     if panel.contains(*position) {
@@ -976,6 +984,11 @@ impl EditorApp {
                     return EventResult::Handled;
                 }
                 if state.references.open && ui::references::on_key(&mut state, *key, modifiers) {
+                    return EventResult::Handled;
+                }
+                if state.rename_symbol.open
+                    && ui::rename_symbol::on_key(&mut state, *key, modifiers)
+                {
                     return EventResult::Handled;
                 }
                 if state.settings_open && ui::settings::on_key(&mut state, *key, modifiers) {
@@ -1122,6 +1135,10 @@ impl EditorApp {
                     return EventResult::Handled;
                 }
                 let mut state = self.state.borrow_mut();
+                if state.rename_symbol.open {
+                    ui::rename_symbol::on_text(&mut state, text);
+                    return EventResult::Handled;
+                }
                 if state.settings_open
                     || state.recovery_prompt.is_some()
                     || state.menu_open.is_some()
@@ -1245,6 +1262,10 @@ impl EditorApp {
                     if let igui_core::ImeEvent::Commit(text) = ime {
                         ui::git::commit_text(&mut state, text);
                     }
+                    return EventResult::Handled;
+                }
+                if state.rename_symbol.open {
+                    ui::rename_symbol::on_ime(&mut state, ime);
                     return EventResult::Handled;
                 }
                 if state.new_file.open {

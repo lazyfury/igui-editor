@@ -422,6 +422,17 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    Previews are filled once per response from open buffers or a 4 MB-capped disk
    read, never per frame.
 
+43. **A rename is validated before any file is written.** The server's
+   `prepareRename` gates the prompt, and the returned workspace edit is not
+   trusted blindly: every range is converted against the buffer the server saw,
+   the text under it must still equal the old identifier, the requesting
+   document's revision must be unchanged, and the edit list must be
+   non-overlapping. Only after the whole plan validates are files touched.
+   Per-file edits are one undo step; open tabs stay dirty so the normal
+   save/autosave path owns them, while files that are not open are written
+   immediately (size-capped). This rejects stale results instead of corrupting a
+   file, at the cost of asking the user to retry after a concurrent edit.
+
 ## Theme spec (geek / compact / no corners)
 
 Rules:

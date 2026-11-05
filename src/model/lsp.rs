@@ -74,6 +74,28 @@ pub struct ServerCapabilities {
     pub prepare_rename: bool,
 }
 
+/// One text edit from a `workspace/rename` response.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkspaceTextEdit {
+    pub path: PathBuf,
+    pub start_line: u32,
+    pub start_char: u32,
+    pub end_line: u32,
+    pub end_char: u32,
+    pub new_text: String,
+}
+
+/// The document the rename was requested for, used to reject stale edits.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RenameContext {
+    pub doc_id: u64,
+    pub rev: u64,
+    pub path: PathBuf,
+    pub old_name: String,
+    /// Chosen in the prompt; empty while only preparing.
+    pub new_name: String,
+}
+
 /// One LSP range in UTF-16 line/column coordinates (occurrence highlights).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TextRange {
@@ -252,6 +274,8 @@ enum PendingKind {
     SignatureHelp,
     Highlights(PathBuf),
     References { symbol: String },
+    PrepareRename,
+    Rename,
     Definition,
     NativeSymbol { class: String, symbol: String },
     Semantic(PathBuf),
@@ -1477,6 +1501,10 @@ pub struct LspController {
     pub signature_help: Option<SignatureHelpUi>,
     /// Pending result of `textDocument/references`: symbol name + locations.
     references: Option<(String, Vec<Location>)>,
+    /// Context captured for prepareRename/rename, and their results.
+    rename_context: Option<RenameContext>,
+    prepare_result: Option<Option<String>>,
+    rename_result: Option<Vec<WorkspaceTextEdit>>,
     native_docs_target: Option<NativeTarget>,
     location: Option<Location>,
     native_result: Option<(String, String, NativeSymbol)>,
@@ -1514,6 +1542,9 @@ impl Default for LspController {
             completion_prefix: String::new(),
             signature_help: None,
             references: None,
+            rename_context: None,
+            prepare_result: None,
+            rename_result: None,
             native_docs_target: None,
             location: None,
             native_result: None,
@@ -1652,6 +1683,9 @@ impl LspController {
         self.completion_prefix.clear();
         self.signature_help = None;
         self.references = None;
+        self.rename_context = None;
+        self.prepare_result = None;
+        self.rename_result = None;
         self.native_docs_target = None;
         self.location = None;
         self.native_result = None;
@@ -2113,6 +2147,18 @@ impl LspController {
                     self.changed = true;
                 }
             }
+            PendingKind::PrepareRename => {
+                if is_active {
+                    self.prepare_result = Some(parse_prepare_rename(&result));
+                    self.changed = true;
+                }
+            }
+            PendingKind::Rename => {
+                if is_active {
+                    self.rename_result = Some(parse_workspace_edit(&result));
+                    self.changed = true;
+                }
+            }
             PendingKind::Definition => {
                 if is_active {
                     self.location = parse_location(&result);
@@ -2360,6 +2406,90 @@ impl LspController {
 
     pub fn take_references(&mut self) -> Option<(String, Vec<Location>)> {
         self.references.take()
+    }
+
+    /// `F2` step one: ask whether the symbol can be renamed. Returns `None`
+    /// until the server answers.
+    pub fn request_prepare_rename(&mut self, doc: &Document, old_name: &str) -> bool {
+        let Some(path) = doc.path().map(Path::to_path_buf) else {
+            return false;
+        };
+        {
+            let Some(session) = self.active_session_mut() else {
+                return false;
+            };
+            if !session.capabilities.prepare_rename || session.status != LspStatus::Ready {
+                return false;
+            }
+            session
+                .pending
+                .retain(|_, (kind, _)| !matches!(kind, PendingKind::PrepareRename));
+        }
+        self.prepare_result = None;
+        self.rename_context = Some(RenameContext {
+            doc_id: doc.id(),
+            rev: doc.rev(),
+            path,
+            old_name: old_name.to_string(),
+            new_name: String::new(),
+        });
+        self.send_position(
+            "textDocument/prepareRename",
+            PendingKind::PrepareRename,
+            doc,
+        )
+    }
+
+    /// The prepare result plus the context, or `None` while still pending.
+    /// `Some(None)` means the server refused (native symbol, no rename).
+    pub fn take_prepare_rename(&mut self) -> Option<(RenameContext, Option<String>)> {
+        let result = self.prepare_result.take()?;
+        let context = self.rename_context.take()?;
+        Some((context, result))
+    }
+
+    /// `F2` step two: ask for the workspace edit using a new name.
+    pub fn request_rename(&mut self, doc: &Document, new_name: &str, old_name: &str) -> bool {
+        let Some(path) = doc.path().map(Path::to_path_buf) else {
+            return false;
+        };
+        {
+            let Some(session) = self.active_session_mut() else {
+                return false;
+            };
+            if !session.capabilities.rename || session.status != LspStatus::Ready {
+                return false;
+            }
+            session
+                .pending
+                .retain(|_, (kind, _)| !matches!(kind, PendingKind::Rename));
+        }
+        self.rename_result = None;
+        self.rename_context = Some(RenameContext {
+            doc_id: doc.id(),
+            rev: doc.rev(),
+            path: path.clone(),
+            old_name: old_name.to_string(),
+            new_name: new_name.to_string(),
+        });
+        let Some(session) = self.active_session_mut() else {
+            return false;
+        };
+        session.send_position_with(
+            "textDocument/rename",
+            PendingKind::Rename,
+            &path,
+            doc,
+            doc.caret(),
+            json!({"newName": new_name}),
+        )
+    }
+
+    /// The edit list plus the context captured at request time.
+    pub fn take_rename(&mut self) -> Option<(RenameContext, Vec<WorkspaceTextEdit>)> {
+        let edits = self.rename_result.take()?;
+        let context = self.rename_context.take()?;
+        Some((context, edits))
     }
 
     pub fn symbols_for(&self, path: &Path) -> &[OutlineSymbol] {
@@ -3319,6 +3449,76 @@ fn parse_completions(result: &Value, prefix: &str) -> Vec<CompletionItem> {
     parsed
 }
 
+/// `prepareRename` answers with `{range, placeholder?}` or a bare range.
+/// `None` means the server cannot rename this symbol.
+fn parse_prepare_rename(result: &Value) -> Option<String> {
+    if result.is_null() {
+        return None;
+    }
+    if result.get("start").is_some() {
+        return Some(String::new());
+    }
+    if result.get("range").is_some() {
+        return Some(
+            result["placeholder"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+        );
+    }
+    None
+}
+
+/// Folds `workspace/rename`'s `changes` map and `documentChanges` array into
+/// one flat, bounded edit list.
+fn parse_workspace_edit(result: &Value) -> Vec<WorkspaceTextEdit> {
+    let mut edits = Vec::new();
+    let mut push_edits = |uri: Option<&str>, items: Option<&Vec<Value>>| {
+        let Some(uri) = uri else { return };
+        let Some(path) = uri_to_path(uri) else { return };
+        let Some(items) = items else { return };
+        for item in items.iter().take(2_000) {
+            let range = &item["range"];
+            let start = &range["start"];
+            let end = &range["end"];
+            let (Some(sl), Some(sc), Some(el), Some(ec)) = (
+                start["line"].as_u64(),
+                start["character"].as_u64(),
+                end["line"].as_u64(),
+                end["character"].as_u64(),
+            ) else {
+                continue;
+            };
+            let Some(new_text) = item["newText"].as_str() else {
+                continue;
+            };
+            edits.push(WorkspaceTextEdit {
+                path: path.clone(),
+                start_line: sl as u32,
+                start_char: sc as u32,
+                end_line: el as u32,
+                end_char: ec as u32,
+                new_text: new_text.to_string(),
+            });
+            if edits.len() >= 4_000 {
+                return;
+            }
+        }
+    };
+    if let Some(changes) = result["changes"].as_object() {
+        for (uri, items) in changes {
+            push_edits(Some(uri), items.as_array());
+        }
+    }
+    if let Some(changes) = result["documentChanges"].as_array() {
+        for change in changes.iter().take(100) {
+            let uri = change["textDocument"]["uri"].as_str();
+            push_edits(uri, change["edits"].as_array());
+        }
+    }
+    edits
+}
+
 fn parse_text_ranges(result: &Value) -> Vec<TextRange> {
     let Some(items) = result.as_array() else {
         return Vec::new();
@@ -4201,6 +4401,41 @@ mod tests {
         assert!(enclosing_string_span("# \"not a string", 16).is_none());
         assert!(enclosing_string_span("var x = \"\"\"res://", 17).is_none());
         assert!(enclosing_string_span("preload(\"res://a.gd\") tail", 26).is_none());
+    }
+
+    #[test]
+    fn parses_prepare_and_workspace_rename_edits() {
+        assert!(parse_prepare_rename(&json!(null)).is_none());
+        assert_eq!(
+            parse_prepare_rename(&json!({"range": {}})).as_deref(),
+            Some("")
+        );
+        assert_eq!(
+            parse_prepare_rename(&json!({"range": {}, "placeholder": "player"})).as_deref(),
+            Some("player")
+        );
+        let edits = parse_workspace_edit(&json!({
+            "changes": {
+                "file:///tmp/a.gd": [{
+                    "range": {"start": {"line": 1, "character": 2},
+                              "end": {"line": 1, "character": 8}},
+                    "newText": "hero",
+                }],
+            },
+            "documentChanges": [{
+                "textDocument": {"uri": "file:///tmp/b.gd", "version": 3},
+                "edits": [{
+                    "range": {"start": {"line": 0, "character": 0},
+                              "end": {"line": 0, "character": 4}},
+                    "newText": "hero",
+                }],
+            }],
+        }));
+        assert_eq!(edits.len(), 2);
+        assert_eq!(edits[0].path, PathBuf::from("/tmp/a.gd"));
+        assert_eq!(edits[0].new_text, "hero");
+        assert_eq!((edits[0].start_line, edits[0].start_char), (1, 2));
+        assert_eq!(edits[1].path, PathBuf::from("/tmp/b.gd"));
     }
 
     #[test]

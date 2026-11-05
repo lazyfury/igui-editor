@@ -54,6 +54,7 @@ src/
   ui/tree_menu.rs     file-tree context menu
   ui/settings.rs      settings + Keymap row
   ui/references.rs    Fn/Shift+F12 references overlay (geometry shared by paint/click)
+  ui/rename_symbol.rs  F2 symbol-rename prompt
   ui/terminal.rs      vt100 cell renderer, shell tabs and terminal key encoding
   input.rs            keyboard dispatch: modal -> find -> shortcuts -> tree
   state/mod.rs        AppState value, constructors, menus and hit rects
@@ -62,7 +63,7 @@ src/
   state/{terminal,git,lsp,search}.rs  native services and workers
   state/tooling.rs    missing-tool prompt state, LSP on/off entry point
   state/dock.rs       dock/panel table, open state, tab commands, badges
-  state/{settings,view,reliability,services,new_file,quick_open,references}.rs
+  state/{settings,view,reliability,services,new_file,quick_open,references,rename_symbol}.rs
                       settings, layout, autosave/recovery and prompt state
   state/watch.rs      external-change poll: visible directories -> FileEvents
   state/schedule.rs   time-based wakeup deadlines (status/hover/autosave/poll)

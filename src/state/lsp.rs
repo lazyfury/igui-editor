@@ -54,6 +54,15 @@ impl AppState {
         if let Some((symbol, locations)) = self.lsp.take_references() {
             self.show_references(symbol, locations);
         }
+        if let Some((context, placeholder)) = self.lsp.take_prepare_rename() {
+            match placeholder {
+                Some(placeholder) => self.open_rename_symbol_prompt(context, Some(placeholder)),
+                None => self.status("rename is not available here"),
+            }
+        }
+        if let Some((context, edits)) = self.lsp.take_rename() {
+            self.apply_symbol_rename(context, edits);
+        }
         if let Some((class, symbol, data)) = self.lsp.take_native_result() {
             if self.docs.class == class
                 && self.docs.symbol == symbol

@@ -566,6 +566,53 @@ impl Document {
         ranges.len()
     }
 
+    /// Applies several different replacements as one undoable edit.
+    ///
+    /// Ranges may arrive in any order from a language server; they must be
+    /// non-overlapping, in bounds and on character boundaries. Returns the
+    /// number of edits applied (0 on any invalid range).
+    pub fn replace_edits(&mut self, edits: &[(usize, usize, String)]) -> usize {
+        if self.read_only || edits.is_empty() {
+            return 0;
+        }
+        let mut sorted = edits.to_vec();
+        sorted.sort_by_key(|edit| (edit.0, edit.1));
+        let mut last_end = 0;
+        for (start, end, _) in &sorted {
+            if *start < last_end
+                || start > end
+                || *end > self.text.len()
+                || !self.text.is_char_boundary(*start)
+                || !self.text.is_char_boundary(*end)
+            {
+                return 0;
+            }
+            last_end = *end;
+        }
+        let start = sorted[0].0;
+        let end = sorted[sorted.len() - 1].1;
+        let mut replacement = String::with_capacity(end - start + 32);
+        let mut cursor = start;
+        for (from, to, text) in &sorted {
+            replacement.push_str(&self.text[cursor..*from]);
+            replacement.push_str(text);
+            cursor = *to;
+        }
+        replacement.push_str(&self.text[cursor..end]);
+        let caret = start + sorted[0].2.len();
+        self.replace_with(
+            start,
+            end,
+            &replacement,
+            Kind::Other,
+            Cursor {
+                caret,
+                anchor: caret,
+            },
+        );
+        sorted.len()
+    }
+
     /// Reloads the buffer from disk after an external change, dropping undo
     /// history and preserving the caret/scroll where still valid.
     pub fn reload(&mut self) -> std::io::Result<()> {
@@ -2141,6 +2188,27 @@ mod tests {
         assert_eq!(doc.text(), "a\nxb");
         assert_eq!(doc.line_count(), 2);
         assert_line_index(&doc);
+    }
+
+    #[test]
+    fn replace_edits_applies_different_text_as_one_undo_step() {
+        let mut doc = Document::untitled(1, 1);
+        doc.insert_text("var player = player\n");
+        let edits = vec![(13, 19, "hero".to_string()), (4, 10, "hero".to_string())];
+        assert_eq!(doc.replace_edits(&edits), 2);
+        assert_eq!(doc.text(), "var hero = hero\n");
+        assert!(doc.undo());
+        assert_eq!(doc.text(), "var player = player\n");
+
+        // Overlapping or out-of-bounds ranges are rejected without editing.
+        let text = doc.text().to_string();
+        assert_eq!(
+            doc.replace_edits(&[(4, 10, "x".into()), (8, 12, "y".into())]),
+            0
+        );
+        assert_eq!(doc.text(), text);
+        assert_eq!(doc.replace_edits(&[(4, 999, "x".into())]), 0);
+        assert_eq!(doc.text(), text);
     }
 
     #[test]

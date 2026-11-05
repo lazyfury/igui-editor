@@ -4912,6 +4912,10 @@ fn check_lsp(dir: &Path) -> Result<(), String> {
         "fn main() {\n    let diagnostic = 1;\n    println!(\"hello\");\n}\n",
     )
     .map_err(|error| format!("lsp fixture: {error}"))?;
+    let other = project.join("src").join("other.rs");
+    fs::write(&other, "fn main() {}\n").map_err(|error| format!("lsp fixture: {error}"))?;
+    let closed = project.join("src").join("closed.rs");
+    fs::write(&closed, "fn main() {}\n").map_err(|error| format!("lsp fixture: {error}"))?;
     let server = project.join("fake-lsp.py");
     fs::write(
         &server,
@@ -4989,6 +4993,22 @@ while True:
         }})
     elif method == "textDocument/hover":
         send({"jsonrpc": "2.0", "id": request_id, "result": {"contents": {"kind": "markdown", "value": "lsp hover card\n\nUse `struct` inline.\n\n```rust\nfn main() {}\n```"}}})
+    elif method == "textDocument/prepareRename":
+        send({"jsonrpc": "2.0", "id": request_id, "result": {
+            "range": {"start": {"line": 0, "character": 3},
+                      "end": {"line": 0, "character": 7}},
+            "placeholder": "main",
+        }})
+    elif method == "textDocument/rename":
+        uri = params["textDocument"]["uri"]
+        base = uri.rsplit("/", 1)[0]
+        new_name = params.get("newName", "")
+        edit = {"range": {"start": {"line": 0, "character": 3},
+                          "end": {"line": 0, "character": 7}},
+                "newText": new_name}
+        send({"jsonrpc": "2.0", "id": request_id, "result": {
+            "changes": {uri: [edit], base + "/closed.rs": [edit]},
+        }})
     elif method == "textDocument/references":
         uri = params["textDocument"]["uri"]
         send({"jsonrpc": "2.0", "id": request_id, "result": [
@@ -5569,6 +5589,115 @@ fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
     }
     if let Some(doc) = harness.app.state_mut().ws.active_doc_mut() {
         doc.set_caret(0);
+    }
+    harness.frame()?;
+
+    // -- symbol rename (open tab + closed file) ---------------------------
+    let other = main.parent().unwrap().join("other.rs");
+    let closed = main.parent().unwrap().join("closed.rs");
+    let canonical_other = canonical_target(other.clone());
+    {
+        let mut state = harness.app.state_mut();
+        state.open_path(other.clone());
+        if let Some(doc) = state.ws.active_doc_mut() {
+            doc.set_caret(3); // on `main`
+        }
+    }
+    harness.frame()?;
+    harness.key(Key::F2);
+    for _ in 0..100 {
+        harness.frame()?;
+        if harness.app.state().rename_symbol.open {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let frame = harness.frame()?;
+    {
+        let state = harness.app.state();
+        if !state.rename_symbol.open {
+            return Err(format!(
+                "F2 did not open the rename prompt (status {:?})",
+                state.lsp.status()
+            ));
+        }
+        if !texts(&frame).iter().any(|text| text == "RENAME SYMBOL") {
+            return Err("the rename prompt was not painted".into());
+        }
+    }
+    harness.type_text("hero");
+    harness.key(Key::Enter);
+    for _ in 0..100 {
+        harness.frame()?;
+        let open_changed = harness
+            .app
+            .state()
+            .ws
+            .tabs
+            .iter()
+            .find(|doc| doc.path() == Some(canonical_other.as_path()))
+            .is_some_and(|doc| doc.text() == "fn hero() {}\n");
+        let closed_changed = fs::read_to_string(&closed)
+            .map(|text| text == "fn hero() {}\n")
+            .unwrap_or(false);
+        if open_changed && closed_changed {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    {
+        let state = harness.app.state();
+        let open_text = state
+            .ws
+            .tabs
+            .iter()
+            .find(|doc| doc.path() == Some(canonical_other.as_path()))
+            .map(|doc| doc.text().to_string());
+        let closed_text = fs::read_to_string(&closed).unwrap_or_default();
+        if open_text.as_deref() != Some("fn hero() {}\n") || closed_text != "fn hero() {}\n" {
+            return Err(format!(
+                "rename did not update the open and closed files (open={open_text:?}, closed={closed_text:?}, status={:?}, message={:?})",
+                state.lsp.status(),
+                state.message()
+            ));
+        }
+        if !state
+            .message()
+            .is_some_and(|(text, _)| text.contains("renamed main → hero"))
+        {
+            return Err("rename did not report its result".into());
+        }
+    }
+    // The open buffer is one undo step; the closed file was written to disk.
+    {
+        let mut state = harness.app.state_mut();
+        let doc = state
+            .ws
+            .tabs
+            .iter_mut()
+            .find(|doc| doc.path() == Some(canonical_other.as_path()))
+            .expect("renamed tab");
+        assert!(doc.undo());
+        if doc.text() != "fn main() {}\n" {
+            return Err("undo did not restore the renamed buffer".into());
+        }
+    }
+    // Return to the original fixture for the remaining checks. The extra tab
+    // must not stay active, or the final definition check would target it.
+    {
+        let mut state = harness.app.state_mut();
+        if let Some(index) = state
+            .ws
+            .tabs
+            .iter()
+            .position(|doc| doc.path() == Some(canonical_other.as_path()))
+        {
+            state.request_close_tab(index);
+        }
+        state.open_path(main.to_path_buf());
+        if let Some(doc) = state.ws.active_doc_mut() {
+            doc.set_caret(0);
+        }
     }
     harness.frame()?;
 
