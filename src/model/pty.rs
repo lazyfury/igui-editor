@@ -1,7 +1,7 @@
 //! Native PTY session used by the built-in terminal.
 
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 
@@ -182,11 +182,6 @@ impl PtySession {
             }
         }
         chunks
-    }
-
-    #[expect(dead_code, reason = "stub with no caller yet")]
-    pub fn cwd_hint(&self) -> Option<PathBuf> {
-        None
     }
 }
 

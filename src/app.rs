@@ -739,7 +739,7 @@ impl EditorApp {
                         state.tree_menu = None;
                         state.menu_open = None;
                         state.menu_hover = None;
-                        ui::tree_menu::open(&mut state, row.path, row.name, row.is_dir, *position);
+                        ui::tree_menu::open(&mut state, row.path, row.is_dir, *position);
                         return EventResult::Handled;
                     }
                 }

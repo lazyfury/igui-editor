@@ -68,3 +68,7 @@ mod vim;
 mod wake;
 
 pub use app::EditorApp;
+
+// The service/command manifest metadata is the documented shape a future
+// extension host will read; re-export it so it stays part of the crate's API.
+pub use services::{Capability, CommandSpec, ServiceManifest};

@@ -1045,8 +1045,6 @@ impl TreeMenuAction {
 #[derive(Clone, Debug)]
 pub struct TreeMenuUi {
     pub path: PathBuf,
-    #[expect(dead_code, reason = "overlay data with no reader yet")]
-    pub name: String,
     pub is_dir: bool,
     /// Right-click on empty Explorer space rather than a row.
     pub blank: bool,
@@ -1061,11 +1059,6 @@ pub struct TreeMenuUi {
 pub struct ReplaceJob {
     pub plans: Vec<PlannedFile>,
     pub replacement: String,
-    // The confirmation modal carries its own counts; these copies have no reader.
-    #[expect(dead_code, reason = "no reader yet")]
-    pub files: usize,
-    #[expect(dead_code, reason = "no reader yet")]
-    pub occurrences: usize,
 }
 
 /// Quick Open palette (`⌘P`).

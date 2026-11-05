@@ -420,12 +420,7 @@ impl AppState {
         }
         let files = plans.len();
         let occurrences: usize = plans.iter().map(|plan| plan.count).sum();
-        self.pending_replace = Some(ReplaceJob {
-            plans,
-            replacement,
-            files,
-            occurrences,
-        });
+        self.pending_replace = Some(ReplaceJob { plans, replacement });
         self.modal = Some(Modal::ReplaceInFiles { files, occurrences });
         self.menu_open = None;
         self.dirty = true;

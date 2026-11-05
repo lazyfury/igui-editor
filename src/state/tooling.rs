@@ -22,9 +22,6 @@ pub struct ToolingPrompt {
     pub note: Option<String>,
     /// One-line explanation shown under the title.
     pub detail: String,
-    /// The command the editor tried to start.
-    #[expect(dead_code, reason = "prompt data with no reader yet")]
-    pub source: String,
     /// Set after COPY succeeds.
     pub copied: bool,
 }
@@ -44,7 +41,6 @@ impl ToolingUi {
             issue.command,
             issue.note,
             detail,
-            issue.source,
         );
     }
 
@@ -57,7 +53,6 @@ impl ToolingUi {
         command: impl Into<String>,
         note: Option<String>,
         detail: impl Into<String>,
-        source: impl Into<String>,
     ) {
         self.prompt = Some(ToolingPrompt {
             tool: tool.into(),
@@ -65,7 +60,6 @@ impl ToolingUi {
             command: command.into(),
             note,
             detail: detail.into(),
-            source: source.into(),
             copied: false,
         });
         self.copied_at = None;

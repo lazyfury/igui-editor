@@ -39,7 +39,6 @@ pub enum Capability {
 }
 
 impl Capability {
-    #[expect(dead_code, reason = "stable ids for the future extension host")]
     pub const fn id(self) -> &'static str {
         match self {
             Capability::GitReadStatus => "git.read.status",
@@ -64,18 +63,14 @@ impl Capability {
 #[derive(Clone, Copy, Debug)]
 pub struct ServiceManifest {
     pub id: &'static str,
-    #[expect(dead_code, reason = "manifest metadata for the future extension host")]
     pub version: &'static str,
-    #[expect(dead_code, reason = "manifest metadata for the future extension host")]
     pub capabilities: &'static [Capability],
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct CommandSpec {
     pub id: &'static str,
-    #[expect(dead_code, reason = "command metadata for the future extension host")]
     pub title: &'static str,
-    #[expect(dead_code, reason = "command metadata for the future extension host")]
     pub capability: Option<Capability>,
 }
 
@@ -380,4 +375,64 @@ pub fn install_builtins() -> ServiceRegistry {
     clang_lsp.register(&mut host);
     python_lsp.register(&mut host);
     registry
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    /// The manifest/command metadata is the documented extension-host shape.
+    /// This test pins its invariants until an external host reads it.
+    #[test]
+    fn builtin_metadata_is_well_formed() {
+        let registry = install_builtins();
+        assert!(!registry.services.is_empty());
+        assert!(!registry.commands.is_empty());
+
+        for (key, manifest) in &registry.services {
+            assert_eq!(*key, manifest.id, "manifest key matches the declared id");
+            assert!(
+                !manifest.version.is_empty(),
+                "manifest {} has no version",
+                manifest.id
+            );
+            assert!(
+                !manifest.capabilities.is_empty(),
+                "manifest {} has no capabilities",
+                manifest.id
+            );
+            let mut ids = HashSet::new();
+            for capability in manifest.capabilities {
+                let id = capability.id();
+                assert!(
+                    !id.is_empty(),
+                    "manifest {} has a capability with no id",
+                    manifest.id
+                );
+                assert!(
+                    ids.insert(id),
+                    "manifest {} repeats capability {id}",
+                    manifest.id
+                );
+            }
+        }
+
+        for (key, command) in &registry.commands {
+            assert_eq!(*key, command.id, "command key matches the declared id");
+            assert!(
+                !command.title.is_empty(),
+                "command {} has no title",
+                command.id
+            );
+            let capability = command
+                .capability
+                .expect("every builtin command declares a capability");
+            assert!(
+                !capability.id().is_empty(),
+                "command {} has a capability with no id",
+                command.id
+            );
+        }
+    }
 }

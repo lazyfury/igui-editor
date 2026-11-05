@@ -75,9 +75,6 @@ pub struct GitCommitDetail {
     pub commit: GitCommit,
     pub files: Vec<String>,
     pub diff: String,
-    /// The stored diff is already trimmed; nothing reads the flag yet.
-    #[expect(dead_code, reason = "no reader yet")]
-    pub truncated: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -702,8 +699,7 @@ pub fn run_show_commit(cwd: &Path, hash: &str) -> Result<GitCommitDetail, String
         ],
     )?;
     let mut diff = String::from_utf8_lossy(&diff_output.stdout).into_owned();
-    let truncated = diff.len() > OUTPUT_CAP;
-    if truncated {
+    if diff.len() > OUTPUT_CAP {
         diff.truncate(OUTPUT_CAP);
         diff.push_str("\n… diff truncated …\n");
     }
@@ -711,7 +707,6 @@ pub fn run_show_commit(cwd: &Path, hash: &str) -> Result<GitCommitDetail, String
         commit,
         files,
         diff,
-        truncated,
     })
 }
 

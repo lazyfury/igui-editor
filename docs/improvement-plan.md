@@ -208,11 +208,13 @@ Files: `src/state/mod.rs`, `src/model/*`, `src/services/mod.rs`, `src/state/tool
   Child state modules already read the fields through `super::*`; `ui/` and
   `app.rs` are in the same crate.
 - Narrowing removed the `pub`-field reachability chain that had been masking
-  dead code, exposing 11 items nothing reads (model helpers, service-manifest
-  metadata, three overlay fields). They keep their data shape and carry a
-  targeted `#[expect(dead_code, …)]`; the three that only tests use are gated
-  with `#[cfg_attr(not(test), expect(dead_code, …))]`. Nothing was deleted or
-  re-wired.
+  dead code, exposing 11 unused items. A follow-up cleanup deleted the
+  genuinely dead data: the `PtySession::cwd_hint` stub,
+  `GitCommitDetail::truncated`, `TreeMenuUi::name`, `ReplaceJob::files`/
+  `occurrences` and `ToolingPrompt::source`. The service manifest/command
+  metadata is the documented extension-host shape, so it stays and is now
+  exercised by a unit test; only the three test-only helpers keep a
+  `cfg_attr(not(test), expect(dead_code, …))` annotation.
 - Follow-up (after 2.1): split the `Action`/menu tables and the UI state
   structs (`SidebarUi`, `EditorUi`, `QuickOpenState`, …) out of `state/mod.rs`
   and narrow their fields the same way. Do not group fields yet; that is a
@@ -368,6 +370,7 @@ the palette; selfcheck covers open/filter/run/escape.
 | Session 4 | 1.3 Autosave | done | Autosave writes verbatim through `Document::save_verbatim` (no tidy, no undo step); failures keep the tab dirty and show an error. 4 new tests (2 doc, 2 state). Gate green: 366 unit + 2 doc tests, selfcheck. |
 | Session 4 | 2.1 Command table | partial | 2.1a id table landed; 2.1b metadata/palette pending. `src/state/commands.rs` is the single canonical id table; `Action::id`/`Action::from_id` read it and `keymap::apply_overrides` delegates. Old ids/aliases and the `view.terminal`/`view.outline`/`view.problems` mappings are preserved; new ids: `view.edit`/`view.split`/`view.preview`, `tabs.select1..9`, `file.clearRecent`, `language.auto`, and `panel.terminal`/`panel.outline` for the header-panel actions. 5 new tests (id uniqueness/round-trip, aliases, legacy regression list, header collisions, dynamic actions). Gate green: 376 unit + 2 doc tests, selfcheck. |
 | Session 4 | 2.2 `pub(crate)` | done | All 107 `AppState` fields are `pub(crate)`; no field name/type/order, `new` or method changed, so behavior is unchanged. The narrowing removed the `pub`-field reachability chain that had masked dead code and exposed 11 unused items (model helpers, service-manifest metadata, three overlay fields); they keep their shape with a targeted `#[expect(dead_code, …)]` (three gated by `cfg_attr(not(test), …)` because only tests use them). UI state structs keep `pub` fields; that split follows 2.1. Gate green: 371 unit + 2 doc tests, selfcheck. |
+| Session 4 | 2.2 cleanup | done | The dead data exposed by 2.2 was deleted: the `PtySession::cwd_hint` stub, `GitCommitDetail::truncated`, `TreeMenuUi::name`, `ReplaceJob::{files,occurrences}` and `ToolingPrompt::source`, with their parameters, locals and struct literals updated. The manifest/command metadata stays (documented extension-host shape), is re-exported from the crate root and is exercised by a new `builtin_metadata_is_well_formed` unit test. Only the three test-only helpers keep an annotation. Gate green: 377 unit + 2 doc tests, selfcheck. |
 | Session 4 | 2.3 State pruning | done | `close_tab_now` calls one `forget_document` helper (`doc_views`, `doc_revs`, `language_by_id`, `recovery`, `external`); `reset_project_state` reuses it and `delete_path_now` drops path/folder stamps. `language_by_path` still outlives the tab. 3 new state tests. Gate green: 371 unit + 2 doc tests, selfcheck. |
 | Session 4 | 3.1 Markdown outline | pending | |
 | Session 4 | 3.2 Go to Line | pending | |

@@ -15,10 +15,9 @@ const WIDTH: f32 = 240.0;
 const ITEM_H: f32 = 28.0;
 const PAD: f32 = 6.0;
 
-pub fn open(state: &mut AppState, path: std::path::PathBuf, name: String, is_dir: bool, at: Vec2) {
+pub fn open(state: &mut AppState, path: std::path::PathBuf, is_dir: bool, at: Vec2) {
     state.tree_menu = Some(TreeMenuUi {
         path: path.clone(),
-        name,
         is_dir,
         blank: false,
         at,
@@ -39,13 +38,8 @@ pub fn open_blank(state: &mut AppState, at: Vec2) {
     let Some(root) = state.ws.folder().map(std::path::Path::to_path_buf) else {
         return;
     };
-    let name = root
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| root.display().to_string());
     state.tree_menu = Some(TreeMenuUi {
         path: root,
-        name,
         is_dir: true,
         blank: true,
         at,
