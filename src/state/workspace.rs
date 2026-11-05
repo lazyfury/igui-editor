@@ -78,6 +78,7 @@ impl AppState {
         self.problems = ProblemsUi::default();
         self.docs = DocsUi::default();
         self.docs_view = DocsViewUi::default();
+        self.references = ReferencesUi::default();
         self.reset_git_project();
         self.shutdown_terminal_sessions();
         self.terminal.focused = false;

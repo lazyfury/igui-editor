@@ -113,7 +113,7 @@ Read the minimum set; do not preload the whole tree.
 | Markdown parsing / preview | `src/model/markdown.rs`, `src/ui/preview.rs` | [`docs/benchmarks.md`](docs/benchmarks.md); run bench. |
 | Syntax highlighting | `src/syntax/`, `src/model/highlight.rs` | Language packs: `src/syntax/pack.rs`. |
 | Find / replace / project search | `src/model/find.rs`, `src/ui/find_bar.rs`, `src/model/search.rs`, `src/ui/project_search.rs` | `src/model/replace.rs` for files. |
-| LSP (Rust/Godot) | `src/model/lsp.rs`, `src/ui/lsp.rs` | Godot attaches to the running editor (no headless spawn); [`docs/services.md`](docs/services.md). |
+| LSP (Rust/Godot) | `src/model/lsp.rs`, `src/ui/lsp.rs` | Godot attaches to the running editor (no headless spawn); references overlay in `src/state/references.rs` / `src/ui/references.rs`; [`docs/services.md`](docs/services.md). |
 | Indentation / Format Document | `src/model/doc.rs`, `src/model/godot.rs` | Per-file tabs/spaces detection, GDScript `:` newline, `editor.format`; [`docs/design.md`](docs/design.md). |
 | Terminal | `src/model/pty.rs`, `src/state/terminal.rs`, `src/ui/terminal.rs` | Login shell (`-l`), UTF-8 locale and augmented PATH are enforced for child processes. |
 | Git panel | `src/model/git.rs`, `src/ui/git.rs` | Service boundary in `docs/services.md`. |

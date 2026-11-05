@@ -4989,6 +4989,14 @@ while True:
         }})
     elif method == "textDocument/hover":
         send({"jsonrpc": "2.0", "id": request_id, "result": {"contents": {"kind": "markdown", "value": "lsp hover card\n\nUse `struct` inline.\n\n```rust\nfn main() {}\n```"}}})
+    elif method == "textDocument/references":
+        uri = params["textDocument"]["uri"]
+        send({"jsonrpc": "2.0", "id": request_id, "result": [
+            {"uri": uri, "range": {"start": {"line": 0, "character": 3},
+                                    "end": {"line": 0, "character": 7}}},
+            {"uri": uri, "range": {"start": {"line": 1, "character": 8},
+                                    "end": {"line": 1, "character": 18}}},
+        ]})
     elif method == "textDocument/documentHighlight":
         send({"jsonrpc": "2.0", "id": request_id, "result": [
             {"range": {"start": {"line": 0, "character": 3}, "end": {"line": 0, "character": 7}}},
@@ -5481,6 +5489,83 @@ fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
     harness.frame()?;
     if !harness.app.state().lsp.highlights_for(&path).is_empty() {
         return Err("occurrence highlights survived a move off the symbol".into());
+    }
+    if let Some(doc) = harness.app.state_mut().ws.active_doc_mut() {
+        doc.set_caret(0);
+    }
+    harness.frame()?;
+
+    // -- references list -------------------------------------------------
+    if let Some(doc) = harness.app.state_mut().ws.active_doc_mut() {
+        doc.set_caret(3); // on `main`
+    }
+    harness.frame()?;
+    harness.shortcut(
+        Key::F12,
+        Modifiers {
+            shift: true,
+            ..Modifiers::NONE
+        },
+    );
+    for _ in 0..100 {
+        harness.frame()?;
+        if harness.app.state().references.open {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let frame = harness.frame()?;
+    {
+        let state = harness.app.state();
+        if !state.references.open || state.references.rows.len() != 2 {
+            return Err(format!(
+                "Shift+F12 did not open the references list (status {:?})",
+                state.lsp.status()
+            ));
+        }
+        let painted = texts(&frame);
+        if !painted.iter().any(|text| text == "REFERENCES")
+            || !painted.iter().any(|text| text == "2 RESULTS")
+            || !painted.iter().any(|text| text == "main.rs:1")
+        {
+            return Err(format!("the references overlay did not paint: {painted:?}"));
+        }
+    }
+    let row = crate::ui::references::layout(&harness.app.state()).rows[1].center();
+    harness.click(row);
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        if state.references.open {
+            return Err("clicking a reference did not close the overlay".into());
+        }
+        if state
+            .ws
+            .active_doc()
+            .is_none_or(|doc| doc.line_col().0 != 1)
+        {
+            return Err("clicking a reference did not jump to its line".into());
+        }
+    }
+    // Reopen and close with Escape.
+    harness.shortcut(
+        Key::F12,
+        Modifiers {
+            shift: true,
+            ..Modifiers::NONE
+        },
+    );
+    for _ in 0..100 {
+        harness.frame()?;
+        if harness.app.state().references.open {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    harness.key(Key::Escape);
+    harness.frame()?;
+    if harness.app.state().references.open {
+        return Err("Escape did not close the references overlay".into());
     }
     if let Some(doc) = harness.app.state_mut().ws.active_doc_mut() {
         doc.set_caret(0);

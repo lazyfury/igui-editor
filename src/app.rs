@@ -453,6 +453,7 @@ impl EditorApp {
         ui::quick_open::paint(&mut state, measurer.as_ref(), ctx);
         ui::new_file::paint(&mut state, measurer.as_ref(), ctx);
         ui::project_search::paint(&mut state, measurer.as_ref(), ctx);
+        ui::references::paint(&mut state, measurer.as_ref(), ctx);
         ui::lsp::paint(&mut state, measurer.as_ref(), ctx);
         ui::tooling::paint(&mut state, measurer.as_ref(), ctx);
         ui::drop::paint(&state, measurer.as_ref(), ctx);
@@ -569,6 +570,10 @@ impl EditorApp {
                 }
                 if state.git.diff_visible {
                     ui::git::click_diff(&mut state, *position);
+                    return EventResult::Handled;
+                }
+                if state.references.open {
+                    ui::references::click(&mut state, *position);
                     return EventResult::Handled;
                 }
                 if state.settings_open {
@@ -930,6 +935,13 @@ impl EditorApp {
                 if state.tooling.prompt.is_some() {
                     return EventResult::Handled;
                 }
+                if state.references.open {
+                    let panel = ui::references::layout(&state).panel;
+                    if panel.contains(*position) {
+                        ui::references::scroll(&mut state, delta.y);
+                    }
+                    return EventResult::Handled;
+                }
                 if state.git.detail_visible {
                     let (panel, _) = ui::git::detail_layout(&state);
                     if panel.contains(*position) {
@@ -963,6 +975,9 @@ impl EditorApp {
                     }
                     return EventResult::Handled;
                 }
+                if state.references.open && ui::references::on_key(&mut state, *key, modifiers) {
+                    return EventResult::Handled;
+                }
                 if state.settings_open && ui::settings::on_key(&mut state, *key, modifiers) {
                     return EventResult::Handled;
                 }
@@ -986,23 +1001,6 @@ impl EditorApp {
                 if *key == Key::Escape && state.lsp.signature_help.is_some() {
                     state.clear_signature_help();
                     return EventResult::Handled;
-                }
-                if state.focus == Focus::Editor
-                    && !modifiers.meta
-                    && !modifiers.ctrl
-                    && !modifiers.alt
-                {
-                    match key {
-                        Key::F1 => {
-                            state.request_lsp_hover();
-                            return EventResult::Handled;
-                        }
-                        Key::F12 => {
-                            state.request_lsp_definition();
-                            return EventResult::Handled;
-                        }
-                        _ => {}
-                    }
                 }
                 if state.focus == Focus::Editor
                     && modifiers.ctrl
@@ -1128,6 +1126,7 @@ impl EditorApp {
                     || state.recovery_prompt.is_some()
                     || state.menu_open.is_some()
                     || state.tooling.prompt.is_some()
+                    || state.references.open
                 {
                     return EventResult::Handled;
                 }

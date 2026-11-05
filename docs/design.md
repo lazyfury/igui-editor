@@ -416,7 +416,11 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    gesture); identifiers keep the 140 ms debounce. Inside a string literal the
    identifier-prefix filter is off and a quoted insertion replaces the whole
    literal: Godot returns `"res://…"` without a `textEdit` range, so inserting
-   it at the caret would duplicate the opening quote and the path.
+   it at the caret would duplicate the opening quote and the path. References
+   open a centered overlay instead of a bottom-dock panel: the result belongs to
+   one symbol in one document, and the list disappears with `Esc` or a jump.
+   Previews are filled once per response from open buffers or a 4 MB-capped disk
+   read, never per frame.
 
 ## Theme spec (geek / compact / no corners)
 

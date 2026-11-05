@@ -251,6 +251,7 @@ enum PendingKind {
     CompletionResolve { index: usize },
     SignatureHelp,
     Highlights(PathBuf),
+    References { symbol: String },
     Definition,
     NativeSymbol { class: String, symbol: String },
     Semantic(PathBuf),
@@ -1153,6 +1154,20 @@ impl Session {
         doc: &Document,
         byte: usize,
     ) -> bool {
+        self.send_position_with(method, kind, path, doc, byte, Value::Null)
+    }
+
+    /// `send_position` plus extra request fields (`references` needs a
+    /// `context` object).
+    fn send_position_with(
+        &mut self,
+        method: &str,
+        kind: PendingKind,
+        path: &Path,
+        doc: &Document,
+        byte: usize,
+        extra: Value,
+    ) -> bool {
         if self.status != LspStatus::Ready {
             return false;
         }
@@ -1160,13 +1175,14 @@ impl Session {
             return false;
         };
         let (line, character) = position_of_byte(doc, byte.min(doc.text().len()));
-        let id = client.request(
-            method,
-            json!({
-                "textDocument": {"uri": path_to_uri(path)},
-                "position": {"line": line, "character": character},
-            }),
-        );
+        let mut params = json!({
+            "textDocument": {"uri": path_to_uri(path)},
+            "position": {"line": line, "character": character},
+        });
+        if let (Some(params), Value::Object(extra)) = (params.as_object_mut(), extra) {
+            params.extend(extra);
+        }
+        let id = client.request(method, params);
         if let Some(id) = id {
             self.pending.insert(id, (kind, Instant::now()));
             true
@@ -1459,6 +1475,8 @@ pub struct LspController {
     pub completion: Option<CompletionUi>,
     completion_prefix: String,
     pub signature_help: Option<SignatureHelpUi>,
+    /// Pending result of `textDocument/references`: symbol name + locations.
+    references: Option<(String, Vec<Location>)>,
     native_docs_target: Option<NativeTarget>,
     location: Option<Location>,
     native_result: Option<(String, String, NativeSymbol)>,
@@ -1495,6 +1513,7 @@ impl Default for LspController {
             completion: None,
             completion_prefix: String::new(),
             signature_help: None,
+            references: None,
             native_docs_target: None,
             location: None,
             native_result: None,
@@ -1632,6 +1651,7 @@ impl LspController {
         self.completion = None;
         self.completion_prefix.clear();
         self.signature_help = None;
+        self.references = None;
         self.native_docs_target = None;
         self.location = None;
         self.native_result = None;
@@ -2087,6 +2107,12 @@ impl LspController {
                     self.sessions[index].changed = true;
                 }
             }
+            PendingKind::References { symbol } => {
+                if is_active {
+                    self.references = Some((symbol, parse_locations(&result)));
+                    self.changed = true;
+                }
+            }
             PendingKind::Definition => {
                 if is_active {
                     self.location = parse_location(&result);
@@ -2298,6 +2324,42 @@ impl LspController {
             PendingKind::Highlights(path),
             doc,
         )
+    }
+
+    /// Asks for every reference to the symbol at the caret.
+    pub fn request_references(&mut self, doc: &Document, symbol: &str) -> bool {
+        let Some(path) = doc.path().map(Path::to_path_buf) else {
+            return false;
+        };
+        {
+            let Some(session) = self.active_session_mut() else {
+                return false;
+            };
+            if !session.capabilities.references || session.status != LspStatus::Ready {
+                return false;
+            }
+            session
+                .pending
+                .retain(|_, (kind, _)| !matches!(kind, PendingKind::References { .. }));
+        }
+        self.references = None;
+        let Some(session) = self.active_session_mut() else {
+            return false;
+        };
+        session.send_position_with(
+            "textDocument/references",
+            PendingKind::References {
+                symbol: symbol.to_string(),
+            },
+            &path,
+            doc,
+            doc.caret(),
+            json!({"context": {"includeDeclaration": true}}),
+        )
+    }
+
+    pub fn take_references(&mut self) -> Option<(String, Vec<Location>)> {
+        self.references.take()
     }
 
     pub fn symbols_for(&self, path: &Path) -> &[OutlineSymbol] {
@@ -3287,6 +3349,37 @@ fn parse_text_ranges(result: &Value) -> Vec<TextRange> {
     ranges
 }
 
+fn parse_locations(result: &Value) -> Vec<Location> {
+    let Some(items) = result.as_array() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for item in items.iter().take(500) {
+        let Some(uri) = item["uri"].as_str().or_else(|| item["targetUri"].as_str()) else {
+            continue;
+        };
+        let Some(path) = uri_to_path(uri) else {
+            continue;
+        };
+        let range = if item.get("range").is_some() {
+            &item["range"]
+        } else {
+            &item["targetSelectionRange"]
+        };
+        let start = &range["start"];
+        let (Some(line), Some(character)) = (start["line"].as_u64(), start["character"].as_u64())
+        else {
+            continue;
+        };
+        out.push(Location {
+            path,
+            line: line as u32,
+            character: character as u32,
+        });
+    }
+    out
+}
+
 fn parse_location(result: &Value) -> Option<Location> {
     let first = if let Some(items) = result.as_array() {
         items.first()?
@@ -4108,6 +4201,19 @@ mod tests {
         assert!(enclosing_string_span("# \"not a string", 16).is_none());
         assert!(enclosing_string_span("var x = \"\"\"res://", 17).is_none());
         assert!(enclosing_string_span("preload(\"res://a.gd\") tail", 26).is_none());
+    }
+
+    #[test]
+    fn parses_reference_locations() {
+        let locations = parse_locations(&json!([
+            {"uri": "file:///tmp/a.gd", "range": {"start": {"line": 2, "character": 4}}},
+            {"uri": "file:///tmp/b.gd", "range": {"start": {"line": 0, "character": 0}}},
+            {"range": {"start": {"line": 1, "character": 1}}},
+        ]));
+        assert_eq!(locations.len(), 2);
+        assert_eq!(locations[0].path, PathBuf::from("/tmp/a.gd"));
+        assert_eq!((locations[0].line, locations[0].character), (2, 4));
+        assert_eq!(locations[1].path, PathBuf::from("/tmp/b.gd"));
     }
 
     #[test]

@@ -51,6 +51,9 @@ impl AppState {
         if let Some(location) = self.lsp.take_location() {
             self.open_lsp_location(location);
         }
+        if let Some((symbol, locations)) = self.lsp.take_references() {
+            self.show_references(symbol, locations);
+        }
         if let Some((class, symbol, data)) = self.lsp.take_native_result() {
             if self.docs.class == class
                 && self.docs.symbol == symbol

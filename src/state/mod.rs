@@ -55,6 +55,7 @@ mod lsp;
 mod modal;
 mod new_file;
 mod quick_open;
+mod references;
 mod reliability;
 mod rename;
 mod search;
@@ -68,6 +69,7 @@ mod watch;
 mod workspace;
 
 pub use dock::{DockId, Panel};
+pub use references::ReferencesUi;
 
 pub const MAX_RECENT: usize = 8;
 /// Recent entries shown per group in the File menu (the session keeps 8 each).
@@ -203,6 +205,7 @@ pub enum Action {
     LspHover,
     LspCompletion,
     LspDefinition,
+    LspReferences,
     /// Drops and restarts the active document's language server.
     LspRestart,
     ToggleTerminal,
@@ -264,6 +267,7 @@ impl Action {
             Action::LspHover => "Show Hover".into(),
             Action::LspCompletion => "Complete".into(),
             Action::LspDefinition => "Go to Definition".into(),
+            Action::LspReferences => "Find All References".into(),
             Action::LspRestart => "Restart Language Server".into(),
             Action::ToggleTerminal => "Terminal".into(),
             Action::Settings => "Settings…".into(),
@@ -343,6 +347,7 @@ impl Action {
             Action::LspHover
             | Action::LspCompletion
             | Action::LspDefinition
+            | Action::LspReferences
             | Action::LspRestart => doc
                 .and_then(|doc| doc.path())
                 .is_some_and(|path| state.lsp.supports(path)),
@@ -1298,6 +1303,7 @@ pub struct AppState {
     /// A file drag is hovering the window (paints the drop overlay).
     pub drop_hover: bool,
     pub quick_open: QuickOpenState,
+    pub references: ReferencesUi,
     pub new_file: NewFileState,
     /// Split-view nodes (for drag resizing) and the divider rectangle.
     /// Editor/preview control for the active view (vertical band anchor).
@@ -1473,6 +1479,7 @@ impl AppState {
             pending_sidebar_sync: false,
             drop_hover: false,
             quick_open: QuickOpenState::default(),
+            references: ReferencesUi::default(),
             new_file: NewFileState::default(),
             search: SearchState::default(),
             content_node: None,
