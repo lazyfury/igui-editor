@@ -123,6 +123,7 @@ impl AppState {
     /// and intentionally outlives the tab.
     pub(crate) fn forget_document(&mut self, id: u64, path: Option<&Path>) {
         self.doc_revs.remove(&id);
+        self.recovery_revs.remove(&id);
         self.doc_views.remove(&id);
         self.recovery.remove(id);
         self.language_by_id.remove(&id);

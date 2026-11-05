@@ -22,6 +22,8 @@ pub(crate) const HOVER_DELAY: Duration = Duration::from_millis(350);
 pub(crate) const HOVER_DISMISS: Duration = Duration::from_millis(1_500);
 /// Idle time before autosave/recovery snapshots are written.
 pub(crate) const AUTOSAVE_DELAY: Duration = Duration::from_secs(2);
+/// Backoff after a failed autosave write (retrying every idle tick would spam).
+pub(crate) const AUTOSAVE_RETRY: Duration = Duration::from_secs(30);
 /// Poll interval for "an open file changed on disk".
 pub(crate) const EXTERNAL_POLL: Duration = Duration::from_secs(1);
 
@@ -62,9 +64,13 @@ impl AppState {
         if self.ws.folder_open || self.ws.tabs.iter().any(|doc| doc.path().is_some()) {
             add(self.last_external_check + EXTERNAL_POLL);
         }
-        // Autosave only has work while a buffer is dirty.
-        if self.ws.tabs.iter().any(|doc| doc.is_dirty()) {
-            add(self.last_activity + AUTOSAVE_DELAY);
+        // Autosave only has work after an edit that has not been flushed yet,
+        // or when a failed write is due for its backoff retry.
+        if let Some(at) = self.reliability_changed_at {
+            add(at + AUTOSAVE_DELAY);
+        }
+        if let Some(at) = self.reliability_retry_at {
+            add(at);
         }
         next
     }

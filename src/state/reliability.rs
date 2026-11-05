@@ -5,11 +5,16 @@ use super::*;
 impl AppState {
     // -- reliability -----------------------------------------------------
 
-    /// Autosave + recovery flush after the idle delay; tracks edits to reset it.
+    /// Autosave + recovery flush after the idle delay.
+    ///
+    /// A flush is scheduled only by an edit (`changed_at`) or by the backoff
+    /// after a failed write (`retry_at`). A dirty buffer that is not being
+    /// edited does not wake the app or rewrite its snapshot.
     pub fn tick_reliability(&mut self) {
         if self.recovery_prompt.is_some() || self.modal.is_some() {
             return;
         }
+        let now = Instant::now();
         let mut changed = false;
         for doc in &self.ws.tabs {
             let id = doc.id();
@@ -25,15 +30,21 @@ impl AppState {
             let live: std::collections::HashSet<u64> =
                 self.ws.tabs.iter().map(|doc| doc.id()).collect();
             self.doc_revs.retain(|id, _| live.contains(id));
+            self.recovery_revs.retain(|id, _| live.contains(id));
         }
         if changed {
-            self.last_activity = Instant::now();
+            self.reliability_changed_at = Some(now);
+            // A fresh edit supersedes a pending failure backoff.
+            self.reliability_retry_at = None;
         }
-        if self.last_activity.elapsed() < super::schedule::AUTOSAVE_DELAY {
+        let edit_due = self
+            .reliability_changed_at
+            .is_some_and(|at| now.duration_since(at) >= super::schedule::AUTOSAVE_DELAY);
+        let retry_due = self.reliability_retry_at.is_some_and(|at| now >= at);
+        if !(edit_due || retry_due) {
             return;
         }
         self.flush_reliability();
-        self.last_activity = Instant::now();
     }
 
     /// Runs autosave + snapshots immediately (tests / shutdown paths).
@@ -41,7 +52,9 @@ impl AppState {
         self.flush_reliability();
     }
 
-    pub(crate) fn flush_reliability(&mut self) {
+    /// Writes dirty buffers and recovery snapshots. Returns the number of
+    /// snapshots written; unchanged buffers are skipped.
+    pub(crate) fn flush_reliability(&mut self) -> usize {
         let mut saved = 0usize;
         let mut saved_paths = Vec::new();
         let mut failures: Vec<(String, String)> = Vec::new();
@@ -67,22 +80,36 @@ impl AppState {
             self.remember_disk(&path);
         }
         let mut live = std::collections::HashSet::new();
-        for doc in &self.ws.tabs {
-            live.insert(doc.id());
+        let mut snapshots = 0usize;
+        for doc in &mut self.ws.tabs {
+            let id = doc.id();
+            let rev = doc.rev();
+            self.doc_revs.insert(id, rev);
+            live.insert(id);
             if doc.is_dirty() {
-                let _ = self.recovery.save(
-                    doc.id(),
-                    crate::model::recovery::Snapshot {
-                        name: doc.name(),
-                        path: doc.path(),
-                        text: doc.text(),
-                        caret: doc.caret(),
-                        anchor: doc.anchor(),
-                        eol: doc.line_ending(),
-                    },
-                );
+                // A snapshot only changes when the buffer does; the 2 s idle
+                // tick must not rewrite an unchanged dirty file.
+                if self.recovery_revs.get(&id) != Some(&rev) {
+                    let wrote = self.recovery.save(
+                        id,
+                        crate::model::recovery::Snapshot {
+                            name: doc.name(),
+                            path: doc.path(),
+                            text: doc.text(),
+                            caret: doc.caret(),
+                            anchor: doc.anchor(),
+                            eol: doc.line_ending(),
+                        },
+                    );
+                    // A failed snapshot is retried on the next edit/backoff.
+                    if wrote.is_ok() {
+                        self.recovery_revs.insert(id, rev);
+                        snapshots += 1;
+                    }
+                }
             } else {
-                self.recovery.remove(doc.id());
+                self.recovery.remove(id);
+                self.recovery_revs.remove(&id);
             }
         }
         for entry in self.recovery.list() {
@@ -110,6 +137,15 @@ impl AppState {
             };
             self.error(message);
         }
+        // The flush consumed the pending edit. A failed write is retried after
+        // a backoff instead of on every idle tick.
+        self.reliability_changed_at = None;
+        self.reliability_retry_at = if failures.is_empty() {
+            None
+        } else {
+            Some(Instant::now() + super::schedule::AUTOSAVE_RETRY)
+        };
+        snapshots
     }
 
     /// Applies the startup recovery prompt.
@@ -148,6 +184,11 @@ impl AppState {
                 self.ws.select(index);
             }
             self.recovery.clear();
+            // Restored buffers are dirty again but their snapshots were just
+            // cleared; schedule one so a crash before the next edit cannot lose
+            // the recovered text.
+            self.reliability_changed_at = Some(Instant::now());
+            self.reliability_retry_at = None;
             self.after_tabs_changed();
             self.status(format!("restored {} buffer(s)", entries.len()));
         } else {
@@ -228,6 +269,57 @@ mod tests {
         let (message, is_error) = state.message().unwrap();
         assert!(!is_error, "successful autosave is not an error: {message}");
         assert_eq!(message, "autosaved 1 file(s)");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_unchanged_dirty_buffer_is_not_snapshotted_again() {
+        let dir = temp("dedupe");
+        let path = dir.join("notes.txt");
+        std::fs::write(&path, "one").unwrap();
+        let mut state = state(&dir);
+        state.ws.open(&path).unwrap();
+        state.settings.autosave = false;
+        let doc = state.ws.active_doc_mut().unwrap();
+        doc.set_caret(doc.text().len());
+        doc.insert_text("!");
+
+        assert_eq!(state.flush_reliability(), 1, "first flush snapshots");
+        assert!(state.reliability_changed_at.is_none());
+        assert_eq!(state.flush_reliability(), 0, "unchanged buffer is skipped");
+        assert_eq!(state.flush_reliability(), 0);
+
+        state.ws.active_doc_mut().unwrap().insert_text("?");
+        assert_eq!(state.flush_reliability(), 1, "an edit snapshots once");
+        assert_eq!(state.flush_reliability(), 0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_failed_autosave_backs_off_instead_of_waking_every_tick() {
+        let dir = temp("backoff");
+        let path = dir.join("blocked.txt");
+        std::fs::create_dir_all(&path).unwrap();
+        let mut state = state(&dir);
+        let doc = state.ws.active_doc_mut().unwrap();
+        doc.set_path(path);
+        doc.insert_text("keep me");
+
+        state.flush_reliability();
+        assert!(state.reliability_changed_at.is_none());
+        let retry = state
+            .reliability_retry_at
+            .expect("a failed write schedules a retry");
+        assert!(
+            retry > Instant::now() + Duration::from_secs(20),
+            "retry must be a backoff, not the next tick"
+        );
+
+        // A new edit supersedes the backoff and schedules a normal flush.
+        state.ws.active_doc_mut().unwrap().insert_text("x");
+        state.tick_reliability();
+        assert!(state.reliability_retry_at.is_none());
+        assert!(state.reliability_changed_at.is_some());
         let _ = std::fs::remove_dir_all(dir);
     }
 

@@ -705,7 +705,8 @@ after a save restores the pre-save text (and marks the tab dirty again).
 no whitespace rewrite and no undo entry. A background write must never change
 the text or the undo history behind your back. Line endings are still
 preserved (CRLF stays CRLF), and a failed autosave leaves the tab dirty and
-shows the error in the status bar instead of claiming it saved.
+shows the error in the status bar instead of claiming it saved. A failed write
+is retried after a 30 s backoff, not on every idle tick.
 
 ## Soft wrap (`⌥Z`, View menu)
 
@@ -759,9 +760,11 @@ remembered per document and the last ratio is persisted.
   remove + rename (Windows), preserve the original permissions and restore the
   file's LF/CRLF style.
 - **Crash recovery**: dirty buffers (including untitled ones) are snapshotted
-  under `<config>/recovery/` after the same idle delay. On the next launch a
-  modal offers **Restore All** or **Discard All**; restored buffers keep their
-  original name/path and are marked dirty so the first save writes them back.
+  under `<config>/recovery/` after the same idle delay. A snapshot is rewritten
+  only when the buffer changes, so an idle dirty buffer does not wake the app or
+  touch the disk every two seconds. On the next launch a modal offers **Restore
+  All** or **Discard All**; restored buffers keep their original name/path and
+  are marked dirty so the first save writes them back.
 - **Window state**: size, position and the maximized flag are persisted and
   restored (fullscreen is not persisted).
 - Session format is version 17 (v17 added `image_preview`;

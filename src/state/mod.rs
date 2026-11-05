@@ -1407,8 +1407,13 @@ pub struct AppState {
     last_editor_scroll: f32,
     last_preview_scroll: f32,
     sync_rev: u64,
-    last_activity: Instant,
+    /// Time of the last edit that still needs an autosave/recovery flush.
+    reliability_changed_at: Option<Instant>,
+    /// Earliest retry of a failed autosave (backoff, not every tick).
+    reliability_retry_at: Option<Instant>,
     doc_revs: HashMap<u64, u64>,
+    /// Revision last written to each document's recovery snapshot.
+    recovery_revs: HashMap<u64, u64>,
     pub(crate) search: SearchState,
 }
 
@@ -1578,8 +1583,10 @@ impl AppState {
             last_editor_scroll: 0.0,
             last_preview_scroll: 0.0,
             sync_rev: u64::MAX,
-            last_activity: Instant::now(),
+            reliability_changed_at: None,
+            reliability_retry_at: None,
             doc_revs: HashMap::new(),
+            recovery_revs: HashMap::new(),
         };
         if !state
             .services
