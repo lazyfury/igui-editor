@@ -57,13 +57,15 @@ impl AppState {
     /// Drops project-scoped state while keeping the workspace object usable.
     /// `keep_terminal_open` respawns the shell in the new project afterwards.
     fn reset_project_state(&mut self, keep_terminal_open: bool) {
-        let ids: Vec<u64> = self.ws.tabs.iter().map(|doc| doc.id()).collect();
+        let closing: Vec<(u64, Option<PathBuf>)> = self
+            .ws
+            .tabs
+            .iter()
+            .map(|doc| (doc.id(), doc.path().map(Path::to_path_buf)))
+            .collect();
         self.ws.clear_tabs();
-        for id in ids {
-            self.doc_revs.remove(&id);
-            self.doc_views.remove(&id);
-            self.recovery.remove(id);
-            self.language_by_id.remove(&id);
+        for (id, path) in closing {
+            self.forget_document(id, path.as_deref());
         }
         self.external.clear();
         self.watched_dirs.clear();
@@ -112,6 +114,21 @@ impl AppState {
         self.session.set_tabs(Vec::new());
         self.find.dirty = true;
         self.dirty = true;
+    }
+
+    /// Drops every per-document entry for a closed tab.
+    ///
+    /// Document ids are unique per open, so a closed document can never reuse
+    /// its `DocUi`. `language_by_path` is a persisted per-path user override
+    /// and intentionally outlives the tab.
+    pub(crate) fn forget_document(&mut self, id: u64, path: Option<&Path>) {
+        self.doc_revs.remove(&id);
+        self.doc_views.remove(&id);
+        self.recovery.remove(id);
+        self.language_by_id.remove(&id);
+        if let Some(path) = path {
+            self.external.remove(path);
+        }
     }
 
     pub(crate) fn remember_disk(&mut self, path: &Path) {
@@ -300,6 +317,10 @@ impl AppState {
         for index in tabs {
             self.close_tab_now(index);
         }
+        // The path is gone even if no tab was open for it (or for a file under
+        // a deleted folder), so drop every stamp the poll could compare against.
+        self.external
+            .retain(|candidate, _| candidate != &path && !(is_dir && candidate.starts_with(&path)));
         // A deleted path must not linger in either recent list.
         self.session
             .recent_files

@@ -248,12 +248,14 @@ impl AppState {
 
     /// Closes `index` (bypassing the dirty check) and refreshes the session.
     pub fn close_tab_now(&mut self, index: usize) {
-        let id = self.ws.tabs.get(index).map(|doc| doc.id());
+        let closing = self
+            .ws
+            .tabs
+            .get(index)
+            .map(|doc| (doc.id(), doc.path().map(Path::to_path_buf)));
         self.ws.force_close(index);
-        if let Some(id) = id {
-            self.doc_revs.remove(&id);
-            self.recovery.remove(id);
-            self.language_by_id.remove(&id);
+        if let Some((id, path)) = closing {
+            self.forget_document(id, path.as_deref());
         }
         self.after_tabs_changed();
     }
@@ -275,5 +277,163 @@ impl AppState {
         self.find.dirty = true;
         self.focus = Focus::Editor;
         self.dirty = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::session::Session;
+    use crate::model::Workspace;
+
+    fn state(root: &Path) -> AppState {
+        let mut ws = Workspace::new(root);
+        ws.new_tab();
+        AppState::new(
+            crate::theme::Theme::dark(),
+            ws,
+            Session::default(),
+            root.join("igui-editor-tabs-test.conf"),
+        )
+    }
+
+    fn temp(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "igui-editor-tabs-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::canonicalize(&dir).unwrap()
+    }
+
+    fn index_of(state: &AppState, path: &Path) -> usize {
+        state
+            .ws
+            .tabs
+            .iter()
+            .position(|doc| doc.path() == Some(path))
+            .expect("the file tab is open")
+    }
+
+    #[test]
+    fn closing_tabs_prunes_every_per_document_map() {
+        let dir = temp("prune");
+        let path = dir.join("notes.md");
+        std::fs::write(&path, "# Notes\n").unwrap();
+        let mut state = state(&dir);
+        let untitled_id = state.ws.tabs[0].id();
+
+        state.open_path(&path);
+        let file_id = state.ws.active_doc().unwrap().id();
+        state.set_view(ViewMode::Edit);
+        state.set_language(Some("markdown".into()));
+        assert_eq!(
+            state.language_by_path.get(&path).map(String::as_str),
+            Some("markdown"),
+            "a path override is persisted for the file"
+        );
+
+        state.ws.select(0);
+        state.set_view(ViewMode::Edit);
+        state.set_language(Some("markdown".into()));
+        state.tick_reliability();
+
+        assert!(state.doc_views.contains_key(&file_id));
+        assert!(state.doc_views.contains_key(&untitled_id));
+        assert!(state.doc_revs.contains_key(&file_id));
+        assert!(state.language_by_id.contains_key(&untitled_id));
+        assert!(state.external.contains_key(&path));
+
+        state.close_tab_now(1);
+        state.close_tab_now(0);
+
+        assert!(state.ws.tabs.is_empty());
+        assert!(state.doc_views.is_empty(), "no DocUi after closing tabs");
+        assert!(state.doc_revs.is_empty(), "no revisions after closing tabs");
+        assert!(
+            state.language_by_id.is_empty(),
+            "untitled language overrides die with the buffer"
+        );
+        assert!(
+            state.external.is_empty(),
+            "a closed file is no longer polled for external changes"
+        );
+        assert_eq!(
+            state.language_by_path.get(&path).map(String::as_str),
+            Some("markdown"),
+            "the per-path language override outlives the tab"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn reopening_a_file_gets_fresh_document_ui_defaults() {
+        let dir = temp("reopen");
+        let path = dir.join("notes.md");
+        std::fs::write(&path, "# Notes\n").unwrap();
+        let mut state = state(&dir);
+
+        state.open_path(&path);
+        let first_id = state.ws.active_doc().unwrap().id();
+        state.set_view(ViewMode::Edit);
+        assert_eq!(state.view_of_active(), ViewMode::Edit);
+        assert!(state.doc_views.contains_key(&first_id));
+
+        state.close_tab_now(index_of(&state, &path));
+        assert!(!state.doc_views.contains_key(&first_id));
+
+        state.open_path(&path);
+        let second_id = state.ws.active_doc().unwrap().id();
+        assert_ne!(first_id, second_id, "document ids are not reused");
+        assert!(
+            !state.doc_views.contains_key(&second_id),
+            "reopening must not resurrect the old view entry"
+        );
+        assert_eq!(
+            state.view_of_active(),
+            ViewMode::Split,
+            "Markdown falls back to its path-based default view"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn deleting_paths_prunes_external_stamps() {
+        let dir = temp("delete");
+        let scripts = dir.join("scripts");
+        std::fs::create_dir_all(&scripts).unwrap();
+        let open = scripts.join("player.gd");
+        let closed = scripts.join("old.gd");
+        std::fs::write(&open, "extends Node\n").unwrap();
+        std::fs::write(&closed, "extends Node\n").unwrap();
+        let mut state = state(&dir);
+
+        state.open_path(&open);
+        assert!(state.external.contains_key(&open));
+        state.close_tab_now(index_of(&state, &open));
+        assert!(
+            !state.external.contains_key(&open),
+            "closing the tab drops its external stamp"
+        );
+
+        // A stamp is keyed by path and may outlive its tab; deleting the path
+        // must clear every entry for it and, for a folder, everything below it.
+        state.remember_disk(&open);
+        state.remember_disk(&closed);
+        state.delete_path_now(scripts.clone());
+        assert!(
+            state
+                .external
+                .keys()
+                .all(|path| !path.starts_with(&scripts)),
+            "deleted files must not stay in the external map: {:?}",
+            state.external.keys().collect::<Vec<_>>()
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

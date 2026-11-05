@@ -196,14 +196,16 @@ Files: `src/state/mod.rs`, `src/ui/*`, `src/app.rs`, `src/input.rs`.
 Acceptance: compiles with `pub(crate)` only; no test changes required;
 `state/mod.rs` shrinks below ~1,500 lines.
 
-### 2.3 Prune per-document state (F6)
+### [x] 2.3 Prune per-document state (F6)
 
-Files: `src/state/tabs.rs`, `src/state/workspace.rs`, `src/state/rename.rs`.
+Files: `src/state/tabs.rs`, `src/state/workspace.rs`.
 
-- Add `forget_document(id, path)` and call it from `close_tab_now`, rename and
-  delete. Prune: `doc_views`, `doc_revs`, `language_by_id`, `external`,
-  `recovery`.
-- `reset_project_state` should use the same helper.
+- Add `forget_document(id, path)` and call it from `close_tab_now`. Prune:
+  `doc_views`, `doc_revs`, `language_by_id`, `external`, `recovery`. Keep
+  `language_by_path`: it is a persisted per-path user override.
+- `reset_project_state` uses the same helper instead of duplicating the
+  removals; `delete_path_now` also drops `external` stamps for the path (and
+  everything below a deleted folder). Rename already moves the stamp old→new.
 - Add a test that closing tabs returns every map to its pre-open length and
   that reopening gets fresh `DocUi` defaults.
 
@@ -338,7 +340,7 @@ the palette; selfcheck covers open/filter/run/escape.
 | Session 4 | 1.3 Autosave | done | Autosave writes verbatim through `Document::save_verbatim` (no tidy, no undo step); failures keep the tab dirty and show an error. 4 new tests (2 doc, 2 state). Gate green: 366 unit + 2 doc tests, selfcheck. |
 | Session 4 | 2.1 Command table | pending | Keystone for 3.6. |
 | Session 4 | 2.2 `pub(crate)` | pending | |
-| Session 4 | 2.3 State pruning | pending | |
+| Session 4 | 2.3 State pruning | done | `close_tab_now` calls one `forget_document` helper (`doc_views`, `doc_revs`, `language_by_id`, `recovery`, `external`); `reset_project_state` reuses it and `delete_path_now` drops path/folder stamps. `language_by_path` still outlives the tab. 3 new state tests. Gate green: 371 unit + 2 doc tests, selfcheck. |
 | Session 4 | 3.1 Markdown outline | pending | |
 | Session 4 | 3.2 Go to Line | pending | |
 | Session 4 | 3.3 Preview links | pending | |
