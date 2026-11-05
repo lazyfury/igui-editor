@@ -413,7 +413,10 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    implement part of the protocol. Completion triggers come from the server's
    list plus `.`; GDScript adds `%` because Godot answers it without declaring
    it. Trigger characters request immediately (they are an explicit completion
-   gesture); identifiers keep the 140 ms debounce.
+   gesture); identifiers keep the 140 ms debounce. Inside a string literal the
+   identifier-prefix filter is off and a quoted insertion replaces the whole
+   literal: Godot returns `"res://…"` without a `textEdit` range, so inserting
+   it at the caret would duplicate the opening quote and the path.
 
 ## Theme spec (geek / compact / no corners)
 

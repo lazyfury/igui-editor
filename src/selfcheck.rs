@@ -5006,7 +5006,9 @@ while True:
             "activeParameter": 1,
         }})
     elif method == "textDocument/completion":
-        items = [{"label": "completion_item", "detail": "fake"}]
+        items = [{"label": "completion_item", "detail": "fake"},
+                 {"label": "\"res://fake.gd\"", "insertText": "\"res://fake.gd\"",
+                  "detail": "resource path", "kind": 17}]
         items += [{"label": "filler_%d" % i, "insertText": "filler_%d" % i} for i in range(300)]
         items += [{"label": "print(…)", "insertText": "print", "detail": "fake global"}]
         send({"jsonrpc": "2.0", "id": request_id, "result": {"items": items}})
@@ -5703,6 +5705,61 @@ fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
     if harness.app.state().lsp.signature_help.is_some() {
         return Err("Escape did not dismiss signature help".into());
     }
+
+    // -- resource-path completion ---------------------------------------
+    // The server returns a quoted `"res://…"` insertion; the editor replaces
+    // the whole string literal instead of inserting it after the partial path.
+    {
+        let mut state = harness.app.state_mut();
+        let doc = state.ws.active_doc_mut().expect("active document");
+        let end = doc.text().len();
+        doc.set_caret(end);
+    }
+    harness.type_text("\npreload(");
+    harness.type_text("\"");
+    harness.type_text("res://f");
+    for _ in 0..100 {
+        harness.frame()?;
+        if harness.app.state().lsp.completion.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    {
+        let mut state = harness.app.state_mut();
+        let completion = state
+            .lsp
+            .completion
+            .as_mut()
+            .ok_or("typing a resource path did not open completion")?;
+        let index = completion
+            .items
+            .iter()
+            .position(|item| item.insert.starts_with('"'))
+            .ok_or("the completion list has no quoted resource path")?;
+        completion.selected = index;
+    }
+    harness.key(Key::Enter);
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        let text = state
+            .ws
+            .active_doc()
+            .map(|doc| doc.text().to_string())
+            .unwrap_or_default();
+        if !text.ends_with("preload(\"res://fake.gd\"") {
+            return Err(format!(
+                "resource-path completion did not replace the string: {text:?}"
+            ));
+        }
+    }
+    {
+        let mut state = harness.app.state_mut();
+        state.lsp.dismiss_transient();
+        state.clear_signature_help();
+    }
+    harness.frame()?;
 
     // Embedded Godot docs are a normal read-only editor tab.
     {

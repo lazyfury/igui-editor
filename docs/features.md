@@ -136,8 +136,10 @@ diagnostics/semantic tokens/outline. The same switch is the
   completion after a 140 ms debounce. Characters declared by the server's
   `completionProvider.triggerCharacters` fire immediately: `.` everywhere and
   `$` / `%` for GDScript node references (Godot's list plus `%`, which the
-  server accepts even though it is not declared). Completion results are
-  filtered by the
+  server accepts even though it is not declared). Resource-path completion
+  inside `preload("res://…")` uses the server's quoted `"res://…"` insert and
+  replaces the whole string literal (the identifier prefix filter is disabled
+  inside strings). Completion results are filtered by the
   identifier prefix before the UI cap, so Godot global methods such as `print`
   are found even though the server returns thousands of candidates. The
   selected item is resolved with `completionItem/resolve` and shows a

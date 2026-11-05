@@ -660,6 +660,61 @@ pub fn position_of_byte(doc: &Document, byte: usize) -> (u32, u32) {
     (line as u32, column as u32)
 }
 
+/// Byte range of the single-line string literal containing `caret`, including
+/// its quotes. Used to replace a whole `"res://…"` path instead of inserting
+/// the server's quoted insertion text at the caret.
+///
+/// Comments are ignored, escapes are respected, and triple-quoted strings
+/// return `None` (their replacement span is not a single line).
+pub fn enclosing_string_span(text: &str, caret: usize) -> Option<(usize, usize)> {
+    let caret = caret.min(text.len());
+    let line_start = text[..caret].rfind('\n').map_or(0, |index| index + 1);
+    let line_end = text[caret..]
+        .find('\n')
+        .map_or(text.len(), |offset| caret + offset);
+    let line = &text[line_start..line_end];
+    let column = caret - line_start;
+    let bytes = line.as_bytes();
+    let mut index = 0usize;
+    let mut open = None;
+    while index < column {
+        let byte = bytes[index];
+        if open.is_some() {
+            match byte {
+                b'\\' => index += 2,
+                b'"' | b'\'' => {
+                    open = None;
+                    index += 1;
+                }
+                _ => index += 1,
+            }
+            continue;
+        }
+        match byte {
+            b'#' => return None,
+            b'"' | b'\'' => {
+                if line[index..].starts_with("\"\"\"") || line[index..].starts_with("'''") {
+                    return None;
+                }
+                open = Some(index);
+                index += 1;
+            }
+            _ => index += 1,
+        }
+    }
+    let open = open?;
+    let quote = bytes[open];
+    let mut index = column;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => index += 2,
+            byte if byte == quote => return Some((line_start + open, line_start + index + 1)),
+            _ => index += 1,
+        }
+    }
+    Some((line_start + open, line_end))
+}
+
 /// Byte offset for an LSP line/UTF-16 column, clamped to the line.
 pub fn byte_for_position(doc: &Document, line: u32, character: u32) -> usize {
     let line = line as usize;
@@ -2144,7 +2199,13 @@ impl LspController {
         if let Some(session) = self.active_session_mut() {
             session.cancel_popup_requests();
         }
-        self.completion_prefix = completion_prefix(doc);
+        // Inside a resource path the server already filtered for the string
+        // context; the identifier prefix would reject `"res://…"` inserts.
+        self.completion_prefix = if enclosing_string_span(doc.text(), doc.caret()).is_some() {
+            String::new()
+        } else {
+            completion_prefix(doc)
+        };
         self.send_position("textDocument/completion", PendingKind::Completion, doc)
     }
 
@@ -4009,6 +4070,44 @@ mod tests {
         let caps = server_capabilities(&json!({"capabilities": {"renameProvider": true}}), "rust");
         assert!(caps.rename && !caps.prepare_rename);
         assert!(!caps.signature_help && !caps.references && !caps.document_highlight);
+    }
+
+    #[test]
+    fn finds_the_string_literal_around_the_caret() {
+        let text = "func f():\n\tpreload(\"res://pl";
+        let span = enclosing_string_span(text, text.len()).expect("unterminated literal");
+        assert_eq!(&text[span.0..span.1], "\"res://pl");
+
+        let text = "preload(\"res://a.gd\")";
+        let caret = text.find("res").unwrap();
+        let span = enclosing_string_span(text, caret).expect("closed literal");
+        assert_eq!(&text[span.0..span.1], "\"res://a.gd\"");
+
+        let text = "preload('res://a.gd')";
+        let caret = text.find("res").unwrap();
+        let span = enclosing_string_span(text, caret).expect("single quotes");
+        assert_eq!(&text[span.0..span.1], "'res://a.gd'");
+
+        let text = "var a = \"x\"; var b = \"res://b.gd\"";
+        let caret = text.rfind("res").unwrap();
+        let span = enclosing_string_span(text, caret).expect("second literal");
+        assert_eq!(&text[span.0..span.1], "\"res://b.gd\"");
+
+        let text = "var n = &\"res://b.gd\"";
+        let caret = text.find("res").unwrap();
+        let span = enclosing_string_span(text, caret).expect("StringName prefix");
+        assert_eq!(&text[span.0..span.1], "\"res://b.gd\"");
+
+        let text = "var s = \"a \\\"quoted\\\" path\"";
+        let caret = text.find("path").unwrap();
+        let span = enclosing_string_span(text, caret).expect("escaped quotes");
+        assert_eq!(&text[span.0..span.1], "\"a \\\"quoted\\\" path\"");
+
+        // Comments, triple-quoted strings and a caret outside a literal are not
+        // resource-path completions.
+        assert!(enclosing_string_span("# \"not a string", 16).is_none());
+        assert!(enclosing_string_span("var x = \"\"\"res://", 17).is_none());
+        assert!(enclosing_string_span("preload(\"res://a.gd\") tail", 26).is_none());
     }
 
     #[test]

@@ -444,15 +444,18 @@ impl AppState {
         }
         if last.is_ascii_alphanumeric() || matches!(last, '_') {
             self.auto_completion_at = Some(Instant::now() + Duration::from_millis(140));
-        } else if last == '.'
-            || (self.lsp.completion_triggers().contains(&last)
-                // String completion needs the replacement range work first;
-                // until then a quote only opens the normal debounce path.
-                && !matches!(last, '\'' | '"'))
-        {
-            // Server-declared triggers (`.`, `$` and `%` for GDScript) are an
-            // explicit request for completion: fire on the next tick.
-            self.auto_completion_at = Some(Instant::now());
+        } else if last == '.' || self.lsp.completion_triggers().contains(&last) {
+            // A quote only triggers when it opened the literal under the caret;
+            // the closing quote must not pop a path list. Everything else in
+            // the server's list (`.`, `$`, `%` for GDScript) is immediate.
+            let quote = matches!(last, '\'' | '"');
+            let inside_string = quote
+                && self.ws.active_doc().is_some_and(|doc| {
+                    model_lsp::enclosing_string_span(doc.text(), doc.caret()).is_some()
+                });
+            if !quote || inside_string {
+                self.auto_completion_at = Some(Instant::now());
+            }
         }
     }
 
@@ -628,6 +631,21 @@ impl AppState {
             return false;
         };
         let caret = doc.caret();
+        // Godot returns `"res://path"` (quotes included, no textEdit range), so
+        // a quoted insertion inside a string replaces the whole literal. A
+        // plain identifier still replaces just the word under the caret.
+        let quoted = item.insert.starts_with(['\'', '"']);
+        if let Some((start, end)) =
+            model_lsp::enclosing_string_span(doc.text(), caret).filter(|_| quoted)
+        {
+            self.auto_completion_at = None;
+            if doc.replace_range(start, end, &item.insert) {
+                self.editor.reveal = true;
+                self.status(format!("completed {}", item.label));
+                self.dirty = true;
+            }
+            return true;
+        }
         let mut start = caret;
         while start > 0 {
             let previous = doc.text()[..start]
