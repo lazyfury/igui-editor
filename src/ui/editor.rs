@@ -178,8 +178,14 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
                     true
                 }
                 Key::Enter => {
-                    let extra =
-                        gdscript && crate::model::godot::opens_block(doc.line_before_caret());
+                    let extra = gdscript
+                        && crate::model::godot::opens_block(doc.line_before_caret())
+                        // A docstring line ending in `:` is string content, not a
+                        // block opener; adding a level here corrupts the text.
+                        && !crate::model::godot::in_multiline_string(
+                            doc.text(),
+                            doc.caret(),
+                        );
                     doc.insert_newline(extra, indent);
                     true
                 }

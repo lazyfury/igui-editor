@@ -388,7 +388,9 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    cannot silently introduce the mix the GDScript parser rejects. The setting
    only supplies the fallback for files without indentation and the target of
    **Format Document**; Tab/Shift+Tab and GDScript's `:` newline use the same
-   per-document unit.
+   per-document unit. The `:` newline rule is suppressed inside a triple-quoted
+   GDScript string: there the line is content, and indenting it would corrupt a
+   docstring.
 
 41. **Explorer visibility is a display filter, not a data filter.** Hidden dot
    entries and generated/tool files (`<script>.gd.uid`, `*.tmp`, `*~`, swap

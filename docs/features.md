@@ -549,7 +549,9 @@ columns), so a Godot script generated with tabs keeps tabs when edited here.
 Files with no indentation use the **Indent Style** / **Indent Width** settings
 (default: four spaces). `Tab` / `Shift+Tab` indent and outdent with the detected
 unit, and in GDScript `Enter` after a block opener (`func`, `if`, `for`,
-`while`, `match`, a line ending in `:`) adds one level. Pure spaces are legal
+`while`, `match`, a line ending in `:`) adds one level. A `:` inside a
+`"""` / `'''` docstring is content, not a block opener, so Enter there keeps
+the string's indentation. Pure spaces are legal
 GDScript; mixing tabs and spaces is what the parser rejects, which is why the
 file's existing style wins over the setting.
 

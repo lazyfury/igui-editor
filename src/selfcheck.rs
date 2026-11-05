@@ -3208,6 +3208,51 @@ fn check(dir: &Path) -> Result<(), String> {
         }
     }
 
+    // A GDScript docstring line ending in `:` is content: Enter must not add a
+    // block indent (the syntax layer keeps the string open until `"""`).
+    {
+        let mut state = harness.app.state_mut();
+        let doc = state.ws.active_doc_mut().expect("active GDScript tab");
+        let end = doc.text().len();
+        doc.set_caret(end);
+    }
+    harness.type_text("\n\"\"\"");
+    harness.key(Key::Enter);
+    harness.type_text("Usage:");
+    harness.key(Key::Enter);
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        let text = state
+            .ws
+            .active_doc()
+            .map(|doc| doc.text().to_string())
+            .unwrap_or_default();
+        if !text.ends_with("\"\"\"\nUsage:\n") {
+            return Err(format!(
+                "Enter inside a GDScript docstring added an indent: {text:?}"
+            ));
+        }
+    }
+    harness.type_text("\"\"\"");
+    harness.key(Key::Enter);
+    harness.type_text("func later():");
+    harness.key(Key::Enter);
+    harness.type_text("pass");
+    {
+        let state = harness.app.state();
+        let text = state
+            .ws
+            .active_doc()
+            .map(|doc| doc.text().to_string())
+            .unwrap_or_default();
+        if !text.ends_with("func later():\n    pass") {
+            return Err(format!(
+                "Enter after a real GDScript block opener lost its indent: {text:?}"
+            ));
+        }
+    }
+
     // Async workers (git) answer on their own thread; give them a moment.
     let settle = std::time::Instant::now() + Duration::from_secs(2);
     while harness.app.needs_frame() && std::time::Instant::now() < settle {
