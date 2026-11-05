@@ -98,6 +98,12 @@ impl AppState {
     }
 
     pub fn close_rename_symbol(&mut self) {
+        self.lsp.cancel_rename();
+        self.hide_rename_symbol();
+    }
+
+    /// Hides the prompt without cancelling a rename request that was just sent.
+    fn hide_rename_symbol(&mut self) {
         self.rename_symbol.open = false;
         self.rename_symbol.context = None;
         self.rename_symbol.error = None;
@@ -133,7 +139,7 @@ impl AppState {
             return;
         }
         if self.lsp.request_rename(doc, &name, &context.old_name) {
-            self.close_rename_symbol();
+            self.hide_rename_symbol();
             self.status(format!("renaming {} to {name}…", context.old_name));
         } else {
             self.rename_symbol.error = Some(self.lsp_unavailable());

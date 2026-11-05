@@ -507,7 +507,9 @@ impl AppState {
     pub(crate) fn clear_signature_help(&mut self) {
         self.signature_help_at = None;
         self.signature_help_doc = None;
-        if self.lsp.signature_help.take().is_some() {
+        let visible = self.lsp.signature_help.is_some();
+        self.lsp.cancel_signature_help();
+        if visible {
             self.dirty = true;
         }
     }

@@ -2435,6 +2435,41 @@ impl LspController {
         self.references.take()
     }
 
+    /// Drops an open references list and its in-flight request.
+    pub fn cancel_references(&mut self) {
+        self.references = None;
+        if let Some(session) = self.active_session_mut() {
+            session
+                .pending
+                .retain(|_, (kind, _)| !matches!(kind, PendingKind::References { .. }));
+        }
+        self.changed = true;
+    }
+
+    /// Drops a visible signature card and its in-flight request (Escape or `)`).
+    pub fn cancel_signature_help(&mut self) {
+        self.signature_help = None;
+        if let Some(session) = self.active_session_mut() {
+            session
+                .pending
+                .retain(|_, (kind, _)| !matches!(kind, PendingKind::SignatureHelp));
+        }
+        self.changed = true;
+    }
+
+    /// Drops a rename prompt's in-flight prepare/rename request and results.
+    pub fn cancel_rename(&mut self) {
+        self.rename_context = None;
+        self.prepare_result = None;
+        self.rename_result = None;
+        if let Some(session) = self.active_session_mut() {
+            session.pending.retain(|_, (kind, _)| {
+                !matches!(kind, PendingKind::PrepareRename | PendingKind::Rename)
+            });
+        }
+        self.changed = true;
+    }
+
     /// `F2` step one: ask whether the symbol can be renamed. Returns `None`
     /// until the server answers.
     pub fn request_prepare_rename(&mut self, doc: &Document, old_name: &str) -> bool {

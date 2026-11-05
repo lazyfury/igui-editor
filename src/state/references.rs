@@ -92,6 +92,7 @@ impl AppState {
         if self.references.open {
             self.references.open = false;
             self.references.rows.clear();
+            self.lsp.cancel_references();
             self.dirty = true;
         }
     }
