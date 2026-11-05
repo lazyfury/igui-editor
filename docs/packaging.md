@@ -11,6 +11,25 @@ The script builds with `--no-default-features`: the headless self-check,
 recording backend and profiler are development-only and are not linked into the
 shipped bundle. Release uses fat LTO, `panic = "abort"` and stripped symbols.
 
+## Profiles
+
+| Profile | Settings | Use |
+|---|---|---|
+| `release` | fat LTO, 1 codegen unit, stripped | the shipped bundle and `scripts/bench.sh` |
+| `release-fast` | thin LTO, 16 codegen units, same opt levels | iterating on release-only problems, manual testing of an optimized build |
+
+`release-fast` inherits `release` (including the per-package opt-level
+overrides) and only relaxes link-time choices, so a bug that only appears with
+optimizations still shows up while relinking costs ~1/3 of the time:
+
+```bash
+cargo build --profile release-fast --no-default-features
+scripts/check.sh --fast        # gate with the release-fast build step
+```
+
+Packaging always uses `release`; never ship a `release-fast` binary — the
+recorded size and benchmark numbers assume fat LTO.
+
 Outputs:
 
 - `dist/igui-editor.app` — ad-hoc signed app bundle (run locally);

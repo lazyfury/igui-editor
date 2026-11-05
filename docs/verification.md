@@ -3,11 +3,15 @@
 ```bash
 scripts/check.sh                            # fmt + clippy + tests + self-check
 scripts/check.sh --release                  # also builds the shipped binary
+scripts/check.sh --fast                     # same, via the `release-fast` profile
 ```
 
-The local gate is `scripts/check.sh`; run it before every commit. CI automation
-is **not currently checked in** — restoring the macOS gate is deferred and
-tracked in [improvement-plan.md §4.5](improvement-plan.md).
+The local gate is `scripts/check.sh`; run it before every commit. `--fast`
+builds with [`release-fast`](#build-iteration), which keeps the shipped opt
+levels but links in ~1/3 of the time; packaging always uses `--release`.
+
+CI automation is **not currently checked in** — restoring the macOS gate is
+deferred and tracked in [improvement-plan.md §4.5](improvement-plan.md).
 When restored it must check out this repository plus the `igui` engine at tag
 `v0.6.0` as siblings, install Rust 1.85 with rustfmt/clippy and run the same
 gate on `macos-latest`.
@@ -140,6 +144,38 @@ CRLF save round-trips, undo/redo save-point cleanliness, divergent save-point
 invalidation, batched replace (one undo step), bounded find matches, terminal
 focus keeping clipboard/history out of the editor document, sidebar row-cache
 invalidation and external-URL scheme rejection.
+
+## Build iteration
+
+Profile choice (see `Cargo.toml`):
+
+| Profile | What it is for | App-only edit |
+|---|---|---|
+| `dev` | editing, `cargo run`, self-check; incremental, line tables only | ~1.5 s |
+| `release-fast` | release-only problems, manual testing of the optimized build; thin LTO, 16 codegen units | ~11 s |
+| `release` | shipped bundles and `scripts/bench.sh`; fat LTO, 1 codegen unit | ~34 s |
+
+```bash
+cargo build --profile release-fast --no-default-features   # fast optimized build
+cargo run --profile release-fast -- --dark README.md
+```
+
+`[profile.dev] debug = "line-tables-only"` and `[profile.test] debug = 0` keep
+`target/` small; test panics still print their source location, backtraces under
+`RUST_BACKTRACE=1` only lose line numbers. Delete `target/debug/incremental`
+when it grows (it is pure cache) — nothing else in `target/` is stale.
+
+Optional compile cache: `sccache` only helps when dependency artifacts are
+lost (`cargo clean`, toolchain switch, a fresh checkout) and does not cache the
+app's incremental units, so it is **not** enabled in `scripts/check.sh`:
+
+```bash
+export RUSTC_WRAPPER=sccache           # or: RUSTC_WRAPPER=sccache scripts/check.sh
+sccache --show-stats                   # hits, misses, cache size
+```
+
+Measured here: `cargo clean` → rebuild 24 s → 17 s with a warm cache; the hot
+loop pays ~1 s extra, which is why the wrapper stays opt-in.
 
 No OS capture of any kind is used. Native AppKit menus and the borderless
 window chrome are a manual smoke-test item; the headless check covers the

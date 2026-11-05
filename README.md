@@ -96,6 +96,7 @@ overrides and Developer ID/notarization.
 ```bash
 scripts/check.sh                            # fmt + clippy + tests + self-check
 scripts/check.sh --release                  # also builds the shipped binary
+scripts/check.sh --fast                     # same, via the thin-LTO `release-fast` profile
 scripts/bench.sh                            # Markdown parse/layout/paint/typing benchmark
 ```
 
@@ -113,6 +114,11 @@ Release bundles are tuned for distribution:
   `opt-level = "s"`;
 - packaging builds with `--no-default-features`, so the headless recorder,
   profiler and `igui_headless` are not linked into the app.
+
+For local iteration use `cargo build --profile release-fast` (thin LTO, 16
+codegen units, the same opt levels): an app-only relink drops from ~34 s to
+~11 s. `dev` keeps line tables only and `test` no debug info, which keeps
+`target/` small. See [docs/verification.md](docs/verification.md#build-iteration).
 
 Measured on macOS arm64 for 0.1.0:
 

@@ -104,6 +104,15 @@ rfd = { version = "0.15", default-features = false }
 # stays untouched. It only consumes the crates above through path deps.
 [workspace]
 
+# Symbolize backtraces without writing full debug info: `target/` stays a
+# fraction of its former size and the link step is shorter.
+[profile.dev]
+debug = "line-tables-only"
+
+# Test binaries only need symbols for panics; line tables dominated the link.
+[profile.test]
+debug = 0
+
 # Release: one codegen unit + fat LTO for runtime, stripped symbols and abort
 # panics for a smaller bundle. The headless self-check is not part of the
 # shipped bundle (see the `selfcheck` feature).
@@ -134,3 +143,13 @@ opt-level = 3
 opt-level = 3
 [profile.release.package.igui_winit]
 opt-level = 3
+
+# Iteration profile: the same optimizations and package overrides as `release`,
+# but thin LTO with parallel codegen, so relinking after an app-only edit costs
+# ~1/3 of the time. Packaging and benchmarks keep using `release` (fat LTO) so
+# shipped binaries and recorded numbers stay comparable:
+#   cargo build --profile release-fast --no-default-features
+[profile.release-fast]
+inherits = "release"
+lto = "thin"
+codegen-units = 16

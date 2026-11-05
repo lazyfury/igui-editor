@@ -48,7 +48,9 @@ Follow-on rules:
    ```bash
    scripts/check.sh
    ```
-   For release/packaging changes also run `scripts/check.sh --release`.
+   For release/packaging changes also run `scripts/check.sh --release`; use
+   `scripts/check.sh --fast` while iterating (thin-LTO `release-fast` profile,
+   ~1/3 of the relink cost).
 3. **Add or update tests** for every behavior change. Pure logic belongs in
    `src/model/` unit tests; pipeline/UI behavior belongs in `--selfcheck`.
    Do not use screenshots or OS capture as verification.
@@ -133,8 +135,9 @@ Read the minimum set; do not preload the whole tree.
 # Format, lint, unit tests, headless pipeline
 scripts/check.sh
 
-# Also build the shipped release binary (no selfcheck feature)
+# Same, plus the shipped release build (~34 s) or the fast one (~11 s)
 scripts/check.sh --release
+scripts/check.sh --fast
 
 # Markdown parse/layout/paint/typing performance
 scripts/bench.sh
