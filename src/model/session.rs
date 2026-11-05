@@ -17,6 +17,10 @@ use std::path::{Path, PathBuf};
 
 use super::fsutil;
 
+/// Current session format. Bump this together with a `Session::migrate` block
+/// and the `docs/features.md` version history.
+pub const SESSION_VERSION: u32 = 18;
+
 /// Cap for the two recent lists (`recent_projects`, `recent_files`).
 ///
 /// Open tabs are deliberately **not** capped: every restored tab must come
@@ -26,7 +30,7 @@ const MAX_RECENT: usize = 8;
 /// Persisted application state. Missing/corrupt files fall back to defaults.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Session {
-    /// Format version (currently `18`); unknown keys are ignored so
+    /// Format version (see [`SESSION_VERSION`]); unknown keys are ignored so
     /// older/newer files keep loading.
     pub version: u32,
     /// `"dark"` or `"light"`.
@@ -102,7 +106,7 @@ pub struct WindowGeometry {
 impl Default for Session {
     fn default() -> Self {
         Self {
-            version: 18,
+            version: SESSION_VERSION,
             theme: "dark".into(),
             sidebar: true,
             outline: true,
@@ -258,20 +262,35 @@ impl Session {
             .into_values()
             .filter_map(|(path, name)| Some((path?, name?)))
             .collect();
-        if session.version >= 14 {
-            session.recent_projects = recent_projects.into_values().take(MAX_RECENT).collect();
-            session.recent_files = recent_files.into_values().take(MAX_RECENT).collect();
-        }
+        session.migrate(recent_projects, recent_files);
         // Tabs are restored verbatim, in order: the session must bring back
         // every open tab, so `MAX_RECENT` does not apply here.
         session.tabs = tabs.into_values().collect();
         session
     }
 
+    /// Applies version-dependent parsing once all keys are read.
+    ///
+    /// Key additions and removals need no code here: a missing key keeps the
+    /// default and an unknown key is ignored. Append one `if self.version < N`
+    /// block per migration, oldest first.
+    fn migrate(
+        &mut self,
+        recent_projects: BTreeMap<usize, PathBuf>,
+        recent_files: BTreeMap<usize, PathBuf>,
+    ) {
+        // v14 split the mixed `recent.*` list into project/file lists. Pre-v14
+        // entries were already dropped by the parser and both lists stay empty.
+        if self.version >= 14 {
+            self.recent_projects = recent_projects.into_values().take(MAX_RECENT).collect();
+            self.recent_files = recent_files.into_values().take(MAX_RECENT).collect();
+        }
+    }
+
     pub fn render(&self) -> String {
         let mut out = String::new();
         // Always write the current format; parsing older files still works.
-        out.push_str("version=18\n");
+        out.push_str(&format!("version={SESSION_VERSION}\n"));
         out.push_str(&format!("theme={}\n", self.theme));
         out.push_str(&format!("sidebar={}\n", u8::from(self.sidebar)));
         out.push_str(&format!("outline={}\n", u8::from(self.outline)));
@@ -518,6 +537,12 @@ mod tests {
         assert_eq!(loaded.bottom_tab, "problems");
         assert!(loaded.terminal_open);
         let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn render_writes_the_current_version_constant() {
+        let text = Session::default().render();
+        assert!(text.starts_with(&format!("version={SESSION_VERSION}\n")));
     }
 
     #[test]

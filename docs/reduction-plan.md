@@ -65,8 +65,8 @@ terminal split panes; terminal profiles; further Git write operations.
 - [x] 3.1 One Markdown extension table shared by view mode, syntax and file
   icons (removed the `.mdx` mismatch).
 - 3.2 One `SESSION_VERSION` constant and an explicit migration chain.
-- 3.3 `scripts/check.sh --release` asserts the shipped binary size, so "keep it
-  lightweight" is measured rather than asserted.
+- [x] 3.3 `scripts/check.sh --release` asserts the shipped binary size (6 MB),
+  so "keep it lightweight" is measured rather than asserted.
 - 3.4 Documentation truth: features, roadmap, design, code map, README,
   `AGENTS.md` routing and the Session 4 plan status.
 
@@ -90,4 +90,6 @@ Deferred (behavior-neutral, tracked here so they are not lost):
 | 2.3 File-type icons | done | `model/fileicon`, `ui/fileicon`, `assets/icons/material` and the selfcheck icon assertion removed; plain file labels remain. |
 | 2.4 Extra language servers | done | Four specs and their plugin registrations removed; docs/README now list Rust + Godot. |
 | 3.1 Markdown extensions | done | `MARKDOWN_EXTENSIONS` is the single table; the syntax provider and file icons read it. 2 new tests. |
-| 3.2–3.4 | pending | |
+| 3.2 Session version | done | `SESSION_VERSION` constant and one `Session::migrate` seam; render writes the constant. |
+| 3.3 Binary budget | done | `check.sh --release` gates 6 MB; current binary 4.41 MB. |
+| 3.4 Docs | pending | |

@@ -9,6 +9,8 @@ scripts/check.sh --fast                     # same, via the `release-fast` profi
 The local gate is `scripts/check.sh`; run it before every commit. `--fast`
 builds with [`release-fast`](#build-iteration), which keeps the shipped opt
 levels but links in ~1/3 of the time; packaging always uses `--release`.
+`--release` also asserts the shipped binary stays under the 6 MB budget in
+[`benchmarks.md`](benchmarks.md#bundle-budget).
 
 CI automation is **not currently checked in** — restoring the macOS gate is
 deferred and tracked in [improvement-plan.md §4.5](improvement-plan.md).

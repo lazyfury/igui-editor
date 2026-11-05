@@ -45,9 +45,25 @@ if (( release )); then
         # iterating on release-only problems. Packaging always uses `release`.
         step "cargo build --profile release-fast --no-default-features"
         cargo build --profile release-fast --locked --no-default-features
+        size=$(wc -c < target/release-fast/igui-editor | tr -d ' ')
+        printf 'release-fast binary: %s MB (not the shipped size)\n' \
+            "$(awk "BEGIN { printf \"%.2f\", $size / 1048576 }")"
     else
         step "cargo build --release --no-default-features"
         cargo build --release --locked --no-default-features
+        # "Lightweight" is measured, not asserted: keep the shipped binary from
+        # growing silently. The limit is checked only for the fat-LTO release
+        # build that packaging ships.
+        step "release binary size"
+        size=$(wc -c < target/release/igui-editor | tr -d ' ')
+        limit=$((6 * 1024 * 1024))
+        printf 'release binary: %s MB (limit 6.00 MB)\n' \
+            "$(awk "BEGIN { printf \"%.2f\", $size / 1048576 }")"
+        if (( size > limit )); then
+            printf 'release binary is %s bytes, over the %s-byte budget\n' \
+                "$size" "$limit" >&2
+            exit 1
+        fi
     fi
 fi
 

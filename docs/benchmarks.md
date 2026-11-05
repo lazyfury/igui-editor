@@ -86,3 +86,17 @@ The current path:
   appears with a real window.
 - The self-check is the correctness gate; the benchmark is the performance
   gate. Both must pass.
+
+## Bundle budget
+
+"Lightweight" is measured by the gate, not asserted in prose. `scripts/check.sh
+--release` builds the shipped (`--no-default-features`, fat-LTO) binary and
+fails when it exceeds **6 MB**:
+
+```text
+release binary: 4.41 MB (limit 6.00 MB)
+```
+
+The `release-fast` profile is an iteration build (thin LTO, 16 codegen units)
+and is reported but not gated. Re-check this number before adding a dependency;
+the Session 5 reduction brought it from 4.8 MB to 4.41 MB.
