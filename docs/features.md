@@ -32,20 +32,10 @@ state machine for the common motions and operators. See
 ## Language intelligence (LSP)
 
 The editor talks to language servers over native JSON-RPC — no WebView, no JS
-bridge. Six built-in servers are registered:
+bridge. Two built-in servers are registered:
 
 - **Rust** — `rust-analyzer` over stdio, rooted at the nearest `Cargo.toml`
   (workspace root when `Cargo.lock`/`rust-toolchain.toml` exists).
-- **Go** — `gopls` over stdio, rooted at `go.work` or the nearest `go.mod`.
-- **TypeScript / JavaScript** — `typescript-language-server --stdio`, rooted at
-  a workspace marker (`pnpm-workspace.yaml`, `lerna.json`, `nx.json`, …) or the
-  nearest `package.json`/`tsconfig.json`; `.tsx`/`.jsx` are sent as
-  `typescriptreact`/`javascriptreact`.
-- **C / C++** — `clangd` over stdio, rooted at `compile_commands.json` /
-  `CMakeLists.txt` / `.clangd` / the repository root; `.h` is `c`, other
-  headers and sources are `cpp`.
-- **Python** — `pyright-langserver --stdio`, rooted at `pyrightconfig.json`, a
-  Python project marker or the file's folder (loose files work).
 - **Godot GDScript** — the Godot editor's GDScript server over loopback TCP.
   The client attaches to the **running** editor (`127.0.0.1:6005`, Editor
   Settings → Network → Language Server; `IGUI_EDITOR_GODOT_LSP` overrides
@@ -57,27 +47,26 @@ bridge. Six built-in servers are registered:
   at a time, and a new client takes the slot (`[LSP] Connection Taken` in
   Godot's log).
 
-Each spec declares `IGUI_EDITOR_*` overrides (`IGUI_EDITOR_GOPLS`,
-`IGUI_EDITOR_TS_SERVER`, `IGUI_EDITOR_CLANGD`, `IGUI_EDITOR_PYRIGHT`,
-`IGUI_EDITOR_RUST_ANALYZER`, `IGUI_EDITOR_GODOT_LSP`). Repository-local
+Each spec declares `IGUI_EDITOR_*` overrides (`IGUI_EDITOR_RUST_ANALYZER`,
+`IGUI_EDITOR_GODOT_LSP`). Repository-local
 `node_modules/.bin` shims are **not** executed by default; set
 `IGUI_EDITOR_TRUST_WORKSPACE=1` only for projects you trust. PATH and the
 user/global toolchains remain available either way. Servers are installed
 separately; the editor never installs them itself. When an executable is
 missing, a copy-only prompt names the tool and shows the install command
-(e.g. `go install golang.org/x/tools/gopls@latest`) with **COPY COMMAND**,
-**RETRY** and **CLOSE**; nothing is executed automatically.
+(e.g. `rustup component add rust-analyzer`) with **COPY COMMAND**, **RETRY** and
+**CLOSE**; nothing is executed automatically.
 
 **Roots and monorepos.** Workspace-level markers win over package markers, so
-`go.work`, `pnpm-workspace.yaml`, `Cargo.lock` and `rust-toolchain.toml` keep a
-repository on one server instead of one per package. Markers are searched above
+`Cargo.lock` and `rust-toolchain.toml` keep a repository on one server instead
+of one per package. Markers are searched above
 the open project too, so opening a single file inside a monorepo still finds the
 workspace root. Servers without markers fall back to the open project (or the
 file's folder) only where the spec allows loose files.
 
 **Lifecycle.** One server runs per `(language, project root)`; up to four are
 kept (least-recently-active evicted after 10 idle minutes), so switching tabs
-between Rust, TypeScript and Python does not restart them. The footer `LSP`
+between project roots does not restart them. The footer `LSP`
 chip has a small on/off dot: stopping kills every child and clears
 diagnostics/semantic tokens/outline. The same switch is the
 **Language Intelligence** settings row, persisted in the session.
@@ -86,7 +75,7 @@ diagnostics/semantic tokens/outline. The same switch is the
   `workspace.didChangeWatchedFiles`, honours watcher registrations, forwards the
   editor's own create/rename/delete and the filesystem poll as
   create/change/delete events, and sends `textDocument/didSave` on save. Project
-  and workspace markers (`compile_commands.json`, `tsconfig.json`, `Cargo.toml`,
+  and workspace markers (`Cargo.toml`, `rust-toolchain.toml`, `project.godot`,
   …) always reach the server, even if a watcher covers only source extensions,
   so configuration changes are not filtered out. Files never opened as tabs
   (generated code, `git checkout`) are therefore visible to the server too.

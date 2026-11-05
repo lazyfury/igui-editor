@@ -6,14 +6,10 @@
 //! host can map the same commands over JSON-RPC without redesigning Git or the
 //! terminal.
 
-pub mod clang;
 pub mod git;
-pub mod go;
 pub mod godot;
 pub mod lsp;
-pub mod python;
 pub mod terminal;
-pub mod typescript;
 
 use std::collections::BTreeMap;
 
@@ -185,7 +181,7 @@ impl AttachTarget {
 /// Owned strings (rather than `&'static str`) are deliberate: the same shape
 /// can be deserialized by a future extension host or a data-only language pack
 /// without changing the LSP client.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct LanguageServerSpec {
     #[serde(default)]
     pub id: String,
@@ -339,20 +335,7 @@ pub fn install_builtins() -> ServiceRegistry {
     let terminal = terminal::TerminalPlugin;
     let rust_lsp = lsp::RustLspPlugin;
     let godot_lsp = godot::GodotLspPlugin;
-    let go_lsp = go::GoLspPlugin;
-    let ts_lsp = typescript::TypeScriptLspPlugin;
-    let clang_lsp = clang::ClangLspPlugin;
-    let python_lsp = python::PythonLspPlugin;
-    for id in [
-        plugin.id(),
-        terminal.id(),
-        rust_lsp.id(),
-        godot_lsp.id(),
-        go_lsp.id(),
-        ts_lsp.id(),
-        clang_lsp.id(),
-        python_lsp.id(),
-    ] {
+    for id in [plugin.id(), terminal.id(), rust_lsp.id(), godot_lsp.id()] {
         registry.plugins.push(id);
     }
     let mut host = PluginHost {
@@ -362,10 +345,6 @@ pub fn install_builtins() -> ServiceRegistry {
     terminal.register(&mut host);
     rust_lsp.register(&mut host);
     godot_lsp.register(&mut host);
-    go_lsp.register(&mut host);
-    ts_lsp.register(&mut host);
-    clang_lsp.register(&mut host);
-    python_lsp.register(&mut host);
     registry
 }
 

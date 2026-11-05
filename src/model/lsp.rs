@@ -3697,6 +3697,25 @@ mod tests {
         dir
     }
 
+    /// A minimal data-only spec: the client is language-agnostic, so tests do
+    /// not need a built-in plugin to exercise rooting, ids and watchers.
+    fn spec(
+        extension: &str,
+        project: &[&str],
+        workspace: &[&str],
+        loose: bool,
+    ) -> LanguageServerSpec {
+        LanguageServerSpec {
+            id: extension.into(),
+            language: extension.into(),
+            extensions: vec![extension.into()],
+            project_markers: project.iter().map(|value| value.to_string()).collect(),
+            workspace_markers: workspace.iter().map(|value| value.to_string()).collect(),
+            loose_files: loose,
+            ..LanguageServerSpec::default()
+        }
+    }
+
     #[test]
     fn workspace_marker_wins_over_nested_package_marker() {
         let dir = fixture_dir("monorepo-go");
@@ -3705,7 +3724,7 @@ mod tests {
         std::fs::write(dir.join("go.work"), "go 1.22\n").unwrap();
         std::fs::write(dir.join("a/go.mod"), "module a\n").unwrap();
         std::fs::write(dir.join("b/go.mod"), "module b\n").unwrap();
-        let spec = crate::services::go::go_server();
+        let spec = spec("go", &["go.mod"], &["go.work"], false);
         let bound = std::fs::canonicalize(&dir).unwrap();
         let root = project_root(&dir.join("a/main.go"), &spec, Some(&bound)).unwrap();
         assert_eq!(root, std::fs::canonicalize(&dir).unwrap());
@@ -3717,7 +3736,7 @@ mod tests {
         let dir = fixture_dir("monorepo-package");
         std::fs::create_dir_all(dir.join("a/src")).unwrap();
         std::fs::write(dir.join("a/go.mod"), "module a\n").unwrap();
-        let spec = crate::services::go::go_server();
+        let spec = spec("go", &["go.mod"], &[], false);
         let bound = std::fs::canonicalize(&dir).unwrap();
         let root = project_root(&dir.join("a/src/main.go"), &spec, Some(&bound)).unwrap();
         assert_eq!(root, std::fs::canonicalize(dir.join("a")).unwrap());
@@ -3730,7 +3749,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("packages/web/src")).unwrap();
         std::fs::write(dir.join("pnpm-workspace.yaml"), "packages: []\n").unwrap();
         std::fs::write(dir.join("packages/web/package.json"), "{}\n").unwrap();
-        let spec = crate::services::typescript::typescript_server();
+        let spec = spec("ts", &["package.json"], &["pnpm-workspace.yaml"], false);
         // Opening a single file inside a package still finds the repository
         // workspace root, so one server serves every package.
         let bound = std::fs::canonicalize(dir.join("packages/web")).unwrap();
@@ -3744,7 +3763,7 @@ mod tests {
     #[test]
     fn loose_file_servers_fall_back_to_the_file_folder() {
         let dir = fixture_dir("loose");
-        let spec = crate::services::python::python_server();
+        let spec = spec("py", &[], &[], true);
         let root = project_root(&dir.join("script.py"), &spec, None).unwrap();
         assert_eq!(root, std::fs::canonicalize(&dir).unwrap());
         // A marker-only server refuses to start outside a project.
@@ -3755,11 +3774,11 @@ mod tests {
 
     #[test]
     fn language_ids_follow_the_session_spec() {
-        let ts = crate::services::typescript::typescript_server();
+        let mut ts = spec("ts", &[], &[], false);
+        ts.language_ids
+            .insert("tsx".into(), "typescriptreact".into());
         assert_eq!(ts.language_id(Path::new("/p/app.tsx")), "typescriptreact");
-        let c = crate::services::clang::clang_server();
-        assert_eq!(c.language_id(Path::new("/p/main.h")), "c");
-        assert_eq!(c.language_id(Path::new("/p/main.cpp")), "cpp");
+        assert_eq!(ts.language_id(Path::new("/p/app.ts")), "ts");
     }
 
     #[test]
@@ -3769,7 +3788,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("b")).unwrap();
         std::fs::write(dir.join("a/go.mod"), "module a\n").unwrap();
         std::fs::write(dir.join("b/go.mod"), "module b\n").unwrap();
-        let spec = crate::services::go::go_server();
+        let spec = spec("go", &["go.mod"], &["go.work"], false);
         let mut lsp = LspController {
             specs: vec![spec.clone()],
             sessions: vec![
@@ -3797,7 +3816,7 @@ mod tests {
 
     #[test]
     fn initialize_advertises_file_watches_and_saves() {
-        let spec = crate::services::go::go_server();
+        let spec = spec("go", &["go.mod"], &["go.work"], false);
         let params = initialize_params(Path::new("/tmp/project"), &spec);
         let workspace = &params["capabilities"]["workspace"];
         assert_eq!(workspace["workspaceFolders"], json!(true));
@@ -3836,7 +3855,7 @@ mod tests {
 
     #[test]
     fn registered_watchers_filter_file_events() {
-        let spec = crate::services::go::go_server();
+        let spec = spec("go", &["go.mod"], &["go.work"], false);
         let mut session = Session::new(spec, PathBuf::from("/root"));
 
         // Without a registration the spec's extension decides.
@@ -3874,14 +3893,15 @@ mod tests {
     #[test]
     fn marker_files_always_reach_the_server() {
         let session = Session::new(
-            crate::services::clang::clang_server(),
+            spec("cpp", &["compile_commands.json"], &[], false),
             PathBuf::from("/root"),
         );
-        // clangd's build database and config are not source files, but they
-        // change analysis and must not be filtered out by extension.
-        for name in ["compile_commands.json", "compile_flags.txt", ".clangd"] {
-            assert!(session.wants(&Path::new("/root").join(name), FileEventKind::Changed));
-        }
+        // Build databases and config are not source files, but they change
+        // analysis and must not be filtered out by extension.
+        assert!(session.wants(
+            &Path::new("/root").join("compile_commands.json"),
+            FileEventKind::Changed
+        ));
         assert!(!session.wants(Path::new("/root/README.md"), FileEventKind::Changed));
     }
 
@@ -4230,7 +4250,7 @@ mod tests {
 
     #[test]
     fn disabling_drops_every_session() {
-        let spec = crate::services::go::go_server();
+        let spec = spec("go", &["go.mod"], &["go.work"], false);
         let mut lsp = LspController::default();
         lsp.sessions.push(Session::new(spec, PathBuf::from("/tmp")));
         lsp.active = Some(0);

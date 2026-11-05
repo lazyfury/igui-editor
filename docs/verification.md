@@ -82,7 +82,7 @@ chip opens the bottom dock's PROBLEMS tab (workspace rows, click jumps and keeps
 the panel open), `F1` paints
 a hover card, `⌘I`/`Ctrl+I` opens a completion list and inserts the selected
 item, and `F12` jumps to the returned definition. A second scripted server
-checks a `go.work` monorepo: one `initialize`, two `didOpen`s with the `go`
+checks a `Cargo.lock` monorepo: one `initialize`, two `didOpen`s with the `rust`
 language id, both modules' diagnostics alive at once, the footer dot stopping
 every child (`LSP OFF`, diagnostics cleared) and the settings row restarting it.
 A file created/deleted behind the editor's back (a Godot `.gd.uid`) checks the

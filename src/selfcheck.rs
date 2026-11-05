@@ -6567,21 +6567,19 @@ fn check_lsp_monorepo(dir: &Path) -> Result<(), String> {
         fs::create_dir_all(project.join(package))
             .map_err(|error| format!("monorepo fixture: {error}"))?;
         fs::write(
-            project.join(package).join("go.mod"),
-            format!("module example.com/{package}\n"),
+            project.join(package).join("Cargo.toml"),
+            format!("[package]\nname = \"{package}\"\nversion = \"0.1.0\"\n"),
         )
         .map_err(|error| format!("monorepo fixture: {error}"))?;
         fs::write(
-            project.join(package).join("main.go"),
-            format!("package main\n\nfunc {package}() {{}}\n"),
+            project.join(package).join("main.rs"),
+            format!("fn {package}() {{}}\nfn main() {{ {package}(); }}\n"),
         )
         .map_err(|error| format!("monorepo fixture: {error}"))?;
     }
-    fs::write(
-        project.join("go.work"),
-        "go 1.22\n\nuse (\n\t./a\n\t./b\n)\n",
-    )
-    .map_err(|error| format!("monorepo fixture: {error}"))?;
+    // A workspace-level marker keeps both packages on one server.
+    fs::write(project.join("Cargo.lock"), "")
+        .map_err(|error| format!("monorepo fixture: {error}"))?;
 
     let server = dir.join("fake-lsp-log.py");
     fs::write(&server, FAKE_LOG_LSP).map_err(|error| format!("lsp fixture: {error}"))?;
@@ -6593,14 +6591,14 @@ fn check_lsp_monorepo(dir: &Path) -> Result<(), String> {
 
     let log = dir.join("lsp-monorepo.log");
     let _ = fs::remove_file(&log);
-    let previous_server = std::env::var_os("IGUI_EDITOR_GOPLS");
+    let previous_server = std::env::var_os("IGUI_EDITOR_RUST_ANALYZER");
     let previous_log = std::env::var_os("IGUI_FAKE_LSP_LOG");
-    std::env::set_var("IGUI_EDITOR_GOPLS", &server);
+    std::env::set_var("IGUI_EDITOR_RUST_ANALYZER", &server);
     std::env::set_var("IGUI_FAKE_LSP_LOG", &log);
     let result = lsp_monorepo_flow(dir, &project, &log);
     match previous_server {
-        Some(value) => std::env::set_var("IGUI_EDITOR_GOPLS", value),
-        None => std::env::remove_var("IGUI_EDITOR_GOPLS"),
+        Some(value) => std::env::set_var("IGUI_EDITOR_RUST_ANALYZER", value),
+        None => std::env::remove_var("IGUI_EDITOR_RUST_ANALYZER"),
     }
     match previous_log {
         Some(value) => std::env::set_var("IGUI_FAKE_LSP_LOG", value),
@@ -6621,8 +6619,8 @@ fn process_alive(pid: u32) -> bool {
 
 #[cfg(unix)]
 fn lsp_monorepo_flow(dir: &Path, project: &Path, log: &Path) -> Result<(), String> {
-    let a = canonical_target(project.join("a/main.go"));
-    let b = canonical_target(project.join("b/main.go"));
+    let a = canonical_target(project.join("a/main.rs"));
+    let b = canonical_target(project.join("b/main.rs"));
     let config = dir.join("lsp-monorepo.conf");
     let mut harness = Harness::new(Some(a.clone()), config, ScriptedDialogs::new(vec![]));
     wait_for_lsp(&mut harness, |state| {
@@ -6662,8 +6660,8 @@ fn lsp_monorepo_flow(dir: &Path, project: &Path, log: &Path) -> Result<(), Strin
     if opens.len() < 2 {
         return Err(format!("monorepo opened {} documents", opens.len()));
     }
-    if opens.iter().any(|event| event["languageId"] != "go") {
-        return Err("monorepo didOpen did not use the `go` language id".into());
+    if opens.iter().any(|event| event["languageId"] != "rust") {
+        return Err("monorepo didOpen did not use the `rust` language id".into());
     }
 
     // Footer dot stops every server; the chip reports LSP OFF.
@@ -6746,16 +6744,20 @@ fn lsp_monorepo_flow(dir: &Path, project: &Path, log: &Path) -> Result<(), Strin
 fn check_tooling_prompt(dir: &Path) -> Result<(), String> {
     let project = dir.join("missing-tool");
     fs::create_dir_all(&project).map_err(|error| format!("tooling fixture: {error}"))?;
-    let main = project.join("main.c");
-    fs::write(&main, "int main(void) { return 0; }\n")
-        .map_err(|error| format!("tooling fixture: {error}"))?;
-    let missing = project.join("missing-clangd-binary");
-    let previous = std::env::var_os("IGUI_EDITOR_CLANGD");
-    std::env::set_var("IGUI_EDITOR_CLANGD", &missing);
+    fs::write(
+        project.join("Cargo.toml"),
+        "[package]\nname = \"tooling-fixture\"\nversion = \"0.1.0\"\n",
+    )
+    .map_err(|error| format!("tooling fixture: {error}"))?;
+    let main = project.join("main.rs");
+    fs::write(&main, "fn main() {}\n").map_err(|error| format!("tooling fixture: {error}"))?;
+    let missing = project.join("missing-rust-analyzer-binary");
+    let previous = std::env::var_os("IGUI_EDITOR_RUST_ANALYZER");
+    std::env::set_var("IGUI_EDITOR_RUST_ANALYZER", &missing);
     let result = tooling_flow(dir, &canonical_target(main));
     match previous {
-        Some(value) => std::env::set_var("IGUI_EDITOR_CLANGD", value),
-        None => std::env::remove_var("IGUI_EDITOR_CLANGD"),
+        Some(value) => std::env::set_var("IGUI_EDITOR_RUST_ANALYZER", value),
+        None => std::env::remove_var("IGUI_EDITOR_RUST_ANALYZER"),
     }
     result
 }
@@ -6776,7 +6778,11 @@ fn tooling_flow(dir: &Path, main: &Path) -> Result<(), String> {
             .prompt
             .as_ref()
             .ok_or("tooling prompt is missing")?;
-        if prompt.tool != "clangd" || !prompt.command.contains("brew install llvm") {
+        if prompt.tool != "rust-analyzer"
+            || !prompt
+                .command
+                .contains("rustup component add rust-analyzer")
+        {
             return Err(format!(
                 "tooling prompt has the wrong install hint: {} / {}",
                 prompt.tool, prompt.command
@@ -6791,7 +6797,7 @@ fn tooling_flow(dir: &Path, main: &Path) -> Result<(), String> {
     }
     let frame = harness.frame()?;
     let painted = texts(&frame);
-    if !painted.iter().any(|text| text == "CLANGD NOT FOUND") {
+    if !painted.iter().any(|text| text == "RUST-ANALYZER NOT FOUND") {
         return Err("tooling prompt title was not painted".into());
     }
     if !painted.iter().any(|text| text == "COPY COMMAND") {

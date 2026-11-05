@@ -1,8 +1,7 @@
 # Native services and built-in plugins
 
-Status: Git status/diff, the first native PTY terminal slice,
-and LSP for Rust, Go, TypeScript/JavaScript, C/C++, Python and Godot GDScript are
-implemented. Extension host remains deferred.
+Status: Git status/diff, the first native PTY terminal slice, and LSP for Rust
+and Godot GDScript are implemented. Extension host remains deferred.
 
 ## Intent
 
@@ -103,7 +102,7 @@ same service.
 3. Workspace Trust UI (the opt-in local-binary guard is implemented).
 4. Extension host (deferred): JSON-RPC/WASM mapping of the same capabilities.
 
-## LSP service (Rust, Go, TS/JS, C/C++, Python, Godot)
+## LSP service (Rust, Godot)
 
 Status: diagnostics, hover, completion, definition, document symbols and
 semantic tokens are implemented for every built-in spec. The client is
@@ -136,24 +135,19 @@ its own language-server binary.
 | Spec | Command (`IGUI_EDITOR_*`) | Transport | Project markers | Workspace markers |
 |---|---|---|---|---|
 | `rust` | `rust-analyzer` (`…_RUST_ANALYZER`) | stdio | `Cargo.toml` | `Cargo.lock`, `rust-toolchain.toml` |
-| `go` | `gopls` (`…_GOPLS`) | stdio | `go.mod` | `go.work` |
-| `typescript` | `typescript-language-server --stdio` (`…_TS_SERVER`) | stdio | `package.json`, `tsconfig.json`, `jsconfig.json` | `pnpm-workspace.yaml`, `lerna.json`, `nx.json`, `turbo.json`, `rush.json`, `tsconfig.base.json` |
-| `clangd` | `clangd` (`…_CLANGD`) | stdio | `compile_commands.json`, `CMakeLists.txt`, `.clangd`, `.git` | `.clangd`, `.git` |
-| `python` | `pyright-langserver --stdio` (`…_PYRIGHT`) | stdio | `pyproject.toml`, `setup.py`, `setup.cfg`, `requirements.txt`, `.git` | `pyrightconfig.json` |
 | `gdscript` | — (attach-only; `…_GODOT_LSP` overrides the address) | TCP | `project.godot` | — |
 
-- `language_ids` maps extensions to LSP `languageId`: `.tsx → typescriptreact`,
-  `.jsx → javascriptreact`, `.h → c`, `.hpp → cpp`, everything else falls back
-  to `language`. `didOpen` uses the per-file value.
-- `loose_files` lets a server start outside a project (TypeScript, clangd,
-  Python); Rust/Go/Godot keep the old “project required” rule.
+- `language_ids` maps extensions to LSP `languageId`; everything else falls
+  back to `language`. `didOpen` uses the per-file value.
+- `loose_files` lets a server start outside a project; Rust/Godot keep the
+  “project required” rule.
 - **Root choice**: the outermost workspace marker wins, then the nearest project
   marker, then (loose-file specs) the open folder or the file's folder. Markers
   are searched above the open folder as well, so opening one file inside a
-  monorepo still finds `go.work`/`pnpm-workspace.yaml`. Roots are cached per
+  monorepo still finds the workspace root. Roots are cached per
   `(spec, file)` and invalidated when the file is activated or the folder
-  changes; `node_modules/.bin`, `~/go/bin`, pnpm/npm global bins, Homebrew LLVM
-  and the Xcode toolchain are searched for commands.
+  changes; `node_modules/.bin`, `~/.cargo/bin`, Homebrew and the user's global
+  toolchain directories are searched for commands.
 - **Sessions**: one JSON-RPC child per `(spec, project root)`. Up to four live
   sessions are kept (LRU, 10 idle minutes), and every open document is synced to
   the session that owns its root. Switching tabs between languages reuses the

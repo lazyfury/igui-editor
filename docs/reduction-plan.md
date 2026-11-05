@@ -1,6 +1,6 @@
 # Reduction plan — Session 5
 
-Status: **in progress** (phase 1 landed). Follows the Session 4 review and the product priority
+Status: **in progress** (phases 1 and 2 landed). Follows the Session 4 review and the product priority
 in [`AGENTS.md`](../AGENTS.md): text/Markdown first, Godot second, everything
 else at the LSP/highlight minimum. The goal is a smaller, more reliable editor,
 not a broader one.
@@ -53,8 +53,9 @@ Each item removes a surface that does not serve text/Markdown or Godot editing.
   refused destructive/network operations.
 - [x] **2.3 Material file-type icons** — removed the 43 embedded SVGs, the
   kind table and the fill-span rasterizer; folder chevrons and row rhythm stay.
-- **2.4 Extra language servers** — keep the generic LSP client, Rust and Godot;
-  drop the Go/TypeScript/C-C++/Python specs. No new languages after this.
+- [x] **2.4 Extra language servers** — kept the generic LSP client, Rust and
+  Godot; dropped the Go/TypeScript/C-C++/Python specs. No new languages after
+  this.
 
 Not doing: a command palette (Quick Open already covers the same surface);
 terminal split panes; terminal profiles; further Git write operations.
@@ -87,6 +88,6 @@ Deferred (behavior-neutral, tracked here so they are not lost):
 | 2.1 Image preview | done | Model/state/ui modules, `igui_assets`, the setting and session v17 key removed; selfcheck image checks deleted. |
 | 2.2 Git read-only | done | Worker requests/events, state, UI prompts and history/detail views removed; selfcheck now covers status + diff only. |
 | 2.3 File-type icons | done | `model/fileicon`, `ui/fileicon`, `assets/icons/material` and the selfcheck icon assertion removed; plain file labels remain. |
-| 2.4 Extra language servers | pending | |
+| 2.4 Extra language servers | done | Four specs and their plugin registrations removed; docs/README now list Rust + Godot. |
 | 3.1 Markdown extensions | done | `MARKDOWN_EXTENSIONS` is the single table; the syntax provider and file icons read it. 2 new tests. |
 | 3.2–3.4 | pending | |
