@@ -141,6 +141,7 @@ impl RecoveryStore {
     }
 
     /// Whether any snapshot exists.
+    #[cfg_attr(not(test), expect(dead_code, reason = "used by tests only"))]
     pub fn is_empty(&self) -> bool {
         self.list().is_empty()
     }

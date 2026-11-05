@@ -23,6 +23,7 @@ pub struct ToolingPrompt {
     /// One-line explanation shown under the title.
     pub detail: String,
     /// The command the editor tried to start.
+    #[expect(dead_code, reason = "prompt data with no reader yet")]
     pub source: String,
     /// Set after COPY succeeds.
     pub copied: bool,

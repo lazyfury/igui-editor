@@ -37,7 +37,7 @@ everything else at the LSP/highlight minimum. History lives in
 | F6 | P2 | Per-document maps (`doc_views`, `external`) are not pruned when a tab closes | `state/tabs.rs:250`; `state/workspace.rs:63` |
 | F7 | P2 | Command metadata is spread over 6 sites; ids are a separate inconsistent table | `state/mod.rs:171,240,314,383,401`; `keymap.rs:568` |
 | F8 | P2 | Adding a setting touches 10+ places; session version is duplicated | `settings.rs`; `model/session.rs:103,272`; `state/settings.rs:440` |
-| F9 | P2 | `AppState` exposes 108 `pub` fields (rule asks for `pub(crate)`); `new` is ~270 lines | `state/mod.rs:1212-1382` |
+| F9 | P2 | `AppState` exposes 107 `pub` fields (rule asks for `pub(crate)`); `new` is ~270 lines | `state/mod.rs:1212-1382` |
 | F10 | P2 | CI is documented but `.github/workflows/check.yml` was deleted (`37873b1`) | `docs/verification.md:8` |
 | F11 | P3 | Megafiles: `selfcheck.rs` 7.3k, `model/lsp.rs` 4.7k, `state/mod.rs` 2.3k, `app.rs` 2k | line counts |
 | F12 | P3 | Markdown extension list duplicated in 3 places, with different sets | `state/mod.rs:151`; `model/doc.rs:758`; `syntax/markdown.rs:20`; `model/fileicon.rs:198` |
@@ -183,18 +183,31 @@ Tests:
 
 Acceptance: no behavior change; `check.sh` and selfcheck menu hints pass.
 
-### 2.2 Encapsulate `AppState` (F9)
+### [x] 2.2 Encapsulate `AppState` (F9)
 
-Files: `src/state/mod.rs`, `src/ui/*`, `src/app.rs`, `src/input.rs`.
+Files: `src/state/mod.rs`, `src/model/*`, `src/services/mod.rs`, `src/state/tooling.rs`.
 
-- Mechanical `pub` → `pub(crate)` for `AppState` fields. Child state modules can
-  already read them through `super::*`; only UI/app siblings need `pub(crate)`.
-- Split `Action`/menu tables and the UI state structs out of `state/mod.rs` once
-  2.1 exists.
-- Do not group fields yet; that is a later, behavior-neutral refactor.
+- Done: all 107 `pub` fields of `AppState` are `pub(crate)`. Names, types,
+  ordering, `AppState::new` and every method (including
+  `EditorApp::state`/`state_mut`) are unchanged, so behavior is identical.
+  Child state modules already read the fields through `super::*`; `ui/` and
+  `app.rs` are in the same crate.
+- Narrowing removed the `pub`-field reachability chain that had been masking
+  dead code, exposing 11 items nothing reads (model helpers, service-manifest
+  metadata, three overlay fields). They keep their data shape and carry a
+  targeted `#[expect(dead_code, …)]`; the three that only tests use are gated
+  with `#[cfg_attr(not(test), expect(dead_code, …))]`. Nothing was deleted or
+  re-wired.
+- Follow-up (after 2.1): split the `Action`/menu tables and the UI state
+  structs (`SidebarUi`, `EditorUi`, `QuickOpenState`, …) out of `state/mod.rs`
+  and narrow their fields the same way. Do not group fields yet; that is a
+  later, behavior-neutral refactor.
 
-Acceptance: compiles with `pub(crate)` only; no test changes required;
-`state/mod.rs` shrinks below ~1,500 lines.
+Tests: none needed — no test changes were required.
+
+Acceptance: compiles with `pub(crate)` fields only and the gate is green (371
+unit + 2 doc tests, selfcheck). The `state/mod.rs` size target (~1,500 lines)
+waits for the split follow-up.
 
 ### [x] 2.3 Prune per-document state (F6)
 
@@ -339,7 +352,7 @@ the palette; selfcheck covers open/filter/run/escape.
 | Session 4 | 1.2 Quick Open | done | Step A: the palette reuses the index for the same root; the walk uses `file_type()` with a symlink `metadata()` fallback. Step B: `IndexWorker` builds the index on one std thread and `quick_open_tick` installs it only for the current root; the palette paints an `indexing project files…` placeholder, `needs_frame` polls while busy, structural changes and project switches drop the worker, and `refresh_quick_open` never builds. 2 new tests (worker round-trip, stale-root discard) plus the updated reuse/worker state tests; selfcheck settles the worker before ranking. Gate green: 368 unit + 2 doc tests, selfcheck. |
 | Session 4 | 1.3 Autosave | done | Autosave writes verbatim through `Document::save_verbatim` (no tidy, no undo step); failures keep the tab dirty and show an error. 4 new tests (2 doc, 2 state). Gate green: 366 unit + 2 doc tests, selfcheck. |
 | Session 4 | 2.1 Command table | pending | Keystone for 3.6. |
-| Session 4 | 2.2 `pub(crate)` | pending | |
+| Session 4 | 2.2 `pub(crate)` | done | All 107 `AppState` fields are `pub(crate)`; no field name/type/order, `new` or method changed, so behavior is unchanged. The narrowing removed the `pub`-field reachability chain that had masked dead code and exposed 11 unused items (model helpers, service-manifest metadata, three overlay fields); they keep their shape with a targeted `#[expect(dead_code, …)]` (three gated by `cfg_attr(not(test), …)` because only tests use them). UI state structs keep `pub` fields; that split follows 2.1. Gate green: 371 unit + 2 doc tests, selfcheck. |
 | Session 4 | 2.3 State pruning | done | `close_tab_now` calls one `forget_document` helper (`doc_views`, `doc_revs`, `language_by_id`, `recovery`, `external`); `reset_project_state` reuses it and `delete_path_now` drops path/folder stamps. `language_by_path` still outlives the tab. 3 new state tests. Gate green: 371 unit + 2 doc tests, selfcheck. |
 | Session 4 | 3.1 Markdown outline | pending | |
 | Session 4 | 3.2 Go to Line | pending | |

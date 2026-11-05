@@ -39,6 +39,7 @@ pub enum Capability {
 }
 
 impl Capability {
+    #[expect(dead_code, reason = "stable ids for the future extension host")]
     pub const fn id(self) -> &'static str {
         match self {
             Capability::GitReadStatus => "git.read.status",
@@ -63,14 +64,18 @@ impl Capability {
 #[derive(Clone, Copy, Debug)]
 pub struct ServiceManifest {
     pub id: &'static str,
+    #[expect(dead_code, reason = "manifest metadata for the future extension host")]
     pub version: &'static str,
+    #[expect(dead_code, reason = "manifest metadata for the future extension host")]
     pub capabilities: &'static [Capability],
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct CommandSpec {
     pub id: &'static str,
+    #[expect(dead_code, reason = "command metadata for the future extension host")]
     pub title: &'static str,
+    #[expect(dead_code, reason = "command metadata for the future extension host")]
     pub capability: Option<Capability>,
 }
 

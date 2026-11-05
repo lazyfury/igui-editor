@@ -67,6 +67,7 @@ impl HighlightCache {
 
     /// The active provider name (shown in the status bar), even when
     /// highlighting is disabled by a size limit.
+    #[cfg_attr(not(test), expect(dead_code, reason = "used by tests only"))]
     pub fn language(&self) -> Option<&'static str> {
         self.provider_name
     }

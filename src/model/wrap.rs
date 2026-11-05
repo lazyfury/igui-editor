@@ -95,6 +95,7 @@ impl WrapLayout {
         self.rows.get(index)
     }
 
+    #[cfg_attr(not(test), expect(dead_code, reason = "used by tests only"))]
     pub fn line_rows(&self, line: usize) -> &[Row] {
         let Some(&(start, end)) = self.line_rows.get(line) else {
             return &[];

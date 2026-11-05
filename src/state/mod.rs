@@ -1044,6 +1044,7 @@ impl TreeMenuAction {
 #[derive(Clone, Debug)]
 pub struct TreeMenuUi {
     pub path: PathBuf,
+    #[expect(dead_code, reason = "overlay data with no reader yet")]
     pub name: String,
     pub is_dir: bool,
     /// Right-click on empty Explorer space rather than a row.
@@ -1059,7 +1060,10 @@ pub struct TreeMenuUi {
 pub struct ReplaceJob {
     pub plans: Vec<PlannedFile>,
     pub replacement: String,
+    // The confirmation modal carries its own counts; these copies have no reader.
+    #[expect(dead_code, reason = "no reader yet")]
     pub files: usize,
+    #[expect(dead_code, reason = "no reader yet")]
     pub occurrences: usize,
 }
 
@@ -1216,162 +1220,162 @@ impl Default for SearchState {
 
 /// The single shared state. Callbacks hold an `Rc<RefCell<AppState>>`.
 pub struct AppState {
-    pub theme: Theme,
-    pub ws: Workspace,
-    pub show_sidebar: bool,
-    pub show_outline: bool,
+    pub(crate) theme: Theme,
+    pub(crate) ws: Workspace,
+    pub(crate) show_sidebar: bool,
+    pub(crate) show_outline: bool,
     /// Active bottom-dock tab (`Terminal` or `Problems`).
-    pub bottom_tab: Panel,
-    pub viewport: ViewportSize,
-    pub sidebar: SidebarUi,
-    pub outline: OutlineUi,
-    pub problems: ProblemsUi,
-    pub tooling: ToolingUi,
-    pub docs: DocsUi,
-    pub docs_view: DocsViewUi,
-    pub outline_node: Option<NodeId>,
-    pub outline_drag: Option<(f32, f32)>,
-    pub hover_target: Option<HoverTarget>,
-    pub hover_leave_at: Option<Instant>,
+    pub(crate) bottom_tab: Panel,
+    pub(crate) viewport: ViewportSize,
+    pub(crate) sidebar: SidebarUi,
+    pub(crate) outline: OutlineUi,
+    pub(crate) problems: ProblemsUi,
+    pub(crate) tooling: ToolingUi,
+    pub(crate) docs: DocsUi,
+    pub(crate) docs_view: DocsViewUi,
+    pub(crate) outline_node: Option<NodeId>,
+    pub(crate) outline_drag: Option<(f32, f32)>,
+    pub(crate) hover_target: Option<HoverTarget>,
+    pub(crate) hover_leave_at: Option<Instant>,
     /// Debounced auto-completion activation while typing.
-    pub auto_completion_at: Option<Instant>,
+    pub(crate) auto_completion_at: Option<Instant>,
     /// Pending signature-help request (trigger characters or an edit refresh).
-    pub signature_help_at: Option<Instant>,
+    pub(crate) signature_help_at: Option<Instant>,
     /// Document/revision/caret the visible signature help belongs to.
-    pub signature_help_doc: Option<(u64, u64, usize)>,
+    pub(crate) signature_help_doc: Option<(u64, u64, usize)>,
     /// Debounced occurrence-highlight request for the symbol at the caret.
-    pub occurrence_at: Option<Instant>,
+    pub(crate) occurrence_at: Option<Instant>,
     occurrence_key: Option<(u64, u64, usize)>,
-    pub editor: EditorUi,
-    pub tabs: TabsUi,
-    pub tab_drag: Option<TabDrag>,
-    pub tab_menu: Option<TabMenuUi>,
-    pub tree_menu: Option<TreeMenuUi>,
-    pub menu_open: Option<Menu>,
-    pub menubar_hover: Option<Menu>,
-    pub menubar_hits: Vec<(Menu, Rect)>,
+    pub(crate) editor: EditorUi,
+    pub(crate) tabs: TabsUi,
+    pub(crate) tab_drag: Option<TabDrag>,
+    pub(crate) tab_menu: Option<TabMenuUi>,
+    pub(crate) tree_menu: Option<TreeMenuUi>,
+    pub(crate) menu_open: Option<Menu>,
+    pub(crate) menubar_hover: Option<Menu>,
+    pub(crate) menubar_hits: Vec<(Menu, Rect)>,
     /// Header panel buttons, recorded in paint and used for hit-testing.
-    pub panel_hits: Vec<(Panel, Rect)>,
+    pub(crate) panel_hits: Vec<(Panel, Rect)>,
     /// Header panel button under the pointer.
-    pub panel_hover: Option<Panel>,
+    pub(crate) panel_hover: Option<Panel>,
     /// Dock tab strips: per-dock tab rectangles and close button, recorded in
     /// paint so paint and hit-testing share one layout.
-    pub dock_hits: [Vec<(Panel, Rect)>; 3],
-    pub dock_close: [Rect; 3],
+    pub(crate) dock_hits: [Vec<(Panel, Rect)>; 3],
+    pub(crate) dock_close: [Rect; 3],
     /// Dock tab / close button under the pointer.
-    pub dock_hover: Option<Panel>,
-    pub dock_close_hover: Option<DockId>,
+    pub(crate) dock_hover: Option<Panel>,
+    pub(crate) dock_close_hover: Option<DockId>,
     /// Native-style window chrome painted by the header.
-    pub header_close: Rect,
-    pub header_minimize: Rect,
-    pub header_zoom: Rect,
+    pub(crate) header_close: Rect,
+    pub(crate) header_minimize: Rect,
+    pub(crate) header_zoom: Rect,
     /// Traffic light under the pointer, for hover feedback.
-    pub header_hover: Option<HeaderButton>,
-    pub menu_rect: Rect,
+    pub(crate) header_hover: Option<HeaderButton>,
+    pub(crate) menu_rect: Rect,
     /// Popup item rectangles, in item order (separators have no rect).
-    pub menu_items: Vec<(Action, Rect)>,
-    pub menu_hover: Option<usize>,
+    pub(crate) menu_items: Vec<(Action, Rect)>,
+    pub(crate) menu_hover: Option<usize>,
     /// Status-bar message and whether it is an error.
-    pub message: Option<(String, bool, Instant)>,
-    pub clipboard: Option<Rc<RefCell<dyn Clipboard>>>,
+    pub(crate) message: Option<(String, bool, Instant)>,
+    pub(crate) clipboard: Option<Rc<RefCell<dyn Clipboard>>>,
     /// Cross-thread "draw a frame" handle (pty output, frame clock). `None` in
     /// headless runs, where the runner drives frames itself.
-    pub wake: Option<crate::wake::WakeFn>,
+    pub(crate) wake: Option<crate::wake::WakeFn>,
     /// Set when the shell must be rebuilt (sidebar, find bar, view mode).
-    pub needs_rebuild: bool,
+    pub(crate) needs_rebuild: bool,
     /// View mode the shell was last built for.
-    pub built_view: ViewMode,
+    pub(crate) built_view: ViewMode,
     /// Whether the shell currently mounts the documentation view.
-    pub built_docs: bool,
+    pub(crate) built_docs: bool,
     /// Whether the shell currently mounts the image preview tab.
-    pub built_image: bool,
+    pub(crate) built_image: bool,
     /// Split ratio the shell was last built for.
-    pub built_split: f32,
+    pub(crate) built_split: f32,
     /// Set when the next frame should repaint (paint cache invalidation).
-    pub dirty: bool,
+    pub(crate) dirty: bool,
     // -- M2 --------------------------------------------------------------
-    pub focus: Focus,
-    pub find: FindState,
-    pub modal: Option<Modal>,
-    pub modal_buttons: Vec<(ModalButton, Rect)>,
-    pub pending_dialog: Option<DialogRequest>,
+    pub(crate) focus: Focus,
+    pub(crate) find: FindState,
+    pub(crate) modal: Option<Modal>,
+    pub(crate) modal_buttons: Vec<(ModalButton, Rect)>,
+    pub(crate) pending_dialog: Option<DialogRequest>,
     /// Project root waiting for the switch confirmation.
-    pub pending_project: Option<PathBuf>,
+    pub(crate) pending_project: Option<PathBuf>,
     /// Path waiting for the delete confirmation.
-    pub pending_delete: Option<PathBuf>,
+    pub(crate) pending_delete: Option<PathBuf>,
     /// Per-document UI state (keyed by `Document::id`).
-    pub doc_views: HashMap<u64, DocUi>,
-    pub session: Session,
-    pub config_path: PathBuf,
-    pub config_dirty: bool,
-    pub preview: PreviewUi,
+    pub(crate) doc_views: HashMap<u64, DocUi>,
+    pub(crate) session: Session,
+    pub(crate) config_path: PathBuf,
+    pub(crate) config_dirty: bool,
+    pub(crate) preview: PreviewUi,
     /// Decoded image assets for the read-only image tab.
-    pub images: ImageStore,
+    pub(crate) images: ImageStore,
     /// Window title last pushed to the platform.
-    pub title: String,
+    pub(crate) title: String,
     // -- M3 --------------------------------------------------------------
-    pub settings: Settings,
-    pub services: ServiceRegistry,
-    pub sidebar_tab: String,
-    pub git: GitState,
-    pub terminal: TerminalState,
-    pub lsp: LspController,
-    pub keymap: Keymap,
+    pub(crate) settings: Settings,
+    pub(crate) services: ServiceRegistry,
+    pub(crate) sidebar_tab: String,
+    pub(crate) git: GitState,
+    pub(crate) terminal: TerminalState,
+    pub(crate) lsp: LspController,
+    pub(crate) keymap: Keymap,
     keymap_pending: Vec<KeyChord>,
     keymap_pending_at: Instant,
     keymap_overrides: Option<serde_json::Value>,
-    pub vim: crate::vim::VimState,
-    pub syntax: SyntaxRegistry,
-    pub highlight: HighlightCache,
+    pub(crate) vim: crate::vim::VimState,
+    pub(crate) syntax: SyntaxRegistry,
+    pub(crate) highlight: HighlightCache,
     /// Matched bracket byte positions for the caret (`open`, `close`).
-    pub bracket: Option<(usize, usize)>,
+    pub(crate) bracket: Option<(usize, usize)>,
     bracket_key: Option<(u64, u64, usize, bool)>,
-    pub settings_open: bool,
-    pub settings_row: usize,
+    pub(crate) settings_open: bool,
+    pub(crate) settings_row: usize,
     /// Node ids captured by the shell for live layout tweaks.
-    pub sidebar_node: Option<NodeId>,
+    pub(crate) sidebar_node: Option<NodeId>,
     /// Sidebar resize drag: `(start_pointer_x, start_width)`.
-    pub sidebar_drag: Option<(f32, f32)>,
+    pub(crate) sidebar_drag: Option<(f32, f32)>,
     /// Status-bar language selector hit rect (footer, bottom right).
-    pub language_hit: Rect,
-    pub language_hover: bool,
+    pub(crate) language_hit: Rect,
+    pub(crate) language_hover: bool,
     /// Status-bar theme toggle hit rect; clicking it toggles dark/light.
-    pub theme_hit: Rect,
-    pub theme_hover: bool,
+    pub(crate) theme_hit: Rect,
+    pub(crate) theme_hover: bool,
     /// Status-bar LSP summary chip; clicking it opens the problems popup.
-    pub lsp_hit: Rect,
-    pub lsp_hover: bool,
+    pub(crate) lsp_hit: Rect,
+    pub(crate) lsp_hover: bool,
     /// Status-bar LSP on/off dot next to the summary chip.
-    pub lsp_toggle_hit: Rect,
-    pub lsp_toggle_hover: bool,
+    pub(crate) lsp_toggle_hit: Rect,
+    pub(crate) lsp_toggle_hover: bool,
     /// Set when a settings change needs the sidebar's flex basis updated.
-    pub pending_sidebar_sync: bool,
+    pub(crate) pending_sidebar_sync: bool,
     /// A file drag is hovering the window (paints the drop overlay).
-    pub drop_hover: bool,
-    pub quick_open: QuickOpenState,
-    pub references: ReferencesUi,
-    pub rename_symbol: RenameSymbolUi,
-    pub new_file: NewFileState,
+    pub(crate) drop_hover: bool,
+    pub(crate) quick_open: QuickOpenState,
+    pub(crate) references: ReferencesUi,
+    pub(crate) rename_symbol: RenameSymbolUi,
+    pub(crate) new_file: NewFileState,
     /// Split-view nodes (for drag resizing) and the divider rectangle.
     /// Editor/preview control for the active view (vertical band anchor).
-    pub content_node: Option<NodeId>,
+    pub(crate) content_node: Option<NodeId>,
     /// Shared vertical centre of the content band, used by both drag handles.
-    pub content_center_y: Option<f32>,
-    pub split_editor: Option<NodeId>,
-    pub split_preview: Option<NodeId>,
-    pub split_dragging: bool,
-    pub split_divider: Rect,
-    pub recovery: RecoveryStore,
-    pub recovery_prompt: Option<Vec<RecoveryEntry>>,
+    pub(crate) content_center_y: Option<f32>,
+    pub(crate) split_editor: Option<NodeId>,
+    pub(crate) split_preview: Option<NodeId>,
+    pub(crate) split_dragging: bool,
+    pub(crate) split_divider: Rect,
+    pub(crate) recovery: RecoveryStore,
+    pub(crate) recovery_prompt: Option<Vec<RecoveryEntry>>,
     /// Planned replace-in-files job waiting for confirmation.
-    pub pending_replace: Option<ReplaceJob>,
+    pub(crate) pending_replace: Option<ReplaceJob>,
     /// The quit confirmation was discarded: the shell terminates the app.
-    pub quit_requested: bool,
+    pub(crate) quit_requested: bool,
     /// Per-path language overrides (persisted) and per-document ones (untitled).
-    pub language_by_path: HashMap<PathBuf, String>,
-    pub language_by_id: HashMap<u64, String>,
+    pub(crate) language_by_path: HashMap<PathBuf, String>,
+    pub(crate) language_by_id: HashMap<u64, String>,
     /// Keep editor and preview scroll positions in sync (W3).
-    pub sync_scroll: bool,
+    pub(crate) sync_scroll: bool,
     /// Last seen disk identity per open path (`None` = missing on disk).
     external: HashMap<PathBuf, Option<DiskStamp>>,
     /// Directory listings last seen by the external-change poll.
@@ -1384,7 +1388,7 @@ pub struct AppState {
     sync_rev: u64,
     last_activity: Instant,
     doc_revs: HashMap<u64, u64>,
-    pub search: SearchState,
+    pub(crate) search: SearchState,
 }
 
 impl AppState {

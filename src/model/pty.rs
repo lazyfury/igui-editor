@@ -184,6 +184,7 @@ impl PtySession {
         chunks
     }
 
+    #[expect(dead_code, reason = "stub with no caller yet")]
     pub fn cwd_hint(&self) -> Option<PathBuf> {
         None
     }
