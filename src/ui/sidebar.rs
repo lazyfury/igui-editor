@@ -253,9 +253,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                 expanded: row.expanded,
             }
         } else {
-            crate::ui::tree::Marker::File {
-                kind: crate::model::fileicon::kind_for(&row.path),
-            }
+            crate::ui::tree::Marker::Blank
         };
         let git = if row.is_dir {
             None

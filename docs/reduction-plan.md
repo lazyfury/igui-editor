@@ -51,8 +51,8 @@ Each item removes a surface that does not serve text/Markdown or Godot editing.
   read-only diff stay; `stage`/`unstage`/`commit`/`log`/commit detail and their
   capabilities are gone. Git is outside the priority and the editor already
   refused destructive/network operations.
-- **2.3 Material file-type icons** — 43 embedded SVGs and a fill-span
-  rasterizer. Folder disclosure and row rhythm stay; files are labelled by name.
+- [x] **2.3 Material file-type icons** — removed the 43 embedded SVGs, the
+  kind table and the fill-span rasterizer; folder chevrons and row rhythm stay.
 - **2.4 Extra language servers** — keep the generic LSP client, Rust and Godot;
   drop the Go/TypeScript/C-C++/Python specs. No new languages after this.
 
@@ -86,6 +86,7 @@ Deferred (behavior-neutral, tracked here so they are not lost):
 | 1.2 Undo cap | done | 64 MB / 5000-entry byte budget, oldest entries dropped, save point shifted. 2 new tests. |
 | 2.1 Image preview | done | Model/state/ui modules, `igui_assets`, the setting and session v17 key removed; selfcheck image checks deleted. |
 | 2.2 Git read-only | done | Worker requests/events, state, UI prompts and history/detail views removed; selfcheck now covers status + diff only. |
-| 2.3–2.4 Scope cut | pending | |
+| 2.3 File-type icons | done | `model/fileicon`, `ui/fileicon`, `assets/icons/material` and the selfcheck icon assertion removed; plain file labels remain. |
+| 2.4 Extra language servers | pending | |
 | 3.1 Markdown extensions | done | `MARKDOWN_EXTENSIONS` is the single table; the syntax provider and file icons read it. 2 new tests. |
 | 3.2–3.4 | pending | |

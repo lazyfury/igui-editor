@@ -260,13 +260,8 @@ follow the active palette and need no texture atlas or runtime asset files. Ever
 dock header paints the dock's tabs with that same icon set and one shared tab
 strip, and a dock's `×` closes it without discarding its state.
 
-Explorer rows show a file-type icon from the [Material Icon
-Theme](https://github.com/material-extensions/vscode-material-icon-theme) (MIT),
-vendored under `assets/icons/material`. Those files are filled silhouettes, so
-`src/ui/fileicon.rs` rasterizes each shape into horizontal `FillRect` spans
-(exact x edges, four sub-rows per pixel) while keeping the artwork's own colors;
-`src/model/fileicon.rs` maps names and extensions to a kind. Folder rows keep
-the disclosure chevron in the same marker slot, so labels stay aligned.
+Explorer rows use a plain label in the marker column; folder rows keep the
+disclosure chevron there, so labels stay aligned without a per-type icon atlas.
 
 Dot entries (`.git`, `.env`, …) stay out of the tree until **Settings → Hidden
 Files** is on; when shown they are dimmed. Generated and temporary files

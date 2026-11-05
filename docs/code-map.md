@@ -3,7 +3,6 @@
 ```
 src/
   model/doc.rs        text buffer, caret/selection, movement, delta undo stack
-  model/fileicon.rs   Explorer file-type table: name/extension -> FileKind
   model/find.rs       plain-text matcher (case / whole-word)
   model/git.rs        git status/diff worker + porcelain parser
   model/pty.rs        portable-pty PTY session
@@ -51,7 +50,6 @@ src/
   ui/outline.rs       right document-symbol outline
   ui/tree.rs          shared Explorer/outline tree row renderer
   ui/icon.rs          embedded Lucide icons, cached igui_svg documents + painter
-  ui/fileicon.rs      Material file-type icons: fill spans, cache + painter
   ui/tree_menu.rs     file-tree context menu
   ui/settings.rs      settings + Keymap row
   ui/references.rs    Fn/Shift+F12 references overlay (geometry shared by paint/click)
@@ -92,8 +90,6 @@ src/
 benches/
   markdown.rs         Markdown parse/layout/paint/typing benchmark
 assets/icons/lucide/  vendored Lucide SVGs (ISC), embedded via include_str!
-assets/icons/material/ vendored Material Icon Theme SVGs (MIT), embedded via
-                      include_str! and painted as fill spans
 docs/                 progressive-disclosure documentation (see docs/README.md)
 AGENTS.md             agent rules, file routing, mandatory checks
 packaging/

@@ -5,12 +5,11 @@
 //! markers and typography. Both painters go through [`paint_row`] so a change
 //! to the tree rhythm happens in one place.
 
-use igui_core::{Color, Rect, Size, Vec2};
+use igui_core::{Color, Rect, Vec2};
 use igui_render::PaintContext;
 use igui_ui::TextMeasurer;
 
 use crate::kit;
-use crate::model::fileicon::FileKind;
 use crate::theme::{Metrics, Palette};
 
 /// Horizontal padding from the panel edge to the first indent level.
@@ -20,15 +19,15 @@ use crate::theme::{Metrics, Palette};
 pub const PAD: f32 = crate::ui::dock::TAB_PAD * 2.0 + crate::ui::icon::SMALL * 0.5 - MARKER_W * 0.5;
 /// Indentation added per tree depth.
 pub const INDENT: f32 = 12.0;
-/// Width reserved for the disclosure chevron, file-type icon or kind glyph.
+/// Width reserved for the disclosure chevron or kind glyph.
 pub const MARKER_W: f32 = 12.0;
 
 /// The marker painted before a row's label.
 pub enum Marker<'a> {
     /// Folder disclosure triangle.
     Chevron { expanded: bool },
-    /// File-type icon (Material icon theme artwork) in the marker slot.
-    File { kind: FileKind },
+    /// No marker: the label starts in the marker column (plain file rows).
+    Blank,
     /// Outline symbol kind (`T`, `ƒ`, `P`, …).
     Glyph { text: &'a str, color: Color },
 }
@@ -96,14 +95,7 @@ pub fn paint_row(
                 );
             }
         }
-        Marker::File { kind } => {
-            let side = crate::ui::fileicon::SIZE;
-            let box_ = Rect::from_min_size(
-                Vec2::new(indent, rect.center().y - side * 0.5),
-                Size::splat(side),
-            );
-            crate::ui::fileicon::paint(ctx, *kind, box_);
-        }
+        Marker::Blank => {}
         Marker::Glyph { text, color } => {
             let width = kit::width(measurer, text, m.font_small);
             let x = indent + ((MARKER_W - width) * 0.5).max(0.0);

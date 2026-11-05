@@ -4,7 +4,6 @@ pub mod dock;
 pub mod docs_view;
 pub mod drop;
 pub mod editor;
-pub mod fileicon;
 pub mod find_bar;
 pub mod git;
 pub mod goto_line;
