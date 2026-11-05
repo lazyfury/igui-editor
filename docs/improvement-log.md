@@ -1,0 +1,380 @@
+# Improvement log — cycles 1–3
+
+Status: archived. This file preserves the session 1–3 execution plans and progress
+log. The current plan is [`improvement-plan.md`](improvement-plan.md); the
+architecture review is [`review.md`](review.md).
+
+> Historical content below. Statements that no longer match the code (session
+> version, Godot headless fallback, CI status, milestone numbers) describe the
+> state at the time of writing.
+
+## Constraints
+
+- Keep `model/` pure Rust and unit-tested.
+- Keep `state/` as one `AppState`; add domain methods in the matching module.
+- Keep one source of truth for commands in `src/keymap.rs` and `Action`.
+- Every behavior change needs a unit test or a `--selfcheck` assertion.
+- Run `scripts/check.sh` before closing a phase.
+- Do not modify `../igui`.
+
+## Phase 1: keyboard routing
+
+- [x] Remove the hard-coded shortcut fallback in `src/input.rs`.
+- [x] Fix literal `ctrl` matching on Linux/Windows while keeping `primary`.
+- [x] Move `Cmd/Ctrl+Arrow` movement into keymap actions.
+- [x] Add command ids for the movement actions.
+- [x] Tests: unbind is respected, `Ctrl+Space`/`Ctrl+\`` resolve, movement
+      actions select or move the caret.
+
+Acceptance:
+
+- `keymaps.json` `{"bindings":{"global":{"primary+s":null}}}` really disables
+  Save.
+- The same key table drives dispatch, menu hints and tests.
+- `Ctrl+Space` and `Ctrl+\`` work on non-macOS hosts without a fallback.
+
+## Phase 2: document IO and dirty state
+
+- [x] Add a shared atomic writer (`temp + fsync + rename`, permissions
+      preserved) and use it for `Document::save`.
+- [x] Preserve the file's line ending (LF/CRLF) across open/save/reload and
+      recovery snapshots.
+- [x] Track a save point in the undo stack so undo/redo can clear `dirty`
+      correctly.
+- [x] Tests: CRLF round-trip, atomic-writer temp cleanup, undo to the save
+      point is clean, redo is dirty, save-point invalidation after a divergent
+      edit.
+
+Acceptance:
+
+- `scripts/check.sh` passes.
+- Saving a CRLF fixture keeps CRLF.
+- Typing then undoing to the saved content no longer asks to save.
+
+## Phase 3: find and replace at scale
+
+- [x] Replace `find_all`'s full-text boundary vector with a streaming scan.
+- [x] Cap matches and expose truncation to the find bar.
+- [x] Add `Document::replace_ranges` implementing one batch edit / one undo.
+- [x] Route Replace All through the batch API.
+- [x] Tests: cap behavior, Unicode, overlapping matches, one-step undo.
+- [x] Verify the change does not touch the Markdown preview path (no bench run
+      required; the editor/find tests and self-check cover it).
+
+Acceptance:
+
+- A 2 MB fixture with many matches does not allocate a per-character boundary
+  vector.
+- Replace All is one undo step.
+- `cargo test` and `--selfcheck` pass.
+
+## Phase 4: focus-correct clipboard
+
+- [x] Route Paste to the PTY when the terminal owns focus.
+- [x] Prevent Copy/Cut/SelectAll from silently operating on the editor while
+      the terminal is focused.
+- [x] Test the terminal-focus path without requiring a real PTY where possible.
+
+Acceptance:
+
+- `Cmd+V` with terminal focus never changes the editor document.
+- Editor and find-field clipboard behavior is unchanged.
+
+## Phase 5: UI cost and external URL safety
+
+- [x] Cache the flattened sidebar rows; expose `&[Row]` instead of
+      `Vec<Row>` so hover/paint/scroll stop cloning the tree.
+- [x] Validate external URLs before opening them; only allow approved schemes.
+- [x] Replace the Windows `cmd /C start` path with a non-shell opener.
+- [x] Tests: row cache invalidation after toggle/expand, URL validation.
+
+Acceptance:
+
+- Pointer movement over the editor does not clone sidebar rows.
+- A malicious `[url=file:///...]` or `javascript:` link is refused.
+- `scripts/check.sh` passes.
+
+## Phase 6: documentation and verification
+
+- [x] Update session version, terminal state, roadmap and keymap documents.
+- [x] Add this plan to `docs/README.md` and the root routing table if needed.
+- [x] Record final `scripts/check.sh` output in the progress log.
+- [x] Leave deferred items (workspace trust, CI, close guard, terminal
+      selection/scrollback) in the next-step section.
+
+Acceptance:
+
+- Docs match the implemented session version and feature state.
+- No stale “next candidate” item that is already implemented.
+
+## Follow-up task log
+
+### Task 1: incremental line index (done)
+
+- [x] Track only the affected line starts after an edit, undo or redo instead of
+      rebuilding the whole index from the text.
+- [x] Keep insertion-at-line-start, newline deletion, merge and split cases
+      covered by tests.
+- [x] Compare against a full rebuild in a unit test helper.
+- [x] Benchmark before/after (same fixture): typing `1.41 ms/frame` →
+      `1.04 ms/frame` (single run, noisy; Markdown parse/layout/paint were
+      unchanged).
+- [x] `scripts/check.sh` passes with 234 unit tests + 2 doc tests.
+
+Acceptance:
+
+- `line_starts` matches a full rebuild after typing, newline insertion,
+  backspace, undo and redo.
+- The editor/self-check pipeline remains green.
+
+### Task 2: word-boundary soft wrap (done)
+
+- [x] Break at the last whitespace after real content; keep the separator on
+      the previous row so the next row starts with a word.
+- [x] Preserve leading indentation and fall back to character boundaries for
+      unbreakable long tokens.
+- [x] Tests: word wrapping, long-token fallback, indentation, visual row
+      mapping.
+- [x] `scripts/check.sh` passes with 237 unit tests + 2 doc tests.
+
+Acceptance:
+
+- A wrapped line does not start with a separator unless the logical line itself
+  starts with whitespace.
+- Long unbreakable tokens still split instead of overflowing.
+- Caret/click visual row mapping remains consistent.
+
+### Task 3: trusted workspace binaries (done)
+
+- [x] Stop resolving language servers from `node_modules/.bin` by default.
+- [x] Allow them only with `IGUI_EDITOR_TRUST_WORKSPACE=1`; PATH and global
+      toolchains still work.
+- [x] Test the trusted and untrusted resolution paths.
+- [x] Document the guard in features/services.
+
+Acceptance:
+
+- A repository-local shim is not selected unless explicitly trusted.
+- The normal PATH/toolchain resolution still works.
+
+### Task 4: CI gate (done)
+
+- [x] Add a GitHub Actions workflow that checks out the editor and `igui`
+      `v0.6.0` as sibling directories.
+- [x] Run the existing `scripts/check.sh` gate on `macos-latest` with Rust 1.85.
+- [x] Document the CI gate in verification/roadmap.
+
+Acceptance:
+
+- The workflow file parses as YAML and runs `scripts/check.sh` from the
+  `igui-editor` checkout.
+- The local gate remains green.
+
+### Task 5: terminal scrollback (done)
+
+- [x] Track a scrollback offset on `TerminalState` and clamp it to
+      `vt100::Screen::scrollback_len()`.
+- [x] Wheel over the terminal scrolls older/live rows; typing returns to live.
+- [x] Hide the caret and IME anchor while viewing scrollback.
+- [x] Test the scrollback clamp boundaries.
+- [x] Document the wheel behavior and remaining selection/copy gap.
+
+Acceptance:
+
+- Wheel-up shows older output, wheel-down returns toward live output and cannot
+  leave the valid range.
+- Typing while scrolled returns to the prompt.
+
+### Task 6: terminal selection/copy (done)
+
+- [x] Add an inclusive terminal cell selection with pointer drag and Select All.
+- [x] Paint selection cells and hide the caret while viewing scrollback.
+- [x] Copy through `vt100::Screen::contents_between`; paste still writes to the
+      PTY and typing/scrollback clear the selection.
+- [x] Tests: ordered/inclusive selection, vt100 copy, document isolation.
+- [x] Cut remains explicitly unsupported.
+
+Acceptance:
+
+- Dragging selects cells, `Cmd/Ctrl+C` copies only the terminal selection and
+  never edits the document.
+- `Cmd/Ctrl+A` selects the visible screen; typing or scrolling clears it.
+
+### Task 7: grapheme-aware editing (done)
+
+- [x] Add `model::grapheme` using the existing locked `unicode-segmentation`
+      dependency.
+- [x] Use grapheme boundaries for left/right movement, Backspace/Delete and
+      double-click word selection.
+- [x] Tests: combining marks, emoji skin-tone clusters, deletion and selection.
+- [x] Document the behavior.
+
+Acceptance:
+
+- Backspace/Delete remove a whole visible glyph, including combining marks and
+  emoji modifiers.
+- Arrow-left/right move over one grapheme cluster; double-click selection keeps
+  combining marks with their base letter.
+
+### Task 8: grapheme-aware word movement (done)
+
+- [x] Move word left/right over grapheme clusters and treat a cluster as a word
+      when any of its code points is alphanumeric.
+- [x] Test combining marks and emoji modifiers during word movement.
+- [x] `scripts/check.sh` passes with 247 unit tests + 2 doc tests.
+
+Acceptance:
+
+- Word movement never splits a combining mark from its base letter or an emoji
+  from its modifier.
+
+### Task 9: terminal clipboard chords on Linux/Windows (done)
+
+- [x] Add terminal-scoped `primary+shift+c/v/a` bindings so Ctrl+Shift+C/V/A work
+      without stealing Ctrl+C/Ctrl+A from the shell.
+- [x] Let the terminal key path forward those chords to the keymap instead of
+      encoding them as control bytes.
+- [x] Test terminal scope resolution.
+- [x] Document the platform-specific chords.
+
+Acceptance:
+
+- On Linux/Windows, Ctrl+Shift+C/V/A operate on the terminal selection while
+  Ctrl+C/Ctrl+A still reach the shell.
+- On macOS, Cmd+C/V/A continue to use the selection.
+
+### Task 10: Workspace Trust UI (done)
+
+- [x] Add a persistent **Trust Local Servers** setting row.
+- [x] Feed the setting into the LSP controller; changing it restarts sessions
+      so the executable-resolution policy applies immediately.
+- [x] Keep `IGUI_EDITOR_TRUST_WORKSPACE=1` as a per-launch override.
+- [x] Bump the session format to v13 and document the new key.
+- [x] Tests: settings default/row wiring and session round-trip.
+
+Acceptance:
+
+- Trust is off by default and can be toggled from Settings.
+- With trust off, repo-local `node_modules/.bin` shims are not selected; with
+  trust on they are, and the env var still forces them on.
+
+### Task 11: macOS window close guard (superseded, then removed)
+
+- [x] Replace winit's window-delegate `windowShouldClose:` with a wrapper that
+      blocks dirty windows and enqueues the existing quit guard.
+- [x] Keep the original implementation for clean windows so winit still exits
+      through its normal `CloseRequested` path.
+- [x] Test the dirty/clean predicate.
+- [x] Document the remaining Dock-reopen gap.
+
+Later removed together with Task 14: the red control is a quit button (no
+close-to-hide) and the dirty check runs in the app before AppKit is asked to
+terminate, so no `NSTerminateLater` reply is ever pending. See
+`docs/design.md` decision 33.
+
+Acceptance (historical):
+
+- Dirty window close shows the in-app Discard & Quit / Cancel guard and does not
+  close the window.
+- Clean window close follows winit's normal close path.
+
+### Task 12: native child cleanup on quit (done)
+
+- [x] Register LSP and PTY children in a process registry.
+- [x] Kill every registered child before AppKit returns `NSTerminateNow` and
+      before replying to a deferred quit.
+- [x] Keep `Drop` cleanup for normal session stop/eviction.
+- [x] Self-check verifies the fake language-server pid is gone after
+      `shutdown_children`.
+- [x] Manual packaged-app check: open a Godot project, quit from the app, no
+      `Godot --headless` process remains.
+
+Acceptance:
+
+- A Godot project's headless process is gone after an app quit.
+- Language-server/PTY cleanup still works for normal stop and eviction.
+
+### Task 13: multiple terminal sessions (done)
+
+- [x] Split terminal state into `TerminalSession` entries plus one active index.
+- [x] Add header tabs, `+` new shell and `×` close-active controls.
+- [x] Keep per-session parser, cwd, scrollback and selection; poll/resize the
+      active and inactive PTYs correctly.
+- [x] State/self-check tests cover selection, close-index adjustment, adding a
+      second shell and closing it.
+- [x] Document that sessions are not persisted across restart.
+
+Acceptance:
+
+- `+` opens a second shell, tabs switch sessions, and `×` closes the active
+  session without corrupting the active index.
+- Closing the last session closes the panel; quitting still kills every PTY.
+
+### Task 14: close-to-hide + Dock reopen (reverted)
+
+- [x] Make `windowShouldClose:` hide the NSWindow instead of exiting the app.
+- [x] Route the simulated red traffic light through the same hide action.
+- [x] Add `applicationShouldHandleReopen:hasVisibleWindows:` to show the stored
+      window and activate the app when the Dock icon is clicked.
+- [x] Keep `⌘Q` as the dirty-tab quit path; native children are still killed on
+      termination.
+- [x] Update the macOS integration docs and roadmap.
+
+Later reverted: the close control quits again (through the in-app dirty guard)
+and only the Dock-reopen handler stayed.
+
+Acceptance (historical):
+
+- Closing the window keeps the process and buffers alive; reopening from the
+  Dock shows the same window.
+- Quit still runs the save guard.
+
+## Deferred to the next feature slice
+
+These are intentionally not part of this plan's implementation phases:
+
+- Native macOS Dock reopen.
+- Terminal session restore (live shells are not persisted).
+- Incremental Markdown preview layout.
+
+## Progress log
+
+| Date | Phase | Status | Notes |
+|---|---|---|---|
+| Session 1 | Baseline | done | `cargo fmt`, clippy, 217 unit tests + 2 doc tests, `--selfcheck` pass. |
+| Session 1 | 1 keyboard | done | Fallback removed; literal Ctrl normalized; movement actions added; 232 unit tests. |
+| Session 1 | 2 document IO | done | Atomic save, CRLF preservation, save-point dirty tracking, recovery EOL. |
+| Session 1 | 3 find/replace | done | Streaming scan, 10k cap, one-step batch Replace All. |
+| Session 1 | 4 terminal focus | done | Terminal paste/copy/clipboard routes are focus-aware. |
+| Session 1 | 5 UI/URL | done | Sidebar row cache, URL scheme allowlist, Windows non-shell opener. |
+| Session 1 | 6 docs | done | Docs updated; final `scripts/check.sh` passed with 232 unit tests + 2 doc tests. |
+| Session 2 | Follow-up 1 | done | Incremental line index; 234 unit tests; typing bench 1.41 → 1.04 ms/frame. |
+| Session 2 | Follow-up 2 | done | Word-boundary soft wrap; 237 unit tests; selfcheck green. |
+| Session 2 | Follow-up 3 | done | Repo-local LSP shims require explicit trust; 238 unit tests. |
+| Session 2 | Follow-up 4 | done | GitHub Actions gate with pinned igui v0.6.0. |
+| Session 2 | Follow-up 5 | done | Terminal vt100 scrollback with wheel navigation; 239 unit tests. |
+| Session 2 | Follow-up 6 | done | Terminal cell selection/copy; 242 unit tests. |
+| Session 2 | Follow-up 7 | done | Grapheme-aware movement/deletion/selection; 246 unit tests. |
+| Session 2 | Follow-up 8 | done | Grapheme-aware word movement; 247 unit tests. |
+| Session 2 | Follow-up 9 | done | Terminal Ctrl+Shift clipboard chords; 248 unit tests. |
+| Session 2 | Follow-up 10 | done | Workspace Trust UI, session v13; 248 unit tests. |
+| Session 2 | Follow-up 11 | done | macOS dirty-window close guard; 249 unit tests. |
+| Session 2 | Follow-up 12 | done | Native child cleanup on quit; 251 unit tests + packaged Godot test. |
+| Session 2 | Follow-up 13 | done | Multiple terminal sessions; 252 unit tests + selfcheck tabs. |
+| Session 2 | Follow-up 14 | done | Close-to-hide + Dock reopen; 252 unit tests. |
+| Session 3 | Godot LSP attach | done | Talk to the running Godot editor's language server (attach target `127.0.0.1:6005`, `IGUI_EDITOR_GODOT_LSP`); attach unit + selfcheck coverage. |
+| Session 3 | External file watch | done | Directory snapshots + `FsTree::refresh` keep the Explorer live; `workspace/didChangeWatchedFiles` + `didSave` push changes to language servers; 277 unit tests + selfcheck watch/didSave checks. |
+| Session 3 | Indentation + Format Document | done | Per-file tab/space detection (default 4 spaces), GDScript `:` smart indent, Format Document (`editor.format`) and the Indent Style/Width settings; 300 unit tests + selfcheck indent/format checks. |
+| Session 3 | Godot file freshness | done | Godot's LSP ignores watched files and a spawned headless editor never rescans, so new/deleted scripts stayed invisible: the spawned process gets a private editor profile with the unfocused rescan enabled, `<root>/.godot/global_script_class_cache.cfg` is watched, open documents are re-parsed after structural changes, and a deleted path drops its diagnostics at once. An opt-in own-server mode skipped attach; see the LSP reload policy row for the current restart rules. |
+| Session 3 | LSP reload policy | done | Saves and file changes never restart a server: Godot open documents are re-sent after the project scan (three bounded passes), project/workspace markers always reach Notify servers, and **Restart Language Server** (`lsp.restart`) resets a session. |
+| Session 3 | Godot attach-only | done | Godot 4's LSP default is 6005 (not 6008), and the 6008 attach failure spawned a second headless editor. Remove the headless path entirely: attach to the running editor only, retry every 2 s with an "open the project in the editor" notice, reconnect after a takeover/restart, and keep the class-cache-watch document re-parse for new/deleted scripts. `IGUI_EDITOR_GODOT_LSP` still overrides the address; 295 unit tests + selfcheck. |
+| Session 3 | Dock panels | done | `DockId`/`Panel` tab model + shared `ui::dock` header; bottom dock hosts Terminal and workspace-wide PROBLEMS (replacing the status-bar popup), closing keeps shells, session v15; 263 unit tests + selfcheck dock/tab checks. |
+
+## Final acceptance checklist
+
+- [x] `scripts/check.sh` passes.
+- [x] New unit tests cover every behavior change.
+- [x] Existing `--selfcheck` remains green; new UI-adjacent paths are covered by
+      unit tests where a full window is not required.
+- [x] Documentation is updated.
+- [x] No generated artifacts are committed.

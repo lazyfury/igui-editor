@@ -1,7 +1,10 @@
 # Architecture & interaction review
 
-Status: review of `b1b65a5`; improvement cycle 1 applied.
-Baseline: `cargo test` 164 passed, `cargo run -- --selfcheck` ok,
+Status: historical review log (cycles 1–3, snapshot `b1b65a5`). The current
+work plan is [`improvement-plan.md`](improvement-plan.md); the full delivered
+history is [`improvement-log.md`](improvement-log.md).
+
+Baseline at the time: `cargo test` 164 passed, `cargo run -- --selfcheck` ok,
 `cargo clippy --all-targets` clean (only the upstream `block v0.1.6`
 future-incompat notice).
 
