@@ -195,7 +195,12 @@ pub fn kind_for(path: &Path) -> FileKind {
         "jsx" => FileKind::React,
         "ts" | "tsx" | "mts" | "cts" => FileKind::TypeScript,
         "json" | "jsonc" | "json5" | "webmanifest" => FileKind::Json,
-        "md" | "markdown" | "mdx" | "rst" => FileKind::Markdown,
+        // One Markdown table for view mode, syntax and this icon. `rst` is a
+        // different format but shares the Markdown artwork.
+        "rst" => FileKind::Markdown,
+        _ if crate::model::markdown::MARKDOWN_EXTENSIONS.contains(&extension.as_str()) => {
+            FileKind::Markdown
+        }
         "html" | "htm" | "xhtml" => FileKind::Html,
         "css" => FileKind::Css,
         "sass" | "scss" | "less" => FileKind::Sass,
@@ -258,6 +263,9 @@ mod tests {
         assert_eq!(kind("style.scss"), FileKind::Sass);
         assert_eq!(kind("script.sh"), FileKind::Console);
         assert_eq!(kind("types.d.ts"), FileKind::TypeScript);
+        // The Markdown table is shared with view mode/syntax; `.mdx` is not in
+        // it, so it must not pretend to be Markdown here either.
+        assert_eq!(kind("notes.mdx"), FileKind::Document);
     }
 
     #[test]

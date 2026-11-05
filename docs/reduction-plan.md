@@ -62,8 +62,8 @@ terminal split panes; terminal profiles; further Git write operations.
 
 ## Phase 3 — consistency and budgets
 
-- 3.1 One Markdown extension table shared by view mode, syntax and file icons
-  (remove the `.mdx` mismatch).
+- [x] 3.1 One Markdown extension table shared by view mode, syntax and file
+  icons (removed the `.mdx` mismatch).
 - 3.2 One `SESSION_VERSION` constant and an explicit migration chain.
 - 3.3 `scripts/check.sh --release` asserts the shipped binary size, so "keep it
   lightweight" is measured rather than asserted.
@@ -86,4 +86,5 @@ Deferred (behavior-neutral, tracked here so they are not lost):
 | 1.1 Reliability | done | Snapshots are skipped when the revision is unchanged; a flush is scheduled only by an edit or a 30 s failure backoff; restored buffers schedule one snapshot. 3 new tests. |
 | 1.2 Undo cap | done | 64 MB / 5000-entry byte budget, oldest entries dropped, save point shifted. 2 new tests. |
 | 2.1–2.4 Scope cut | pending | |
-| 3.1–3.4 | pending | |
+| 3.1 Markdown extensions | done | `MARKDOWN_EXTENSIONS` is the single table; the syntax provider and file icons read it. 2 new tests. |
+| 3.2–3.4 | pending | |

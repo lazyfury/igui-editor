@@ -14,8 +14,9 @@ use std::path::Path;
 
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 
-/// Extensions that identify a Markdown source file across the app.
-const MARKDOWN_EXTENSIONS: &[&str] = &["md", "markdown", "mdown", "mkd"];
+/// Extensions that identify a Markdown source file across the app. This is the
+/// single table used by the view mode, the syntax provider and the file icons.
+pub const MARKDOWN_EXTENSIONS: &[&str] = &["md", "markdown", "mdown", "mkd"];
 
 /// Whether `path` names a Markdown source file (case-insensitive extension).
 pub fn is_markdown_path(path: &Path) -> bool {

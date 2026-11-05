@@ -17,7 +17,7 @@ impl SyntaxProvider for Markdown {
     }
 
     fn extensions(&self) -> &'static [&'static str] {
-        &["md", "markdown", "mdown", "mkd"]
+        crate::model::markdown::MARKDOWN_EXTENSIONS
     }
 
     fn highlight_line(&self, line: &str, state: u32) -> (Vec<Highlight>, u32) {
@@ -154,4 +154,22 @@ fn push(out: &mut Vec<Highlight>, start: usize, end: usize, kind: TokenKind) {
         }
     }
     out.push(Highlight { start, end, kind });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extensions_come_from_the_shared_markdown_table() {
+        let provider = Markdown;
+        assert_eq!(
+            provider.extensions(),
+            crate::model::markdown::MARKDOWN_EXTENSIONS
+        );
+        for extension in provider.extensions() {
+            let path = std::path::PathBuf::from(format!("note.{extension}"));
+            assert!(crate::model::markdown::is_markdown_path(&path));
+        }
+    }
 }
