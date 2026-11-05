@@ -222,6 +222,22 @@ fn highlight(spec: &LangSpec, line: &str, state_in: u32) -> (Vec<Highlight>, u32
             }
         }
 
+        // GDScript's path syntax: `$Node/Path`, `%UniqueName`, and the
+        // `&"StringName"` / `^"NodePath"` literal prefixes. These are handled
+        // before the generic quote rules so `$"a b".position` stays one span.
+        if spec.name == "gdscript" {
+            if let Some(end) = gdscript_node_reference(line, i) {
+                push(&mut out, i, end, TokenKind::Constant);
+                i = end;
+                continue;
+            }
+            if let Some(end) = gdscript_prefixed_string(line, i) {
+                push(&mut out, i, end, TokenKind::String);
+                i = end;
+                continue;
+            }
+        }
+
         if spec.triple && (line[i..].starts_with("\"\"\"") || line[i..].starts_with("'''")) {
             let marker = if line[i..].starts_with("\"\"\"") {
                 "\"\"\""
@@ -554,6 +570,72 @@ fn scan_quoted(line: &str, mut i: usize, quote: u8, escapes: bool) -> Option<usi
         i += 1;
     }
     None
+}
+
+/// GDScript `$Node/Path` and `%UniqueName` references.
+///
+/// `$` is always a reference; `%` is the modulo operator unless it starts an
+/// expression (line start, after an operator/opening bracket, or after a
+/// keyword such as `return`). The end offset is exclusive.
+fn gdscript_node_reference(line: &str, i: usize) -> Option<usize> {
+    let bytes = line.as_bytes();
+    let first = *bytes.get(i)?;
+    if first == b'%' {
+        let mut before = i;
+        while before > 0 && matches!(bytes[before - 1], b' ' | b'\t') {
+            before -= 1;
+        }
+        if before > 0 {
+            let previous = bytes[before - 1];
+            if previous.is_ascii_alphanumeric() || previous == b'_' {
+                let mut start = before - 1;
+                while start > 0
+                    && (bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_')
+                {
+                    start -= 1;
+                }
+                if !GD_KEYWORDS.contains(&&line[start..before]) {
+                    return None;
+                }
+            } else if matches!(previous, b')' | b']' | b'"' | b'\'') {
+                return None;
+            }
+        }
+    } else if first != b'$' {
+        return None;
+    }
+    let start = i + 1;
+    let quote = *bytes.get(start)?;
+    if quote == b'"' || quote == b'\'' {
+        return Some(scan_quoted(line, start + 1, quote, true).unwrap_or(line.len()));
+    }
+    let mut end = start;
+    while let Some(&byte) = bytes.get(end) {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'/' | b'%') {
+            end += 1;
+        } else {
+            break;
+        }
+    }
+    (end > start).then_some(end)
+}
+
+/// GDScript's `&"StringName"` and `^"NodePath"` literal prefixes.
+/// The prefix is part of the string span; a triple-quoted string is not a
+/// prefixed literal.
+fn gdscript_prefixed_string(line: &str, i: usize) -> Option<usize> {
+    let bytes = line.as_bytes();
+    if !matches!(bytes.get(i), Some(b'&') | Some(b'^')) {
+        return None;
+    }
+    let quote = *bytes.get(i + 1)?;
+    if quote != b'"' && quote != b'\'' {
+        return None;
+    }
+    if bytes.get(i + 2) == Some(&quote) {
+        return None;
+    }
+    Some(scan_quoted(line, i + 2, quote, true).unwrap_or(line.len()))
 }
 
 /// Rust `'a'` char literal vs `'a` lifetime.

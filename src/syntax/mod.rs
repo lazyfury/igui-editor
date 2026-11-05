@@ -345,6 +345,38 @@ mod tests {
     }
 
     #[test]
+    fn gdscript_highlights_node_references_and_path_literals() {
+        let tokens = kinds("var n := $UI/Panel", &GdScript);
+        assert!(tokens.contains(&("$UI/Panel".into(), TokenKind::Constant)));
+        let tokens = kinds("var p := $\"a name\".position", &GdScript);
+        assert!(tokens.contains(&("$\"a name\"".into(), TokenKind::Constant)));
+        let tokens = kinds("return %Player", &GdScript);
+        assert!(tokens.contains(&("%Player".into(), TokenKind::Constant)));
+        let tokens = kinds("var name := &\"player_ready\"", &GdScript);
+        assert!(tokens.contains(&("&\"player_ready\"".into(), TokenKind::String)));
+        let tokens = kinds("var path := ^\"UI/Panel\"", &GdScript);
+        assert!(tokens.contains(&("^\"UI/Panel\"".into(), TokenKind::String)));
+
+        // `%` stays the modulo operator between operands.
+        let tokens = kinds("var rest := 10 % 3", &GdScript);
+        assert!(!tokens
+            .iter()
+            .any(|(text, kind)| { *kind == TokenKind::Constant && text.contains('%') }));
+        let tokens = kinds("var rest := hp % 2", &GdScript);
+        assert!(!tokens
+            .iter()
+            .any(|(text, kind)| { *kind == TokenKind::Constant && text.contains('%') }));
+
+        // Inside comments and strings the path syntax is not tokenized.
+        let tokens = kinds("# $Node in a comment", &GdScript);
+        assert!(tokens.iter().all(|(_, kind)| *kind == TokenKind::Comment));
+        let tokens = kinds("print(\"$Node\")", &GdScript);
+        assert!(!tokens
+            .iter()
+            .any(|(text, kind)| *kind == TokenKind::Constant && text.contains('$')));
+    }
+
+    #[test]
     fn json_colors_constants_and_numbers() {
         let tokens = kinds("{\"on\": true, \"n\": 12.5}", &Json);
         assert!(tokens.contains(&("true".into(), TokenKind::Constant)));

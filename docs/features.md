@@ -370,7 +370,9 @@ Built-in providers: **Rust, C, C++, JavaScript, TypeScript, Go, GDScript,
 Python, JSON, TOML, Markdown**. Highlighting is line based with carried state (block comments,
 raw/template strings, fences), so multi-line constructs color correctly. The
 cache re-tokenizes from the first edited line and stops when the carried state
-converges, budgeted per frame.
+converges, budgeted per frame. GDScript also colors node references
+(`$UI/Panel`, `%UniqueName`) and the `&"StringName"` / `^"NodePath"` literal
+prefixes, while `%` between operands stays the modulo operator.
 
 The provider API is public (`igui_editor::syntax`) so a future plugin host can
 add languages without touching the editor core:
