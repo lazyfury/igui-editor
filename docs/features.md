@@ -672,8 +672,11 @@ disagree:
 
 The cleanup is one undo step with the caret kept where it was, so `⌘Z` right
 after a save restores the pre-save text (and marks the tab dirty again).
-Autosave uses the same `Document::save` path, so it tidies too. Line endings are
-still preserved (CRLF stays CRLF).
+**Autosave is different**: it writes exactly what is in the buffer — no tidy,
+no whitespace rewrite and no undo entry. A background write must never change
+the text or the undo history behind your back. Line endings are still
+preserved (CRLF stays CRLF), and a failed autosave leaves the tab dirty and
+shows the error in the status bar instead of claiming it saved.
 
 ## Soft wrap (`⌥Z`, View menu)
 

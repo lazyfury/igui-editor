@@ -44,13 +44,22 @@ impl AppState {
     pub(crate) fn flush_reliability(&mut self) {
         let mut saved = 0usize;
         let mut saved_paths = Vec::new();
+        let mut failures: Vec<(String, String)> = Vec::new();
         if self.settings.autosave {
+            // Autosave writes verbatim: no tidy rewrite and no undo entry. A
+            // failed write keeps the tab dirty so the next flush can retry.
             for doc in &mut self.ws.tabs {
-                if doc.is_dirty() && doc.path().is_some() && doc.save().is_ok() {
-                    saved += 1;
-                    if let Some(path) = doc.path().map(Path::to_path_buf) {
-                        saved_paths.push(path);
+                if !doc.is_dirty() || doc.path().is_none() {
+                    continue;
+                }
+                match doc.save_verbatim() {
+                    Ok(()) => {
+                        saved += 1;
+                        if let Some(path) = doc.path().map(Path::to_path_buf) {
+                            saved_paths.push(path);
+                        }
                     }
+                    Err(error) => failures.push((doc.name().to_string(), error.to_string())),
                 }
             }
         }
@@ -82,8 +91,24 @@ impl AppState {
             }
         }
         if saved > 0 {
-            self.status(format!("autosaved {saved} file(s)"));
             self.sync_session_tabs();
+        }
+        if failures.is_empty() {
+            if saved > 0 {
+                self.status(format!("autosaved {saved} file(s)"));
+            }
+        } else {
+            // Report a failed autosave instead of claiming success.
+            let (name, error) = &failures[0];
+            let message = if failures.len() == 1 {
+                format!("autosave failed for {name}: {error}")
+            } else {
+                format!(
+                    "autosave failed for {} files ({name}: {error})",
+                    failures.len()
+                )
+            };
+            self.error(message);
         }
     }
 
@@ -147,5 +172,92 @@ impl AppState {
             self.session.window_maximized = maximized;
             self.config_dirty = true;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::session::Session;
+    use crate::model::Workspace;
+
+    fn state(root: &Path) -> AppState {
+        let mut ws = Workspace::new(root);
+        ws.new_tab();
+        AppState::new(
+            crate::theme::Theme::dark(),
+            ws,
+            Session::default(),
+            root.join("igui-editor-reliability-test.conf"),
+        )
+    }
+
+    fn temp(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "igui-editor-reliability-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn autosave_writes_the_verbatim_buffer_and_clears_dirty() {
+        let dir = temp("verbatim");
+        let path = dir.join("notes.txt");
+        std::fs::write(&path, "one  \ntwo   ").unwrap();
+        let mut state = state(&dir);
+        state.ws.open(&path).unwrap();
+        let doc = state.ws.active_doc_mut().unwrap();
+        doc.set_caret(doc.text().len());
+        doc.insert_text("x");
+        assert!(doc.is_dirty());
+
+        state.force_reliability_flush();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "one  \ntwo   x",
+            "autosave must not tidy trailing whitespace or a missing newline"
+        );
+        assert!(!state.ws.active_doc().unwrap().is_dirty());
+        let (message, is_error) = state.message().unwrap();
+        assert!(!is_error, "successful autosave is not an error: {message}");
+        assert_eq!(message, "autosaved 1 file(s)");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_failed_autosave_keeps_the_tab_dirty_and_reports_an_error() {
+        let dir = temp("failure");
+        let path = dir.join("blocked.txt");
+        // A directory with the target name makes the write/rename fail.
+        std::fs::create_dir_all(&path).unwrap();
+        let mut state = state(&dir);
+        let doc = state.ws.active_doc_mut().unwrap();
+        doc.set_path(path);
+        doc.insert_text("keep me");
+        assert!(doc.is_dirty());
+
+        state.force_reliability_flush();
+        assert!(
+            state.ws.active_doc().unwrap().is_dirty(),
+            "a failed autosave must not clear dirty"
+        );
+        let (message, is_error) = state.message().unwrap();
+        assert!(is_error, "autosave failure must be an error: {message}");
+        assert!(
+            message.contains("autosave failed"),
+            "unexpected message: {message}"
+        );
+        assert!(
+            !message.contains("autosaved"),
+            "a failure must not claim success: {message}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

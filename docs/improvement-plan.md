@@ -125,7 +125,7 @@ Acceptance:
 - Reopening Quick Open without filesystem changes does not walk the tree.
 - Existing Quick Open selfcheck path stays green.
 
-### 1.3 Autosave must not surprise the user (F3)
+### [x] 1.3 Autosave must not surprise the user (F3)
 
 Files: `src/model/doc.rs`, `src/state/reliability.rs`, `src/state/files.rs`,
 `src/selfcheck.rs`.
@@ -329,7 +329,7 @@ the palette; selfcheck covers open/filter/run/escape.
 | Session 4 | 0.1–0.2 Docs truth | pending | |
 | Session 4 | 1.1 Tab restore | done | Tabs no longer capped by `MAX_RECENT` (parse/render/`set_tabs`); recents stay at 8. 2 new session tests, gate green: 358 unit + 2 doc tests, selfcheck. |
 | Session 4 | 1.2 Quick Open | in progress | Step A done: the palette reuses the index for the same root; the walk uses `file_type()` with a symlink `metadata()` fallback. Step B (background worker) pending. Gate green: 362 unit + 2 doc tests, selfcheck. |
-| Session 4 | 1.3 Autosave | pending | |
+| Session 4 | 1.3 Autosave | done | Autosave writes verbatim through `Document::save_verbatim` (no tidy, no undo step); failures keep the tab dirty and show an error. 4 new tests (2 doc, 2 state). Gate green: 366 unit + 2 doc tests, selfcheck. |
 | Session 4 | 2.1 Command table | pending | Keystone for 3.6. |
 | Session 4 | 2.2 `pub(crate)` | pending | |
 | Session 4 | 2.3 State pruning | pending | |
@@ -345,7 +345,7 @@ the palette; selfcheck covers open/filter/run/escape.
 
 1. **`Restore every open tab across sessions`** — F1, one session test.
 2. **`Reuse the Quick Open index and stat less`** — F2 Step A, one index test.
-3. **`Write autosave verbatim and report failures`** — F3, three doc tests.
+3. **`Write autosave verbatim and report failures`** — F3, four tests.
 
 Then Phase 0 docs, then Phase 1.2 Step B (background indexing). Each commit is
 green on `scripts/check.sh` before the next one starts.

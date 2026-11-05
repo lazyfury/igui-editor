@@ -676,29 +676,50 @@ impl Document {
         Ok(())
     }
 
-    /// Writes the buffer back to its file. Untitled buffers have no path.
-    ///
-    /// The buffer is tidied first ([`Document::tidy`]), so what is on disk and
-    /// what the editor shows stay identical.
+    /// Writes the buffer back to its file, tidying it first
+    /// ([`Document::tidy`]), so what is on disk and what the editor shows stay
+    /// identical. Untitled buffers have no path.
     pub fn save(&mut self) -> std::io::Result<()> {
+        let path = self.write_path()?;
+        self.tidy();
+        self.write_to_disk(&path)
+    }
+
+    /// Writes the buffer back verbatim: no [`Document::tidy`], so trailing
+    /// whitespace, a missing final newline and the undo stack are untouched.
+    ///
+    /// Autosave uses this path so a background write can never rewrite the
+    /// user's text or add a surprise undo step.
+    pub(crate) fn save_verbatim(&mut self) -> std::io::Result<()> {
+        let path = self.write_path()?;
+        self.write_to_disk(&path)
+    }
+
+    /// The destination for a write, rejecting read-only views and untitled
+    /// buffers before any disk work happens.
+    fn write_path(&self) -> std::io::Result<PathBuf> {
         if self.read_only {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
                 "read-only view cannot be saved",
             ));
         }
-        let Some(path) = self.path.clone() else {
-            return Err(std::io::Error::new(
+        self.path.clone().ok_or_else(|| {
+            std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 "untitled buffer has no path; use Save As",
-            ));
-        };
-        self.tidy();
-        let permissions = std::fs::metadata(&path)
+            )
+        })
+    }
+
+    /// Shared write path: keeps the file's line endings and permissions and
+    /// moves the save point only after the write succeeds.
+    fn write_to_disk(&mut self, path: &Path) -> std::io::Result<()> {
+        let permissions = std::fs::metadata(path)
             .ok()
             .map(|metadata| metadata.permissions());
         let rendered = self.eol.render(&self.text);
-        fsutil::atomic_write(&path, rendered.as_bytes(), permissions)?;
+        fsutil::atomic_write(path, rendered.as_bytes(), permissions)?;
         self.dirty = false;
         self.saved_cursor = Some(self.undo.cursor);
         Ok(())
@@ -2661,6 +2682,66 @@ mod tests {
         assert!(doc.undo());
         assert_eq!(doc.text(), "one  \ntwo\t \n three   ");
         assert!(doc.is_dirty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn save_verbatim_keeps_exact_bytes_and_adds_no_tidy_undo_step() {
+        let dir = std::env::temp_dir().join(format!(
+            "igui-editor-verbatim-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("verbatim.txt");
+        std::fs::write(&path, "one  \ntwo   ").unwrap();
+
+        let mut doc = Document::open(1, &path).unwrap();
+        doc.set_caret(doc.text().len());
+        doc.insert_text("x");
+        doc.save_verbatim().unwrap();
+        assert_eq!(doc.text(), "one  \ntwo   x");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "one  \ntwo   x",
+            "autosave must write the buffer verbatim"
+        );
+        assert!(!doc.is_dirty());
+
+        // Exactly one undo step: the typed edit, not an implicit tidy.
+        assert!(doc.undo());
+        assert_eq!(doc.text(), "one  \ntwo   ");
+        assert!(!doc.undo(), "saving added no implicit undo entry");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_failing_verbatim_save_leaves_the_buffer_dirty() {
+        let dir = std::env::temp_dir().join(format!(
+            "igui-editor-verbatim-fail-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // A directory with the target name makes the rename/write fail.
+        let path = dir.join("blocked.txt");
+        std::fs::create_dir_all(&path).unwrap();
+
+        let mut doc = Document::untitled(1, 1);
+        doc.set_path(path);
+        doc.set_caret(doc.text().len());
+        doc.insert_text("keep me");
+        assert!(doc.save_verbatim().is_err());
+        assert!(doc.is_dirty(), "a failed autosave must not clear dirty");
+        assert_eq!(doc.text(), "keep me");
         let _ = std::fs::remove_dir_all(dir);
     }
 
