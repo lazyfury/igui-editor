@@ -597,6 +597,20 @@ counter shows a trailing `+` when the cap is reached. **Replace** changes the
 current match; **Replace All** applies every non-overlapping match as one
 undoable batch (one undo step, one line-index rebuild).
 
+## Go to Line (`⌃G` / `⌘L`, Edit menu)
+
+The centered prompt is prefilled with the caret's current line number and the
+text is selected, so typing replaces it. Only ASCII digits are accepted (typed
+text, paste and IME commits all filter to digits). `Enter` jumps to the start of
+a 1-based line inside `1..=line_count`, clears the selection, reveals the line
+and reports `line N`; an empty, non-numeric, zero or out-of-range entry keeps the
+prompt open with `line must be 1..=<count>` and editing clears that error. `Esc`
+or a click outside closes it without moving; a click inside is consumed.
+
+macOS uses literal `Ctrl+G` and `Cmd+L`; other platforms use `Ctrl+L`, so
+`Ctrl+G` stays Find Next. Image preview tabs have no lines, report that as a
+status and never open the prompt.
+
 ## Select Next Occurrence (`⌘D`, Edit menu)
 
 `⌘D` (`Alt+J` in the JetBrains profile) selects the word at the caret; pressing

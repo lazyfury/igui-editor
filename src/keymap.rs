@@ -417,6 +417,12 @@ impl Keymap {
             "primary+shift+down",
             Action::MoveDocEnd(true),
         );
+        self.bind(Scope::Editor, "primary+l", Action::GotoLine);
+        // macOS keeps Ctrl+G literal for Go to Line; elsewhere Ctrl+G is Find
+        // Next (the global `primary+g` binding).
+        if cfg!(target_os = "macos") {
+            self.bind(Scope::Editor, "ctrl+g", Action::GotoLine);
+        }
     }
 
     /// Clipboard chords that do not collide with the shell's Ctrl letters on
@@ -652,6 +658,36 @@ mod tests {
             keymap.resolve(Scope::Terminal, &[chord("primary+left")]),
             Resolution::None
         );
+    }
+
+    #[test]
+    fn goto_line_chords_follow_the_host() {
+        let keymap = Keymap::for_id(KeymapId::VsCode);
+        assert_eq!(
+            keymap.resolve(Scope::Editor, &[chord("primary+l")]),
+            Resolution::Command(Action::GotoLine)
+        );
+        if cfg!(target_os = "macos") {
+            let ctrl_g = KeyChord::from_event(
+                Key::Character('g'),
+                Modifiers {
+                    ctrl: true,
+                    ..Modifiers::NONE
+                },
+                true,
+            );
+            assert_eq!(ctrl_g, chord("ctrl+g"));
+            assert_eq!(
+                keymap.resolve(Scope::Editor, &[ctrl_g]),
+                Resolution::Command(Action::GotoLine)
+            );
+        } else {
+            // A literal Ctrl+G stays Find Next off macOS.
+            assert_eq!(
+                keymap.resolve(Scope::Editor, &[chord("primary+g")]),
+                Resolution::Command(Action::FindNext)
+            );
+        }
     }
 
     #[test]

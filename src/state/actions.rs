@@ -271,6 +271,7 @@ impl AppState {
             Action::FormatDocument => self.format_active_document(),
             Action::QuickOpen => self.open_quick_open(),
             Action::ProjectSearch => self.open_project_search(),
+            Action::GotoLine => self.open_goto_line(),
             Action::LspHover => self.request_lsp_hover(),
             Action::LspCompletion => self.request_lsp_completion(),
             Action::LspDefinition => self.request_lsp_definition(),

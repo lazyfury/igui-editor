@@ -59,11 +59,12 @@ pub fn run() -> Result<(), String> {
         .and_then(|()| check_image_preview(&dir))
         .and_then(|()| check_typing(&dir))
         .and_then(|()| check_lsp(&dir))
-        .and_then(|()| check_keymaps(&dir));
+        .and_then(|()| check_keymaps(&dir))
+        .and_then(|()| check_goto_line(&dir));
     let _ = fs::remove_dir_all(&dir);
     if result.is_ok() {
         println!(
-            "selfcheck ok: main flow + workspace/recovery + explorer filters + typing + LSP + keymap checks"
+            "selfcheck ok: main flow + workspace/recovery + explorer filters + typing + LSP + keymap + go-to-line checks"
         );
     }
     result
@@ -5264,6 +5265,122 @@ fn check_keymaps(dir: &Path) -> Result<(), String> {
     {
         return Err("Keymap setting did not cycle/persist".into());
     }
+    Ok(())
+}
+
+/// Go to Line through the real shortcut: prefill, digit typing, Enter jumps,
+/// Esc leaves the caret unchanged, and invalid input stays inline.
+fn check_goto_line(dir: &Path) -> Result<(), String> {
+    let path = dir.join("goto.txt");
+    fs::write(&path, "alpha\nbeta\ngamma\ndelta")
+        .map_err(|error| format!("goto fixture: {error}"))?;
+    let config = dir.join("goto-session.conf");
+    let mut harness = Harness::new(Some(path), config, ScriptedDialogs::new(vec![]));
+
+    let (key, modifiers) = if cfg!(target_os = "macos") {
+        (
+            Key::Character('g'),
+            Modifiers {
+                ctrl: true,
+                ..Modifiers::NONE
+            },
+        )
+    } else {
+        (
+            Key::Character('l'),
+            Modifiers {
+                ctrl: true,
+                ..Modifiers::NONE
+            },
+        )
+    };
+    if let Some(doc) = harness.app.state_mut().ws.active_doc_mut() {
+        let start = doc.line_start(1);
+        doc.set_caret(start);
+    }
+    harness.shortcut(key, modifiers);
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        if !state.goto_line.open {
+            return Err(format!("{key:?} did not open the Go to Line prompt"));
+        }
+        if state.goto_line.field.text() != "2" {
+            return Err(format!(
+                "Go to Line did not prefill the caret line: {:?}",
+                state.goto_line.field.text()
+            ));
+        }
+    }
+    harness.type_text("4");
+    harness.key(Key::Enter);
+    let frame = harness.frame()?;
+    {
+        let state = harness.app.state();
+        if state.goto_line.open {
+            return Err(format!(
+                "Go to Line stayed open: {:?}",
+                state.goto_line.error
+            ));
+        }
+        let doc = state.ws.active_doc().ok_or("no active document")?;
+        if doc.line_col().0 != 3 || doc.caret() != doc.line_start(3) {
+            return Err(format!(
+                "Go to Line did not move to line 4 (line {}, caret {})",
+                doc.line_col().0 + 1,
+                doc.caret()
+            ));
+        }
+    }
+    expect(&texts(&frame), "line 4", "Go to Line status")?;
+
+    // Esc closes without moving the caret.
+    let before = harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .map(|doc| doc.caret())
+        .ok_or("no active document")?;
+    harness.shortcut(key, modifiers);
+    harness.frame()?;
+    harness.key(Key::Escape);
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        if state.goto_line.open {
+            return Err("Esc did not close the Go to Line prompt".into());
+        }
+        if state.ws.active_doc().map(|doc| doc.caret()) != Some(before) {
+            return Err("Esc moved the caret".into());
+        }
+    }
+
+    // Invalid input stays open with an inline error.
+    harness.shortcut(key, modifiers);
+    harness.frame()?;
+    harness.type_text("99");
+    harness.key(Key::Enter);
+    let frame = harness.frame()?;
+    {
+        let state = harness.app.state();
+        if !state.goto_line.open || state.goto_line.error.as_deref() != Some("line must be 1..=4") {
+            return Err(format!(
+                "out-of-range Go to Line did not stay inline (error {:?})",
+                state.goto_line.error
+            ));
+        }
+        if state.ws.active_doc().map(|doc| doc.caret()) != Some(before) {
+            return Err("an invalid Go to Line moved the caret".into());
+        }
+    }
+    expect(
+        &texts(&frame),
+        "line must be 1..=4",
+        "Go to Line inline error",
+    )?;
+    harness.key(Key::Escape);
+    harness.frame()?;
     Ok(())
 }
 

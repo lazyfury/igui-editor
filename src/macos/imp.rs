@@ -715,6 +715,14 @@ fn build_main_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
             "g",
             NSEventModifierFlags::Command | NSEventModifierFlags::Shift,
         ),
+        command_item(
+            mtm,
+            &target,
+            "Go to Line…",
+            NativeCommand::GotoLine,
+            "l",
+            NSEventModifierFlags::Command,
+        ),
         NSMenuItem::separatorItem(mtm),
         command_item(
             mtm,

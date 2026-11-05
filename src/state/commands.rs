@@ -140,6 +140,11 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         action: Action::ToggleComment,
     },
     CommandSpec {
+        id: "edit.gotoLine",
+        aliases: &[],
+        action: Action::GotoLine,
+    },
+    CommandSpec {
         id: "motion.lineStart",
         aliases: &[],
         action: Action::MoveLineStart(false),
@@ -410,6 +415,12 @@ mod tests {
             );
             assert_eq!(spec.action.id(), Some(spec.id), "{}", spec.id);
         }
+    }
+
+    #[test]
+    fn goto_line_id_round_trips() {
+        assert_eq!(Action::GotoLine.id(), Some("edit.gotoLine"));
+        assert_eq!(Action::from_id("edit.gotoLine"), Some(Action::GotoLine));
     }
 
     #[test]

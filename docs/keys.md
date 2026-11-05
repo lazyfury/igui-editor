@@ -27,6 +27,7 @@
 | `⌘,` | settings panel |
 | `⌘F` / `⌥⌘F` | find / jump to the replace field |
 | `⌘G` / `⇧⌘G` | next / previous match |
+| `⌃G` / `⌘L` | Go to Line… (`Ctrl+L` off macOS; `Ctrl+G` stays Find Next there) |
 | `⌘B` | toggle sidebar |
 | `⌃\`` | toggle the bottom dock's Terminal tab |
 | `⌘⌥P` | toggle the bottom dock's **PROBLEMS** tab |

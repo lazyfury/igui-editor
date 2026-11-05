@@ -40,6 +40,7 @@ pub enum NativeCommand {
     Quit,
     Minimize,
     Zoom,
+    GotoLine,
 }
 
 impl NativeCommand {
@@ -83,6 +84,7 @@ impl NativeCommand {
             30 => Self::Quit,
             31 => Self::Minimize,
             32 => Self::Zoom,
+            33 => Self::GotoLine,
             _ => return None,
         })
     }
@@ -121,6 +123,7 @@ mod tests {
             NativeCommand::Open,
             NativeCommand::Save,
             NativeCommand::Find,
+            NativeCommand::GotoLine,
             NativeCommand::SetViewSplit,
             NativeCommand::Settings,
             NativeCommand::Quit,

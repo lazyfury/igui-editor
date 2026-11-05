@@ -456,6 +456,7 @@ impl EditorApp {
         ui::settings::paint(&mut state, measurer.as_ref(), ctx);
         ui::quick_open::paint(&mut state, measurer.as_ref(), ctx);
         ui::new_file::paint(&mut state, measurer.as_ref(), ctx);
+        ui::goto_line::paint(&mut state, measurer.as_ref(), ctx);
         ui::project_search::paint(&mut state, measurer.as_ref(), ctx);
         ui::references::paint(&mut state, measurer.as_ref(), ctx);
         ui::rename_symbol::paint(&mut state, measurer.as_ref(), ctx);
@@ -591,6 +592,10 @@ impl EditorApp {
                 }
                 if state.new_file.open {
                     ui::new_file::click(&mut state, *position);
+                    return EventResult::Handled;
+                }
+                if state.goto_line.open {
+                    ui::goto_line::click(&mut state, *position);
                     return EventResult::Handled;
                 }
                 if state.quick_open.open {
@@ -1001,6 +1006,9 @@ impl EditorApp {
                 if state.new_file.open && ui::new_file::on_key(&mut state, *key, modifiers) {
                     return EventResult::Handled;
                 }
+                if state.goto_line.open && ui::goto_line::on_key(&mut state, *key, modifiers) {
+                    return EventResult::Handled;
+                }
                 if state.quick_open.open && ui::quick_open::on_key(&mut state, *key, modifiers) {
                     return EventResult::Handled;
                 }
@@ -1113,6 +1121,9 @@ impl EditorApp {
                 if state.new_file.open {
                     return EventResult::Handled;
                 }
+                if state.goto_line.open {
+                    return EventResult::Handled;
+                }
                 if state.find.open && *key == Key::Escape {
                     state.close_find();
                     return EventResult::Handled;
@@ -1175,6 +1186,10 @@ impl EditorApp {
                 }
                 if state.new_file.open {
                     ui::new_file::on_text(&mut state, text);
+                    return EventResult::Handled;
+                }
+                if state.goto_line.open {
+                    ui::goto_line::on_text(&mut state, text);
                     return EventResult::Handled;
                 }
                 if state.quick_open.open {
@@ -1274,6 +1289,10 @@ impl EditorApp {
                 }
                 if state.new_file.open {
                     ui::new_file::on_ime(&mut state, ime);
+                    return EventResult::Handled;
+                }
+                if state.goto_line.open {
+                    ui::goto_line::on_ime(&mut state, ime);
                     return EventResult::Handled;
                 }
                 if state.quick_open.open {
@@ -1436,6 +1455,7 @@ impl EditorApp {
             C::Paste => self.run_edit_command('v', Action::Paste),
             C::SelectAll => self.run_edit_command('a', Action::SelectAll),
             C::Find => self.state.borrow_mut().run(Action::Find),
+            C::GotoLine => self.state.borrow_mut().run(Action::GotoLine),
             C::FindReplace => self.state.borrow_mut().run(Action::FindReplace),
             C::FindNext => self.state.borrow_mut().run(Action::FindNext),
             C::FindPrevious => self.state.borrow_mut().run(Action::FindPrevious),

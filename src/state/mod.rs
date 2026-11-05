@@ -52,6 +52,7 @@ mod files;
 mod find;
 mod format;
 mod git;
+mod goto_line;
 mod images;
 mod keymap;
 mod lsp;
@@ -193,6 +194,8 @@ pub enum Action {
     FindPrevious,
     QuickOpen,
     ProjectSearch,
+    /// Opens the centered line-number prompt (`⌃G` / `⌘L`).
+    GotoLine,
     CycleView,
     DeleteLine,
     DuplicateLine,
@@ -261,6 +264,7 @@ impl Action {
             Action::FindPrevious => "Find Previous".into(),
             Action::QuickOpen => "Quick Open…".into(),
             Action::ProjectSearch => "Search in Project…".into(),
+            Action::GotoLine => "Go to Line…".into(),
             Action::CycleView => "Cycle View".into(),
             Action::DeleteLine => "Delete Line".into(),
             Action::DuplicateLine => "Duplicate Line".into(),
@@ -343,6 +347,7 @@ impl Action {
             Action::SelectAll => doc.is_some(),
             Action::SelectNextOccurrence => doc.is_some(),
             Action::FindNext | Action::FindPrevious => doc.is_some(),
+            Action::GotoLine => doc.is_some_and(|doc| !doc.is_image_view()),
             Action::CycleView => doc.is_some(),
             Action::DeleteLine
             | Action::DuplicateLine
@@ -444,6 +449,7 @@ pub fn items(menu: Menu, state: &AppState) -> Vec<Option<Action>> {
             None,
             Some(Action::FormatDocument),
             Some(Action::Find),
+            Some(Action::GotoLine),
             Some(Action::QuickOpen),
             Some(Action::ProjectSearch),
         ],
@@ -1120,6 +1126,25 @@ impl Default for NewFileState {
     }
 }
 
+/// Go to Line prompt (`⌃G` / `⌘L`): one digit-only field with an inline error.
+pub struct GotoLineState {
+    pub open: bool,
+    pub field: TextEdit,
+    pub error: Option<String>,
+    pub preedit: Option<String>,
+}
+
+impl Default for GotoLineState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            field: TextEdit::new(""),
+            error: None,
+            preedit: None,
+        }
+    }
+}
+
 impl Default for QuickOpenState {
     fn default() -> Self {
         Self {
@@ -1350,6 +1375,7 @@ pub struct AppState {
     pub(crate) references: ReferencesUi,
     pub(crate) rename_symbol: RenameSymbolUi,
     pub(crate) new_file: NewFileState,
+    pub(crate) goto_line: GotoLineState,
     /// Split-view nodes (for drag resizing) and the divider rectangle.
     /// Editor/preview control for the active view (vertical band anchor).
     pub(crate) content_node: Option<NodeId>,
@@ -1529,6 +1555,7 @@ impl AppState {
             references: ReferencesUi::default(),
             rename_symbol: RenameSymbolUi::default(),
             new_file: NewFileState::default(),
+            goto_line: GotoLineState::default(),
             search: SearchState::default(),
             content_node: None,
             content_center_y: None,

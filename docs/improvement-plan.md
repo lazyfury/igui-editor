@@ -260,14 +260,20 @@ Files: `src/model/markdown.rs`, `src/state/outline.rs` (or `state/lsp.rs`),
 Tests/selfcheck: open a Markdown fixture, assert headings appear at the right
 depth, click one, assert the caret line.
 
-### 3.2 Go to Line (F15)
+### [x] 3.2 Go to Line (F15)
 
-Files: `src/keymap.rs`, `src/state/actions.rs`, new `src/state/goto_line.rs` +
-`src/ui/goto_line.rs` (reuse the quick-create prompt pattern).
+Files: `src/keymap.rs`, `src/state/actions.rs`, `src/state/goto_line.rs` +
+`src/ui/goto_line.rs` (quick-create prompt pattern).
 
-- `⌃G` / `⌘L` opens a centered one-field prompt; `Enter` jumps, `Esc` closes.
-- Validate `1..line_count`, clear error on edit, never panic on empty input.
-- Add the command id (`edit.gotoLine`) and a selfcheck assertion.
+- `⌃G` / `⌘L` opens a centered one-field prompt prefilled with the caret line
+  and selected; `Enter` jumps to a validated 1-based line, `Esc` closes.
+- `1..=line_count` is validated with an inline error that clears on edit; text,
+  paste and IME commits filter to ASCII digits. Image preview tabs report a
+  status instead of opening.
+- Command id `edit.gotoLine`; the Edit menu lists it after Find; the shortcut
+  lives in the shared `add_movement` bindings so every profile gets it.
+- Selfcheck drives the host shortcut (`Ctrl+G` on macOS, `Ctrl+L` elsewhere),
+  the prefill, a valid jump and Esc; state and keymap unit tests cover the rest.
 
 ### 3.3 Preview links and local images (F14)
 
@@ -373,7 +379,7 @@ the palette; selfcheck covers open/filter/run/escape.
 | Session 4 | 2.2 cleanup | done | The dead data exposed by 2.2 was deleted: the `PtySession::cwd_hint` stub, `GitCommitDetail::truncated`, `TreeMenuUi::name`, `ReplaceJob::{files,occurrences}` and `ToolingPrompt::source`, with their parameters, locals and struct literals updated. The manifest/command metadata stays (documented extension-host shape), is re-exported from the crate root and is exercised by a new `builtin_metadata_is_well_formed` unit test. Only the three test-only helpers keep an annotation. Gate green: 377 unit + 2 doc tests, selfcheck. |
 | Session 4 | 2.3 State pruning | done | `close_tab_now` calls one `forget_document` helper (`doc_views`, `doc_revs`, `language_by_id`, `recovery`, `external`); `reset_project_state` reuses it and `delete_path_now` drops path/folder stamps. `language_by_path` still outlives the tab. 3 new state tests. Gate green: 371 unit + 2 doc tests, selfcheck. |
 | Session 4 | 3.1 Markdown outline | pending | |
-| Session 4 | 3.2 Go to Line | pending | |
+| Session 4 | 3.2 Go to Line | done | `⌃G` / `⌘L` opens a prefilled, digit-only prompt; `Enter` validates `1..=line_count`, moves to the line start, reveals it and reports `line N`; invalid input keeps an inline `line must be 1..=<count>` error that editing clears; Esc and outside clicks close without moving; image previews report a status instead. Command id `edit.gotoLine`, Edit-menu entry and shared movement binding. 7 new tests (5 state, 1 keymap, 1 command-id round-trip) plus a selfcheck flow. Gate green: 384 unit + 2 doc tests, selfcheck. |
 | Session 4 | 3.3 Preview links | pending | |
 | Session 4 | 3.4 Explorer keys | pending | |
 | Session 4 | 3.5 Reopen/overflow | pending | |

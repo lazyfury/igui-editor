@@ -7,6 +7,7 @@ pub mod editor;
 pub mod fileicon;
 pub mod find_bar;
 pub mod git;
+pub mod goto_line;
 pub mod handle;
 pub mod icon;
 pub mod image;

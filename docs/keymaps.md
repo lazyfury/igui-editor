@@ -93,7 +93,7 @@ file.clearRecent
 edit.undo, edit.redo, edit.cut, edit.copy, edit.paste, edit.selectAll,
 edit.selectNextOccurrence, edit.deleteLine, edit.duplicateLine, edit.moveLineUp,
 edit.moveLineDown, edit.deleteWordBackward, edit.deleteWordForward,
-edit.toggleComment, editor.format
+edit.toggleComment, edit.gotoLine, editor.format
 motion.lineStart, motion.lineEnd, motion.docStart, motion.docEnd
 find.find, find.replace, find.next, find.previous
 quickOpen, projectSearch, settings
