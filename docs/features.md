@@ -149,7 +149,10 @@ diagnostics/semantic tokens/outline. The same switch is the
   status line instead of a `Method not found` round trip. Signature help is
   requested on `(` and `,` (and refreshed while typing inside the call): the
   active parameter is highlighted and the first documentation line is shown
-  under the signature. `)` or `Esc` dismisses it.
+  under the signature. `)` or `Esc` dismisses it. Occurrences of the identifier
+  under the caret are tinted after a 120 ms pause (`documentHighlight`) and
+  cleared when the caret leaves the symbol, a selection starts, or the editor
+  loses focus; edits refresh them because the ranges belong to the old text.
 - When a hover is a Godot native class or member, the card shows **OPEN GODOT
   DOCS**; clicking it opens a **read-only editor tab** backed by Godot's
   `textDocument/nativeSymbol` response. The tab uses the normal file-tab strip,

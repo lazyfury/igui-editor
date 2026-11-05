@@ -348,6 +348,7 @@ impl EditorApp {
         self.state.borrow_mut().tick_lsp();
         self.state.borrow_mut().tick_auto_completion();
         self.state.borrow_mut().tick_signature_help();
+        self.state.borrow_mut().tick_occurrences();
         self.state.borrow_mut().tick_hover();
         self.state.borrow_mut().tick_terminal();
         self.state.borrow_mut().tick_reliability();

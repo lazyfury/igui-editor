@@ -830,6 +830,69 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         );
     }
 
+    // LSP occurrence highlights: every use of the symbol under the caret, so
+    // local edits and renames keep their other sites visible. Painted under
+    // the selection and find tints, which have their own meaning.
+    if state.focus == Focus::Editor {
+        let doc = state.ws.active_doc().expect("checked above");
+        if let Some(path) = doc.path() {
+            let ranges = state.lsp.highlights_for(path);
+            if !ranges.is_empty() {
+                let color = p.selection.alpha_mul(0.55);
+                env.ctx.save();
+                env.ctx.clip_rect(text_rect);
+                for range in ranges {
+                    let line = range.start_line as usize;
+                    if line < first_row || line > last_row {
+                        continue;
+                    }
+                    let Some(vis) = vis.iter().find(|vis| vis.line == line) else {
+                        continue;
+                    };
+                    let line_start = doc.line_start(line);
+                    let line_text = doc.line(line);
+                    let row_start = line_start + vis.start_byte;
+                    let row_end = line_start + vis.end_byte;
+                    let from = crate::model::lsp::byte_for_position(
+                        doc,
+                        range.start_line,
+                        range.start_char,
+                    )
+                    .max(row_start);
+                    let to = if range.end_line == range.start_line {
+                        crate::model::lsp::byte_for_position(doc, range.end_line, range.end_char)
+                            .min(row_end)
+                    } else {
+                        row_end
+                    };
+                    if from >= to {
+                        continue;
+                    }
+                    let row_start_x =
+                        x_in_line(measurer, line_text, vis.start_byte, font, tab, family);
+                    let row_end_x = x_in_line(measurer, line_text, vis.end_byte, font, tab, family);
+                    let x0 = x_in_line(measurer, line_text, from - line_start, font, tab, family)
+                        - row_start_x;
+                    let x1 = if to >= row_end {
+                        row_end_x - row_start_x
+                    } else {
+                        x_in_line(measurer, line_text, to - line_start, font, tab, family)
+                            - row_start_x
+                    };
+                    let y = row_y(vis.row);
+                    env.ctx.fill_rect(
+                        Rect::from_min_size(
+                            Vec2::new(text_rect.left() + pad + x0 - scroll_x, y),
+                            Size::new((x1 - x0).max(1.0), line_h),
+                        ),
+                        color,
+                    );
+                }
+                env.ctx.restore();
+            }
+        }
+    }
+
     // Indent guides: one 1 px rule per indentation level of each visible line.
     if state.settings.indent_guides {
         let space = crate::fonts::advance(measurer, ' ', font, family);

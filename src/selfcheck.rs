@@ -4989,6 +4989,11 @@ while True:
         }})
     elif method == "textDocument/hover":
         send({"jsonrpc": "2.0", "id": request_id, "result": {"contents": {"kind": "markdown", "value": "lsp hover card\n\nUse `struct` inline.\n\n```rust\nfn main() {}\n```"}}})
+    elif method == "textDocument/documentHighlight":
+        send({"jsonrpc": "2.0", "id": request_id, "result": [
+            {"range": {"start": {"line": 0, "character": 3}, "end": {"line": 0, "character": 7}}},
+            {"range": {"start": {"line": 1, "character": 8}, "end": {"line": 1, "character": 18}}},
+        ]})
     elif method == "textDocument/signatureHelp":
         send({"jsonrpc": "2.0", "id": request_id, "result": {
             "signatures": [{
@@ -5435,6 +5440,50 @@ fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
     if let Some(doc) = harness.app.state_mut().ws.active_doc_mut() {
         doc.set_caret(0);
     }
+
+    // -- document highlights ---------------------------------------------
+    // The symbol under the caret gets occurrence tints; moving to whitespace
+    // clears them immediately.
+    for _ in 0..100 {
+        harness.frame()?;
+        if !harness.app.state().lsp.highlights_for(&path).is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let frame = harness.frame()?;
+    {
+        let state = harness.app.state();
+        if state.lsp.highlights_for(&path).is_empty() {
+            return Err(format!(
+                "the document-highlight request never arrived (status {:?})",
+                state.lsp.status()
+            ));
+        }
+        let color = state.theme.p.selection.alpha_mul(0.55).to_rgba8();
+        let line_h = state.editor_metrics().line_h;
+        let painted = frame.commands().iter().any(|command| {
+            matches!(command, DrawCommand::FillRect { rect, paint }
+                if paint.color.to_rgba8() == color
+                    && (rect.size.height - line_h).abs() < 0.5
+                    && state.editor.text_rect.contains(rect.center()))
+        });
+        if !painted {
+            return Err("occurrence highlights were not painted".into());
+        }
+    }
+    if let Some(doc) = harness.app.state_mut().ws.active_doc_mut() {
+        let end = doc.text().len();
+        doc.set_caret(end);
+    }
+    harness.frame()?;
+    if !harness.app.state().lsp.highlights_for(&path).is_empty() {
+        return Err("occurrence highlights survived a move off the symbol".into());
+    }
+    if let Some(doc) = harness.app.state_mut().ws.active_doc_mut() {
+        doc.set_caret(0);
+    }
+    harness.frame()?;
 
     // Hover: F1, wait for the response, and assert the overlay is painted.
     harness.key(Key::F1);

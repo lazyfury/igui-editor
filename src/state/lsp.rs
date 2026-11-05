@@ -182,6 +182,70 @@ impl AppState {
         }
     }
 
+    /// Drops occurrence highlights and the debounce that would replace them.
+    pub(crate) fn clear_occurrence_highlights(&mut self) {
+        self.occurrence_at = None;
+        self.occurrence_key = None;
+        if let Some(path) = self
+            .ws
+            .active_doc()
+            .and_then(|doc| doc.path().map(Path::to_path_buf))
+        {
+            self.lsp.clear_document_highlights(&path);
+        }
+    }
+
+    /// Debounced `textDocument/documentHighlight` for the symbol under the
+    /// caret. Clears immediately when the editor no longer qualifies (focus,
+    /// selection, read-only, no server support) so no stale tint survives.
+    pub fn tick_occurrences(&mut self) {
+        let now = Instant::now();
+        let eligible = {
+            let Some(doc) = self.ws.active_doc() else {
+                self.clear_occurrence_highlights();
+                return;
+            };
+            self.focus == Focus::Editor
+                && self.modal.is_none()
+                && !doc.is_read_only()
+                && doc.path().is_some()
+                && doc.selection().is_none()
+                && self.lsp.capabilities().document_highlight
+                && caret_on_word(doc)
+        };
+        if !eligible {
+            self.clear_occurrence_highlights();
+            return;
+        }
+        let Some(doc) = self.ws.active_doc() else {
+            return;
+        };
+        let key = (doc.id(), doc.rev(), doc.caret());
+        if self.occurrence_key != Some(key) {
+            self.occurrence_key = Some(key);
+            self.occurrence_at = Some(now + Duration::from_millis(120));
+            if let Some(path) = doc.path() {
+                self.lsp.clear_document_highlights(path);
+            }
+            self.dirty = true;
+            return;
+        }
+        let Some(at) = self.occurrence_at else {
+            return;
+        };
+        if now < at {
+            return;
+        }
+        self.occurrence_at = None;
+        if self.lsp.request_document_highlights(doc) {
+            self.dirty = true;
+        } else {
+            // The session may still be starting; retry shortly instead of
+            // waiting for the next caret move.
+            self.occurrence_at = Some(now + Duration::from_millis(250));
+        }
+    }
+
     pub fn request_lsp_definition_at(&mut self, byte: usize) -> bool {
         self.hover_target = None;
         self.hover_leave_at = None;
@@ -607,6 +671,19 @@ impl AppState {
         self.dirty = true;
         true
     }
+}
+
+/// Whether the caret touches an identifier character (a server call on
+/// whitespace or punctuation would only return an empty list).
+fn caret_on_word(doc: &Document) -> bool {
+    let text = doc.text();
+    let caret = doc.caret().min(text.len());
+    let before = text[..caret].chars().next_back();
+    let at = text[caret..].chars().next();
+    [before, at]
+        .into_iter()
+        .flatten()
+        .any(|ch| ch.is_alphanumeric() || ch == '_')
 }
 
 /// URL schemes accepted by the documentation viewer.

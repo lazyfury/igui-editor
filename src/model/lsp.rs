@@ -74,6 +74,15 @@ pub struct ServerCapabilities {
     pub prepare_rename: bool,
 }
 
+/// One LSP range in UTF-16 line/column coordinates (occurrence highlights).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextRange {
+    pub start_line: u32,
+    pub start_char: u32,
+    pub end_line: u32,
+    pub end_char: u32,
+}
+
 #[derive(Clone, Debug)]
 pub struct Diagnostic {
     pub start_line: usize,
@@ -241,6 +250,7 @@ enum PendingKind {
     Completion,
     CompletionResolve { index: usize },
     SignatureHelp,
+    Highlights(PathBuf),
     Definition,
     NativeSymbol { class: String, symbol: String },
     Semantic(PathBuf),
@@ -860,6 +870,8 @@ struct Session {
     semantic_pending: HashSet<PathBuf>,
     semantic_in_flight: HashSet<PathBuf>,
     symbols: HashMap<PathBuf, Vec<OutlineSymbol>>,
+    /// Occurrence ranges from `textDocument/documentHighlight`, per document.
+    highlights: HashMap<PathBuf, Vec<TextRange>>,
     symbols_pending: HashSet<PathBuf>,
     symbols_in_flight: HashSet<PathBuf>,
     pending: HashMap<u64, (PendingKind, Instant)>,
@@ -892,6 +904,7 @@ impl Session {
             semantic_pending: HashSet::new(),
             semantic_in_flight: HashSet::new(),
             symbols: HashMap::new(),
+            highlights: HashMap::new(),
             symbols_pending: HashSet::new(),
             symbols_in_flight: HashSet::new(),
             pending: HashMap::new(),
@@ -913,6 +926,7 @@ impl Session {
         self.semantic_pending.clear();
         self.semantic_in_flight.clear();
         self.symbols.clear();
+        self.highlights.clear();
         self.symbols_pending.clear();
         self.symbols_in_flight.clear();
         self.pending.clear();
@@ -1128,6 +1142,7 @@ impl Session {
             self.semantic_pending.remove(&path);
             self.semantic_in_flight.remove(&path);
             self.symbols.remove(&path);
+            self.highlights.remove(&path);
             self.symbols_pending.remove(&path);
             self.symbols_in_flight.remove(&path);
         }
@@ -1192,6 +1207,9 @@ impl Session {
                     open.version += 1;
                     open.rev = doc.rev();
                     open.changed_at = None;
+                    // Ranges refer to the previous text; the state layer asks
+                    // again once the caret settles.
+                    self.highlights.remove(path);
                     if let Some(client) = self.client.as_ref() {
                         client.notify(
                             "textDocument/didChange",
@@ -2003,6 +2021,17 @@ impl LspController {
                     self.changed = true;
                 }
             }
+            PendingKind::Highlights(path) => {
+                if self.sessions[index].open_docs.contains_key(&path) {
+                    let ranges = parse_text_ranges(&result);
+                    if ranges.is_empty() {
+                        self.sessions[index].highlights.remove(&path);
+                    } else {
+                        self.sessions[index].highlights.insert(path, ranges);
+                    }
+                    self.sessions[index].changed = true;
+                }
+            }
             PendingKind::Definition => {
                 if is_active {
                     self.location = parse_location(&result);
@@ -2164,6 +2193,49 @@ impl LspController {
             PendingKind::Definition,
             doc,
             byte,
+        )
+    }
+
+    /// Looks up the occurrence ranges for the symbol under the caret.
+    pub fn highlights_for(&self, path: &Path) -> &[TextRange] {
+        self.session_for_path(path)
+            .and_then(|session| session.highlights.get(path))
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    pub(crate) fn clear_document_highlights(&mut self, path: &Path) {
+        if let Some(session) = self
+            .sessions
+            .iter_mut()
+            .find(|session| session.highlights.contains_key(path))
+        {
+            session.highlights.remove(path);
+            session.changed = true;
+        }
+    }
+
+    /// Asks for every occurrence of the symbol at the caret. Gated on
+    /// `documentHighlightProvider`.
+    pub fn request_document_highlights(&mut self, doc: &Document) -> bool {
+        let Some(path) = doc.path().map(Path::to_path_buf) else {
+            return false;
+        };
+        {
+            let Some(session) = self.active_session_mut() else {
+                return false;
+            };
+            if !session.capabilities.document_highlight || session.status != LspStatus::Ready {
+                return false;
+            }
+            session
+                .pending
+                .retain(|_, (kind, _)| !matches!(kind, PendingKind::Highlights(_)));
+        }
+        self.send_position(
+            "textDocument/documentHighlight",
+            PendingKind::Highlights(path),
+            doc,
         )
     }
 
@@ -3122,6 +3194,36 @@ fn parse_completions(result: &Value, prefix: &str) -> Vec<CompletionItem> {
     parsed.retain(|item| seen.insert((item.insert.clone(), item.label.clone())));
     parsed.truncate(MAX_COMPLETIONS);
     parsed
+}
+
+fn parse_text_ranges(result: &Value) -> Vec<TextRange> {
+    let Some(items) = result.as_array() else {
+        return Vec::new();
+    };
+    let mut ranges = Vec::new();
+    for item in items.iter().take(1_000) {
+        let range = &item["range"];
+        let start = &range["start"];
+        let end = &range["end"];
+        let (Some(sl), Some(sc), Some(el), Some(ec)) = (
+            start["line"].as_u64(),
+            start["character"].as_u64(),
+            end["line"].as_u64(),
+            end["character"].as_u64(),
+        ) else {
+            continue;
+        };
+        if (sl, sc) >= (el, ec) {
+            continue;
+        }
+        ranges.push(TextRange {
+            start_line: sl as u32,
+            start_char: sc as u32,
+            end_line: el as u32,
+            end_char: ec as u32,
+        });
+    }
+    ranges
 }
 
 fn parse_location(result: &Value) -> Option<Location> {

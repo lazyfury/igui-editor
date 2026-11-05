@@ -1192,6 +1192,9 @@ pub struct AppState {
     pub signature_help_at: Option<Instant>,
     /// Document/revision/caret the visible signature help belongs to.
     pub signature_help_doc: Option<(u64, u64, usize)>,
+    /// Debounced occurrence-highlight request for the symbol at the caret.
+    pub occurrence_at: Option<Instant>,
+    occurrence_key: Option<(u64, u64, usize)>,
     pub editor: EditorUi,
     pub tabs: TabsUi,
     pub tab_drag: Option<TabDrag>,
@@ -1380,6 +1383,8 @@ impl AppState {
             auto_completion_at: None,
             signature_help_at: None,
             signature_help_doc: None,
+            occurrence_at: None,
+            occurrence_key: None,
             editor: EditorUi {
                 reveal: true,
                 wrap: crate::model::wrap::WrapLayout::default(),
