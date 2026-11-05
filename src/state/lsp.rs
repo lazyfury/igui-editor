@@ -378,8 +378,17 @@ impl AppState {
         if self.ws.active_doc().is_some_and(|doc| doc.is_read_only()) {
             return;
         }
-        if last.is_ascii_alphanumeric() || matches!(last, '_' | '.') {
+        if last.is_ascii_alphanumeric() || matches!(last, '_') {
             self.auto_completion_at = Some(Instant::now() + Duration::from_millis(140));
+        } else if last == '.'
+            || (self.lsp.completion_triggers().contains(&last)
+                // String completion needs the replacement range work first;
+                // until then a quote only opens the normal debounce path.
+                && !matches!(last, '\'' | '"'))
+        {
+            // Server-declared triggers (`.`, `$` and `%` for GDScript) are an
+            // explicit request for completion: fire on the next tick.
+            self.auto_completion_at = Some(Instant::now());
         }
     }
 

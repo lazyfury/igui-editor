@@ -133,12 +133,20 @@ diagnostics/semantic tokens/outline. The same switch is the
 - `F1` shows server hover, `F12` jumps to definition (macOS top-row media keys
   may need `Fn`; `⌘⇧I` / `⌘⇧D` are also available), and `⌘I` (`Ctrl+I` on
   Linux/Windows) opens completion. Typing an identifier also activates
-  completion after a 140 ms debounce. Completion results are filtered by the
+  completion after a 140 ms debounce. Characters declared by the server's
+  `completionProvider.triggerCharacters` fire immediately: `.` everywhere and
+  `$` / `%` for GDScript node references (Godot's list plus `%`, which the
+  server accepts even though it is not declared). Completion results are
+  filtered by the
   identifier prefix before the UI cap, so Godot global methods such as `print`
   are found even though the server returns thousands of candidates. The
   selected item is resolved with `completionItem/resolve` and shows a
   hover-style documentation preview; `OPEN GODOT DOCS` (or `OPEN DOCS` for
   local methods) opens the documentation tab.
+- Optional LSP features are read from the `initialize` result and gated per
+  server (`signatureHelpProvider`, `referencesProvider`,
+  `documentHighlightProvider`, `renameProvider`). An older server simply gets a
+  status line instead of a `Method not found` round trip.
 - When a hover is a Godot native class or member, the card shows **OPEN GODOT
   DOCS**; clicking it opens a **read-only editor tab** backed by Godot's
   `textDocument/nativeSymbol` response. The tab uses the normal file-tab strip,

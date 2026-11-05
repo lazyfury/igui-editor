@@ -1644,6 +1644,32 @@ mod tests {
     }
 
     #[test]
+    fn trigger_characters_complete_immediately_while_identifiers_debounce() {
+        let mut state = state_with_tabs(1);
+        state.focus = Focus::Editor;
+        state.schedule_auto_completion("x");
+        let debounced = state
+            .auto_completion_at
+            .expect("an identifier schedules completion");
+        assert!(debounced > Instant::now());
+        state.auto_completion_at = None;
+        state.schedule_auto_completion(".");
+        let immediate = state
+            .auto_completion_at
+            .expect("the dot trigger schedules completion");
+        assert!(
+            immediate <= Instant::now(),
+            "a trigger character must not wait for the debounce"
+        );
+        state.auto_completion_at = None;
+        state.schedule_auto_completion("\"");
+        assert!(
+            state.auto_completion_at.is_none(),
+            "quote completion waits for the replacement-range support"
+        );
+    }
+
+    #[test]
     fn tab_commands_select_by_slot_and_wrap() {
         let mut state = state_with_tabs(3);
         state.run(Action::SelectTab(2));

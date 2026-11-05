@@ -56,6 +56,24 @@ pub enum LspStatus {
     Error(String),
 }
 
+/// Optional server features the editor can use, read from `initialize`.
+///
+/// The protocol is the same for every server, but support varies (Godot 4.7
+/// gained signature help, references, occurrence highlights and rename, while
+/// its formatting/code-action methods stay unimplemented). Requests are gated
+/// on these flags so an older server gets a clear status line instead of a
+/// `Method not found` round trip.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ServerCapabilities {
+    /// `completionProvider.triggerCharacters`; `.` is always accepted.
+    pub completion_triggers: Vec<char>,
+    pub signature_help: bool,
+    pub references: bool,
+    pub document_highlight: bool,
+    pub rename: bool,
+    pub prepare_rename: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct Diagnostic {
     pub start_line: usize,
@@ -811,6 +829,8 @@ struct Session {
     /// Native class names from `gdscript/capabilities`.
     native_classes: HashSet<String>,
     native_symbols: HashMap<(String, String), NativeSymbol>,
+    /// Optional features the server advertised in `initialize`.
+    capabilities: ServerCapabilities,
     last_active: Instant,
     changed: bool,
     /// Re-send every open document on the next `sync` so the server parses it
@@ -839,6 +859,7 @@ impl Session {
             watchers: Vec::new(),
             native_classes: HashSet::new(),
             native_symbols: HashMap::new(),
+            capabilities: ServerCapabilities::default(),
             last_active: Instant::now(),
             changed: false,
             resync: false,
@@ -859,6 +880,7 @@ impl Session {
         // A restarted server registers its watchers again.
         self.watchers.clear();
         self.native_classes.clear();
+        self.capabilities = ServerCapabilities::default();
         self.resync = false;
     }
 
@@ -1543,6 +1565,24 @@ impl LspController {
         self.enabled && self.specs.iter().any(|spec| spec.matches_path(path))
     }
 
+    /// The optional features the active server advertised. Empty when no
+    /// session is live, so callers naturally degrade to "unsupported".
+    pub fn capabilities(&self) -> ServerCapabilities {
+        self.active_session()
+            .map(|session| session.capabilities.clone())
+            .unwrap_or_default()
+    }
+
+    /// Characters that should request completion immediately (the server's
+    /// own trigger list; `.` stays a trigger for every server).
+    pub fn completion_triggers(&self) -> &[char] {
+        static DEFAULT: [char; 1] = ['.'];
+        self.active_session()
+            .map(|session| session.capabilities.completion_triggers.as_slice())
+            .filter(|triggers| !triggers.is_empty())
+            .unwrap_or(&DEFAULT)
+    }
+
     pub fn is_busy(&self) -> bool {
         self.enabled
             && self.sessions.iter().any(|session| {
@@ -1860,6 +1900,8 @@ impl LspController {
                     let (supported, legend) = semantic_capability(&result);
                     self.sessions[index].semantic_supported = supported;
                     self.sessions[index].semantic_legend = legend;
+                    let language = self.sessions[index].spec.language.clone();
+                    self.sessions[index].capabilities = server_capabilities(&result, &language);
                     if let Some(client) = self.sessions[index].client.as_ref() {
                         client.notify("initialized", json!({}));
                     }
@@ -2547,6 +2589,45 @@ fn parse_document_symbols(result: &Value) -> Vec<OutlineSymbol> {
     let mut out = Vec::new();
     walk(items, 0, &mut out);
     out
+}
+
+/// Reads the optional features an `initialize` result advertises.
+///
+/// Godot publishes `%` as a working node-reference trigger but not in its
+/// declared list, so GDScript gets that one extra character.
+fn server_capabilities(result: &Value, language: &str) -> ServerCapabilities {
+    let capabilities = &result["capabilities"];
+    let provider_enabled = |key: &str| {
+        capabilities
+            .get(key)
+            .is_some_and(|value| !value.is_null() && value.as_bool() != Some(false))
+    };
+    let mut completion_triggers = Vec::new();
+    if let Some(items) = capabilities["completionProvider"]["triggerCharacters"].as_array() {
+        for item in items {
+            let Some(value) = item.as_str() else { continue };
+            let mut chars = value.chars();
+            if let (Some(ch), None) = (chars.next(), chars.next()) {
+                if !ch.is_control() && !completion_triggers.contains(&ch) {
+                    completion_triggers.push(ch);
+                }
+            }
+        }
+    }
+    if language == "gdscript" && !completion_triggers.contains(&'%') {
+        completion_triggers.push('%');
+    }
+    let rename_provider = &capabilities["renameProvider"];
+    let rename = !rename_provider.is_null() && rename_provider.as_bool() != Some(false);
+    let prepare_rename = rename_provider["prepareProvider"].as_bool() == Some(true);
+    ServerCapabilities {
+        completion_triggers,
+        signature_help: provider_enabled("signatureHelpProvider"),
+        references: provider_enabled("referencesProvider"),
+        document_highlight: provider_enabled("documentHighlightProvider"),
+        rename,
+        prepare_rename,
+    }
 }
 
 fn semantic_capability(result: &Value) -> (bool, Vec<String>) {
@@ -3671,6 +3752,32 @@ mod tests {
             env: None,
         };
         assert!(connect_attach(&attach).is_none());
+    }
+
+    #[test]
+    fn parses_optional_server_capabilities_and_godot_triggers() {
+        let result = json!({
+            "capabilities": {
+                "completionProvider": {"triggerCharacters": [".", "$", "\"", "ab"]},
+                "signatureHelpProvider": {"triggerCharacters": ["(", ","]},
+                "referencesProvider": true,
+                "documentHighlightProvider": true,
+                "renameProvider": {"prepareProvider": true},
+            }
+        });
+        let caps = server_capabilities(&result, "gdscript");
+        assert_eq!(caps.completion_triggers, ['.', '$', '"', '%']);
+        assert!(caps.signature_help && caps.references && caps.document_highlight);
+        assert!(caps.rename && caps.prepare_rename);
+
+        let caps = server_capabilities(&result, "rust");
+        assert_eq!(caps.completion_triggers, ['.', '$', '"']);
+
+        // A boolean `renameProvider` has no prepare support; missing optional
+        // providers leave everything off.
+        let caps = server_capabilities(&json!({"capabilities": {"renameProvider": true}}), "rust");
+        assert!(caps.rename && !caps.prepare_rename);
+        assert!(!caps.signature_help && !caps.references && !caps.document_highlight);
     }
 
     #[test]

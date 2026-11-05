@@ -402,6 +402,17 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    server. Both settings are session-wide; per-project overrides were rejected
    as scope growth (Quick Open keeps its own build/VCS exclusions).
 
+42. **Optional LSP features are advertised by the server, not assumed.**
+   `initialize` results are parsed into `ServerCapabilities`
+   (`completionProvider.triggerCharacters`, signature help, references,
+   document highlights, rename/prepare). A missing feature degrades to a status
+   line or an inactive command instead of a `Method not found` round trip, so
+   the same client works with older servers and with Godot releases that only
+   implement part of the protocol. Completion triggers come from the server's
+   list plus `.`; GDScript adds `%` because Godot answers it without declaring
+   it. Trigger characters request immediately (they are an explicit completion
+   gesture); identifiers keep the 140 ms debounce.
+
 ## Theme spec (geek / compact / no corners)
 
 Rules:
