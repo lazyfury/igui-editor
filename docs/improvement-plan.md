@@ -78,7 +78,7 @@ Acceptance:
 
 ## Phase 1 — trust and latency (target: 2–3 days)
 
-### 1.1 Restore every tab (F1)
+### [x] 1.1 Restore every tab (F1)
 
 Files: `src/model/session.rs`, `src/state/files.rs`, tests.
 
@@ -328,7 +328,7 @@ the palette; selfcheck covers open/filter/run/escape.
 | Session 4 | Baseline | done | `scripts/check.sh` green (356 unit + 2 doc tests, selfcheck). |
 | Session 4 | 0.3 Index/archive | done | `improvement-log.md` added; plan rewritten for Session 4. |
 | Session 4 | 0.1–0.2 Docs truth | pending | |
-| Session 4 | 1.1 Tab restore | pending | |
+| Session 4 | 1.1 Tab restore | done | Tabs no longer capped by `MAX_RECENT` (parse/render/`set_tabs`); recents stay at 8. 2 new session tests, gate green: 358 unit + 2 doc tests, selfcheck. |
 | Session 4 | 1.2 Quick Open | pending | Step A before Step B. |
 | Session 4 | 1.3 Autosave | pending | |
 | Session 4 | 2.1 Command table | pending | Keystone for 3.6. |

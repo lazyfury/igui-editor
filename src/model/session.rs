@@ -17,6 +17,10 @@ use std::path::{Path, PathBuf};
 
 use super::fsutil;
 
+/// Cap for the two recent lists (`recent_projects`, `recent_files`).
+///
+/// Open tabs are deliberately **not** capped: every restored tab must come
+/// back, so a session with more than eight tabs keeps all of them.
 const MAX_RECENT: usize = 8;
 
 /// Persisted application state. Missing/corrupt files fall back to defaults.
@@ -262,7 +266,9 @@ impl Session {
             session.recent_projects = recent_projects.into_values().take(MAX_RECENT).collect();
             session.recent_files = recent_files.into_values().take(MAX_RECENT).collect();
         }
-        session.tabs = tabs.into_values().take(MAX_RECENT).collect();
+        // Tabs are restored verbatim, in order: the session must bring back
+        // every open tab, so `MAX_RECENT` does not apply here.
+        session.tabs = tabs.into_values().collect();
         session
     }
 
@@ -331,7 +337,7 @@ impl Session {
                 escape(&path.to_string_lossy())
             ));
         }
-        for (index, path) in self.tabs.iter().take(MAX_RECENT).enumerate() {
+        for (index, path) in self.tabs.iter().enumerate() {
             out.push_str(&format!(
                 "tabs.{index}={}\n",
                 escape(&path.to_string_lossy())
@@ -365,11 +371,11 @@ impl Session {
         self.recent_files.clear();
     }
 
-    /// Replaces the restored-tab list.
+    /// Replaces the restored-tab list (no cap; order is preserved).
     ///
     /// Clears `active_tab` if it is no longer among the saved tabs.
     pub fn set_tabs(&mut self, tabs: Vec<PathBuf>) {
-        self.tabs = tabs.into_iter().take(MAX_RECENT).collect();
+        self.tabs = tabs;
         if self
             .active_tab
             .as_ref()
@@ -595,15 +601,48 @@ mod tests {
         let mut session = Session::default();
         for index in 0..12 {
             session.push_recent_file(Path::new(&format!("/tmp/file-{index}")));
+            session.push_recent_project(Path::new(&format!("/tmp/project-{index}")));
         }
         session.push_recent_file(Path::new("/tmp/file-11"));
         assert_eq!(session.recent_files.len(), MAX_RECENT);
+        assert_eq!(session.recent_projects.len(), MAX_RECENT);
         assert_eq!(session.recent_files[0], PathBuf::from("/tmp/file-11"));
         let unique = session
             .recent_files
             .iter()
             .collect::<std::collections::HashSet<_>>();
         assert_eq!(unique.len(), session.recent_files.len());
+        // Render/parse keeps the cap too.
+        let parsed = Session::parse(&session.render());
+        assert_eq!(parsed.recent_files.len(), MAX_RECENT);
+        assert_eq!(parsed.recent_projects.len(), MAX_RECENT);
+    }
+
+    #[test]
+    fn nine_tabs_survive_set_tabs_and_round_trip() {
+        let paths: Vec<PathBuf> = (0..9)
+            .map(|index| PathBuf::from(format!("/tmp/tab-{index}.rs")))
+            .collect();
+        let mut session = Session::default();
+        session.set_tabs(paths.clone());
+        assert_eq!(session.tabs, paths, "set_tabs must not cap or reorder");
+        let parsed = Session::parse(&session.render());
+        assert_eq!(parsed.tabs, paths);
+    }
+
+    #[test]
+    fn active_tab_at_the_ninth_position_survives() {
+        let paths: Vec<PathBuf> = (0..9)
+            .map(|index| PathBuf::from(format!("/tmp/tab-{index}.rs")))
+            .collect();
+        let active = paths[8].clone();
+        let mut session = Session::default();
+        session.set_tabs(paths.clone());
+        session.set_active_tab(Some(active.clone()));
+        assert_eq!(session.active_tab, Some(active.clone()));
+        let parsed = Session::parse(&session.render());
+        assert_eq!(parsed.tabs, paths);
+        assert_eq!(parsed.active_tab, Some(active));
     }
 
     #[test]
