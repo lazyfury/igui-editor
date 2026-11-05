@@ -60,11 +60,12 @@ pub fn run() -> Result<(), String> {
         .and_then(|()| check_typing(&dir))
         .and_then(|()| check_lsp(&dir))
         .and_then(|()| check_keymaps(&dir))
-        .and_then(|()| check_goto_line(&dir));
+        .and_then(|()| check_goto_line(&dir))
+        .and_then(|()| check_markdown_outline(&dir));
     let _ = fs::remove_dir_all(&dir);
     if result.is_ok() {
         println!(
-            "selfcheck ok: main flow + workspace/recovery + explorer filters + typing + LSP + keymap + go-to-line checks"
+            "selfcheck ok: main flow + workspace/recovery + explorer filters + typing + LSP + keymap + go-to-line + Markdown outline checks"
         );
     }
     result
@@ -5381,6 +5382,53 @@ fn check_goto_line(dir: &Path) -> Result<(), String> {
     )?;
     harness.key(Key::Escape);
     harness.frame()?;
+    Ok(())
+}
+
+fn check_markdown_outline(dir: &Path) -> Result<(), String> {
+    let path = dir.join("outline.md");
+    fs::write(
+        &path,
+        "# First heading\n\n## Second heading\n\n### Third heading\n",
+    )
+    .map_err(|error| format!("Markdown outline fixture: {error}"))?;
+    let config = dir.join("outline-session.conf");
+    let mut harness = Harness::new(Some(path), config, ScriptedDialogs::new(vec![]));
+
+    let frame = harness.frame()?;
+    let target = {
+        let state = harness.app.state();
+        if state.outline.rows.len() != 3 {
+            return Err(format!(
+                "Markdown outline painted {} heading rows",
+                state.outline.rows.len()
+            ));
+        }
+        state.outline.rows[1].1.center()
+    };
+    let keyword = crate::theme::Theme::new(Mode::Dark)
+        .p
+        .syntax
+        .keyword
+        .to_rgba8();
+    if !draw_text_has_color(&frame, "H", keyword) {
+        return Err("Markdown outline did not paint its heading glyph".into());
+    }
+    for heading in ["First heading", "Second heading", "Third heading"] {
+        expect(&texts(&frame), heading, "Markdown outline row")?;
+    }
+
+    harness.click(target);
+    harness.frame()?;
+    if harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .is_none_or(|doc| doc.line_col().0 != 2)
+    {
+        return Err("clicking a Markdown outline row did not jump to its heading".into());
+    }
     Ok(())
 }
 

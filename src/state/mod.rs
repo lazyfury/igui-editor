@@ -58,6 +58,7 @@ mod keymap;
 mod lsp;
 mod modal;
 mod new_file;
+mod outline;
 mod quick_open;
 mod references;
 mod reliability;
@@ -75,6 +76,7 @@ mod workspace;
 
 pub use dock::{DockId, Panel};
 pub use images::{ImageStatus, ImageStore};
+pub use outline::{MarkdownOutline, MARKDOWN_HEADING_KIND};
 pub use references::ReferencesUi;
 
 pub const MAX_RECENT: usize = 8;
@@ -144,16 +146,7 @@ impl ViewMode {
 
     /// Markdown sources open in split preview; everything else in the editor.
     pub fn for_path(path: Option<&Path>) -> Self {
-        let markdown = path
-            .and_then(|path| path.extension())
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| {
-                matches!(
-                    extension.to_ascii_lowercase().as_str(),
-                    "md" | "markdown" | "mdown" | "mkd"
-                )
-            });
-        if markdown {
+        if path.is_some_and(crate::model::markdown::is_markdown_path) {
             ViewMode::Split
         } else {
             ViewMode::Edit
@@ -680,6 +673,8 @@ pub struct OutlineUi {
     pub hover: Option<usize>,
     /// Visible row index and its hit rectangle, recorded during paint.
     pub rows: Vec<(usize, Rect)>,
+    /// Cached Markdown heading rows for the active document revision.
+    pub markdown: MarkdownOutline,
 }
 
 /// Bottom-dock PROBLEMS panel: a workspace-wide, click-to-jump diagnostic list.

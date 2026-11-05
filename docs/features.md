@@ -294,6 +294,15 @@ handle: drag it to resize (160–420 px), double-click resets to 224 px. The pan
 is persisted in the session and can be hidden from View → Outline or `⌘⌥O`.
 Symbols are transient LSP state, not saved to disk.
 
+When there is no LSP outline, Markdown documents list their headings instead:
+ATX (`#`…`######`) and setext (`===` / `---`) headings appear with an `H`
+marker at their level, and clicking one jumps to its source line. Headings in
+fenced or indented code are skipped, and blockquote (`>`) prefixes are
+recognized. The scanner is line-based, not a CommonMark parse: heading text is
+shown without parsing inline emphasis, and headings inside HTML blocks or
+list-item continuations are not special-cased. A Markdown file with no
+headings shows `No symbols`.
+
 ## Terminal (`⌃\``, View → Terminal)
 
 Native PTY (`portable-pty`) + `vt100` screen, no WebView or JS. The terminal is

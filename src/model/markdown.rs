@@ -10,8 +10,23 @@
 //! footnotes can be added later without touching the renderer's structure.
 
 use std::ops::Range;
+use std::path::Path;
 
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+
+/// Extensions that identify a Markdown source file across the app.
+const MARKDOWN_EXTENSIONS: &[&str] = &["md", "markdown", "mdown", "mkd"];
+
+/// Whether `path` names a Markdown source file (case-insensitive extension).
+pub fn is_markdown_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            MARKDOWN_EXTENSIONS
+                .iter()
+                .any(|known| extension.eq_ignore_ascii_case(known))
+        })
+}
 
 /// Inline emphasis of a run of text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,6 +114,213 @@ pub struct Block {
     pub start_line: usize,
     pub end_line: usize,
     pub kind: BlockKind,
+}
+
+/// One Markdown heading found by [`headings`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Heading {
+    /// ATX level 1..=6; setext headings are 1 (`=`) or 2 (`-`).
+    pub level: u8,
+    /// 0-based source line that holds the heading text.
+    pub line: usize,
+    /// Heading text without markers or surrounding whitespace.
+    pub text: String,
+}
+
+/// Scans `text` for Markdown headings without building the preview block model.
+///
+/// This is a line heuristic for the outline, not a CommonMark parse: it skips
+/// fenced and indented code, recognizes blockquote (`>`) prefixes, and supports
+/// ATX and setext headings. Heading text is returned raw (inline Markdown is not
+/// parsed), and a setext underline only applies to the preceding paragraph line
+/// at the same blockquote depth. Headings inside HTML blocks or list-item
+/// continuations are not special-cased.
+pub fn headings(text: &str) -> Vec<Heading> {
+    let mut out = Vec::new();
+    let mut fence: Option<(u8, usize, usize)> = None;
+    let mut paragraph: Option<(usize, &str, usize)> = None;
+    for (index, line) in text.lines().enumerate() {
+        let (content, quote) = strip_quote_prefix(line);
+        if let Some((marker, length, depth)) = fence {
+            if depth == quote && closing_fence(content, marker, length) {
+                fence = None;
+            }
+            paragraph = None;
+            continue;
+        }
+        // Four columns of indentation start an indented code block. The same
+        // scan also strips the container's leading whitespace.
+        let indent = leading_indent(content);
+        if indent >= 4 {
+            paragraph = None;
+            continue;
+        }
+        let candidate = &content[indent..];
+        let Some(&first) = candidate.as_bytes().first() else {
+            paragraph = None;
+            continue;
+        };
+        match first {
+            b'`' | b'~' => {
+                if let Some((marker, length)) = fence_marker(candidate) {
+                    fence = Some((marker, length, quote));
+                    paragraph = None;
+                    continue;
+                }
+            }
+            b'#' => {
+                if let Some((level, heading)) = atx_heading(candidate) {
+                    out.push(Heading {
+                        level,
+                        line: index,
+                        text: heading,
+                    });
+                    paragraph = None;
+                    continue;
+                }
+            }
+            b'=' | b'-' => {
+                if let Some(level) = setext_level(candidate) {
+                    if let Some((line, heading, depth)) = paragraph.take() {
+                        if depth == quote {
+                            out.push(Heading {
+                                level,
+                                line,
+                                text: heading.trim().to_string(),
+                            });
+                            continue;
+                        }
+                    }
+                    // A rule is not paragraph text, so it cannot seed a later setext.
+                    paragraph = None;
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        paragraph = (!is_thematic_break(candidate)).then_some((index, candidate, quote));
+    }
+    out
+}
+
+fn strip_quote_prefix(line: &str) -> (&str, usize) {
+    let mut content = line;
+    let mut depth = 0;
+    loop {
+        let candidate = strip_up_to_three_spaces(content);
+        let Some(rest) = candidate.strip_prefix('>') else {
+            break;
+        };
+        content = rest
+            .strip_prefix(' ')
+            .or_else(|| rest.strip_prefix('\t'))
+            .unwrap_or(rest);
+        depth += 1;
+    }
+    (content, depth)
+}
+
+fn strip_up_to_three_spaces(line: &str) -> &str {
+    let mut used = 0;
+    let bytes = line.as_bytes();
+    while used < 3 && bytes.get(used) == Some(&b' ') {
+        used += 1;
+    }
+    &line[used..]
+}
+
+fn leading_indent(line: &str) -> usize {
+    let mut width = 0;
+    for byte in line.bytes() {
+        match byte {
+            b' ' => width += 1,
+            b'\t' => width += 4,
+            _ => break,
+        }
+    }
+    width
+}
+
+fn fence_marker(line: &str) -> Option<(u8, usize)> {
+    let marker = *line.as_bytes().first()?;
+    if marker != b'`' && marker != b'~' {
+        return None;
+    }
+    let length = line
+        .bytes()
+        .take_while(|candidate| *candidate == marker)
+        .count();
+    // A backtick fence's info string may not contain a backtick.
+    if length < 3 || (marker == b'`' && line[length..].contains('`')) {
+        return None;
+    }
+    Some((marker, length))
+}
+
+fn closing_fence(line: &str, marker: u8, length: usize) -> bool {
+    let trimmed = strip_up_to_three_spaces(line);
+    let run = trimmed
+        .bytes()
+        .take_while(|candidate| *candidate == marker)
+        .count();
+    run >= length && trimmed[run..].trim().is_empty()
+}
+
+fn atx_heading(line: &str) -> Option<(u8, String)> {
+    let hashes = line.bytes().take_while(|byte| *byte == b'#').count();
+    if !(1..=6).contains(&hashes) {
+        return None;
+    }
+    let rest = &line[hashes..];
+    if rest
+        .chars()
+        .next()
+        .is_some_and(|ch| ch != ' ' && ch != '\t')
+    {
+        return None;
+    }
+    let mut text = rest.trim();
+    let without_closing = text.trim_end_matches('#');
+    if without_closing.len() < text.len() {
+        if without_closing.is_empty() {
+            text = "";
+        } else if without_closing.ends_with([' ', '\t']) {
+            text = without_closing.trim_end();
+        }
+    }
+    Some((hashes as u8, text.to_string()))
+}
+
+fn setext_level(line: &str) -> Option<u8> {
+    let trimmed = line.trim_end_matches([' ', '\t']);
+    let marker = *trimmed.as_bytes().first()?;
+    if marker != b'=' && marker != b'-' {
+        return None;
+    }
+    if !trimmed.bytes().all(|byte| byte == marker) {
+        return None;
+    }
+    Some(if marker == b'=' { 1 } else { 2 })
+}
+
+fn is_thematic_break(line: &str) -> bool {
+    let mut marker = 0;
+    let mut count = 0;
+    for byte in line.bytes() {
+        if byte == b' ' || byte == b'\t' {
+            continue;
+        }
+        if marker == 0 {
+            if byte != b'-' && byte != b'*' && byte != b'_' {
+                return false;
+            }
+            marker = byte;
+        } else if byte != marker {
+            return false;
+        }
+        count += 1;
+    }
+    count >= 3
 }
 
 /// Parses Markdown (CommonMark + strikethrough/GFM lists) into blocks.
@@ -639,5 +861,96 @@ mod tests {
     fn html_is_dropped_not_rendered_as_tags() {
         let blocks = parse("hello <b>world</b>\n");
         assert!(!format!("{blocks:?}").contains("<b>"));
+    }
+
+    #[test]
+    fn heading_scan_reports_levels_text_and_lines() {
+        let headings =
+            headings("  # Top\n\n## Section ##\n###### Deep\n\n####### Not\n#NoSpace\n#\tTabbed\n");
+        let rows: Vec<(u8, usize, &str)> = headings
+            .iter()
+            .map(|heading| (heading.level, heading.line, heading.text.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                (1, 0, "Top"),
+                (2, 2, "Section"),
+                (6, 3, "Deep"),
+                (1, 7, "Tabbed")
+            ]
+        );
+    }
+
+    #[test]
+    fn heading_scan_strips_only_real_closing_hashes() {
+        let headings = headings("# foo ###\n# foo#\n# ###\n#\n");
+        let texts: Vec<&str> = headings
+            .iter()
+            .map(|heading| heading.text.as_str())
+            .collect();
+        assert_eq!(texts, vec!["foo", "foo#", "", ""]);
+    }
+
+    #[test]
+    fn heading_scan_skips_fenced_code_with_closing_fence_rules() {
+        let headings = headings(
+            "# Before\n~~~\n# hidden\n~~~\n````\n# hidden\n```\n# still hidden\n````\n## After\n",
+        );
+        let rows: Vec<(u8, usize, &str)> = headings
+            .iter()
+            .map(|heading| (heading.level, heading.line, heading.text.as_str()))
+            .collect();
+        assert_eq!(rows, vec![(1, 0, "Before"), (2, 9, "After")]);
+    }
+
+    #[test]
+    fn heading_scan_skips_indented_code() {
+        let headings = headings("    # not a heading\n\t# still code\n# Heading\n");
+        let rows: Vec<(u8, usize, &str)> = headings
+            .iter()
+            .map(|heading| (heading.level, heading.line, heading.text.as_str()))
+            .collect();
+        assert_eq!(rows, vec![(1, 2, "Heading")]);
+    }
+
+    #[test]
+    fn heading_scan_supports_setext_headings() {
+        let headings = headings("Title\n=====\n\nSub\n---\n\n---\n\n    Text\n    ---\n");
+        let rows: Vec<(u8, usize, &str)> = headings
+            .iter()
+            .map(|heading| (heading.level, heading.line, heading.text.as_str()))
+            .collect();
+        assert_eq!(rows, vec![(1, 0, "Title"), (2, 3, "Sub")]);
+    }
+
+    #[test]
+    fn heading_scan_recognizes_blockquote_headings() {
+        let headings = headings(
+            "> # Quoted\n>\n> Setext\n> ---\n\n> ```\n> # hidden\n> ```\n> ## Shown\n\n# Plain\n",
+        );
+        let rows: Vec<(u8, usize, &str)> = headings
+            .iter()
+            .map(|heading| (heading.level, heading.line, heading.text.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                (1, 0, "Quoted"),
+                (2, 2, "Setext"),
+                (2, 8, "Shown"),
+                (1, 10, "Plain")
+            ]
+        );
+    }
+
+    #[test]
+    fn markdown_paths_share_one_extension_list() {
+        for name in ["a.md", "a.MARKDOWN", "a.mdown", "a.mkd"] {
+            assert!(is_markdown_path(Path::new(name)), "{name}");
+        }
+        for name in ["a.txt", "a.mdx", "md", "a.rs"] {
+            assert!(!is_markdown_path(Path::new(name)), "{name}");
+        }
     }
 }

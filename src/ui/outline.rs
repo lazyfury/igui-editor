@@ -148,7 +148,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         .map(|path| path.to_path_buf());
     let symbols = path
         .as_deref()
-        .map(|path| state.lsp.symbols_for(path).to_vec())
+        .map(|path| state.outline_symbols_for(path))
         .unwrap_or_default();
     let count = symbols.len();
     let list = rect;
@@ -256,6 +256,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
 
 fn symbol_glyph(kind: u32) -> &'static str {
     match kind {
+        crate::state::MARKDOWN_HEADING_KIND => "H",
         2..=4 => "N",
         5 | 10 | 11 | 23 => "T",
         6 | 12 | 9 => "ƒ",
@@ -272,6 +273,7 @@ fn symbol_glyph(kind: u32) -> &'static str {
 
 fn symbol_color(kind: u32, p: &crate::theme::Palette) -> igui_core::Color {
     match kind {
+        crate::state::MARKDOWN_HEADING_KIND => p.syntax.keyword,
         5 | 10 | 11 | 23 | 26 => p.syntax.type_name,
         6 | 12 | 9 => p.syntax.function,
         7 | 8 | 24 => p.syntax.property,
@@ -303,7 +305,7 @@ pub fn click(state: &mut AppState, pos: Vec2) -> bool {
     else {
         return true;
     };
-    let symbol = state.lsp.symbols_for(&path).get(index).cloned();
+    let symbol = state.outline_symbols_for(&path).get(index).cloned();
     if let Some(symbol) = symbol {
         let byte = state
             .ws
@@ -347,5 +349,15 @@ mod tests {
         assert_ne!(symbol_glyph(24), symbol_glyph(13));
         let p = crate::theme::Theme::dark().p;
         assert_eq!(symbol_color(24, &p), p.syntax.property);
+    }
+
+    #[test]
+    fn markdown_headings_get_their_own_marker() {
+        assert_eq!(symbol_glyph(crate::state::MARKDOWN_HEADING_KIND), "H");
+        let p = crate::theme::Theme::dark().p;
+        assert_eq!(
+            symbol_color(crate::state::MARKDOWN_HEADING_KIND, &p),
+            p.syntax.keyword
+        );
     }
 }

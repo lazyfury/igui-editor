@@ -771,14 +771,7 @@ impl Document {
     fn is_markdown(&self) -> bool {
         self.path
             .as_deref()
-            .and_then(Path::extension)
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| {
-                matches!(
-                    extension.to_ascii_lowercase().as_str(),
-                    "md" | "markdown" | "mdown" | "mkd"
-                )
-            })
+            .is_some_and(crate::model::markdown::is_markdown_path)
     }
 
     pub fn line_count(&self) -> usize {

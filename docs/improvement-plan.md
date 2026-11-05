@@ -247,7 +247,7 @@ Acceptance: no stale entries after close; `check.sh`.
 
 Ordered by product priority. Land 3.1/3.2/3.4 first; 3.6 depends on 2.1.
 
-### 3.1 Markdown heading outline (F13)
+### [x] 3.1 Markdown heading outline (F13)
 
 Files: `src/model/markdown.rs`, `src/state/outline.rs` (or `state/lsp.rs`),
 `src/ui/outline.rs`.
@@ -378,7 +378,7 @@ the palette; selfcheck covers open/filter/run/escape.
 | Session 4 | 2.2 `pub(crate)` | done | All 107 `AppState` fields are `pub(crate)`; no field name/type/order, `new` or method changed, so behavior is unchanged. The narrowing removed the `pub`-field reachability chain that had masked dead code and exposed 11 unused items (model helpers, service-manifest metadata, three overlay fields); they keep their shape with a targeted `#[expect(dead_code, …)]` (three gated by `cfg_attr(not(test), …)` because only tests use them). UI state structs keep `pub` fields; that split follows 2.1. Gate green: 371 unit + 2 doc tests, selfcheck. |
 | Session 4 | 2.2 cleanup | done | The dead data exposed by 2.2 was deleted: the `PtySession::cwd_hint` stub, `GitCommitDetail::truncated`, `TreeMenuUi::name`, `ReplaceJob::{files,occurrences}` and `ToolingPrompt::source`, with their parameters, locals and struct literals updated. The manifest/command metadata stays (documented extension-host shape), is re-exported from the crate root and is exercised by a new `builtin_metadata_is_well_formed` unit test. Only the three test-only helpers keep an annotation. Gate green: 377 unit + 2 doc tests, selfcheck. |
 | Session 4 | 2.3 State pruning | done | `close_tab_now` calls one `forget_document` helper (`doc_views`, `doc_revs`, `language_by_id`, `recovery`, `external`); `reset_project_state` reuses it and `delete_path_now` drops path/folder stamps. `language_by_path` still outlives the tab. 3 new state tests. Gate green: 371 unit + 2 doc tests, selfcheck. |
-| Session 4 | 3.1 Markdown outline | pending | |
+| Session 4 | 3.1 Markdown outline | done | Without LSP symbols, Markdown files derive outline rows from a line scanner (`model::markdown::headings`) that handles ATX/setext headings, fenced/indented code and blockquote prefixes; rows are cached by `(doc id, rev)`, use `MARKDOWN_HEADING_KIND`/`H`, and click reuses `byte_for_position`. `model::markdown::is_markdown_path` is now the shared extension check for outline/view mode/tidy. 12 new tests (7 model, 3 state, 1 UI glyph, 1 truncate helper) plus a selfcheck open/paint/click flow. Gate green: 396 unit + 2 doc tests, selfcheck. Bench before → after (median of 3): parse 1.826 → 0.762 ms, layout 2.712 → 1.627 ms, paint 0.018 → 0.019 ms, typing 1.485 → 1.490 ms/frame (< 2 ms budget, no >20% regression). |
 | Session 4 | 3.2 Go to Line | done | `⌃G` / `⌘L` opens a prefilled, digit-only prompt; `Enter` validates `1..=line_count`, moves to the line start, reveals it and reports `line N`; invalid input keeps an inline `line must be 1..=<count>` error that editing clears; Esc and outside clicks close without moving; image previews report a status instead. Command id `edit.gotoLine`, Edit-menu entry and shared movement binding. 7 new tests (5 state, 1 keymap, 1 command-id round-trip) plus a selfcheck flow. Gate green: 384 unit + 2 doc tests, selfcheck. |
 | Session 4 | 3.3 Preview links | pending | |
 | Session 4 | 3.4 Explorer keys | pending | |

@@ -135,22 +135,25 @@ pub fn truncate(
     font_size: f32,
     max_width: f32,
 ) -> String {
-    if width(measurer, value, font_size) <= max_width {
-        return value.to_string();
-    }
-    let ellipsis = "…";
-    let budget = (max_width - width(measurer, ellipsis, font_size)).max(0.0);
-    let mut out = String::new();
+    let mut out = String::with_capacity(value.len().min(256));
     let mut used = 0.0;
     for ch in value.chars() {
         let advance = measurer.advance(ch, font_size);
-        if used + advance > budget {
-            break;
+        if used + advance > max_width {
+            let ellipsis = '…';
+            let budget = (max_width - measurer.advance(ellipsis, font_size)).max(0.0);
+            while used > budget {
+                let Some(popped) = out.pop() else {
+                    break;
+                };
+                used -= measurer.advance(popped, font_size);
+            }
+            out.push(ellipsis);
+            return out;
         }
         out.push(ch);
         used += advance;
     }
-    out.push_str(ellipsis);
     out
 }
 
@@ -399,5 +402,12 @@ mod tests {
             line_baseline(&Fake, rect.top(), rect.height(), 12.0),
             baseline(&Fake, rect, 12.0)
         );
+    }
+
+    #[test]
+    fn truncate_keeps_fitting_text_and_ellipsizes_the_rest() {
+        assert_eq!(truncate(&Fake, "abc", 10.0, 25.0), "abc");
+        assert_eq!(truncate(&Fake, "abcdefghij", 10.0, 25.0), "abc…");
+        assert_eq!(truncate(&Fake, "", 10.0, 25.0), "");
     }
 }
