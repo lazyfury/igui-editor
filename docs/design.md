@@ -173,10 +173,19 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    tabs and enter the recent-file list; the first folder becomes the project and
    enters the recent-project list; the hover flag paints a themed overlay. No
    new engine `InputEvent` variants.
-21. **Quick Open is an index + fuzzy ranking, rebuilt on open.** The walker
-   skips VCS/build/hidden entries and caps at 20k files; `model::fuzzy` scores
-   relative paths (name prefix > substring > subsequence, recent bonus). The
-   panel reuses the overlay pattern; no filesystem watcher in M4.
+21. **Quick Open is a cached index + fuzzy ranking built on a worker.**
+   Opening `⌘P` reuses the completed index for the current root and otherwise
+   starts one `IndexWorker` thread; the palette paints immediately with an
+   `indexing project files…` placeholder, so the keydown frame never walks the
+   tree. The worker sends a typed `FileIndex` back over `mpsc`; `EditorApp::update`
+   installs it only when its root still matches the project, clears the busy
+   flag and re-ranks the current query. A result that arrives after the palette
+   closed is still kept as the cache for the next open. Project switches and
+   structural file changes drop the worker and the index. Reopening without a
+   change does not walk the tree. The walker skips VCS/build/hidden entries and
+   caps at 20k files; `model::fuzzy` scores relative paths (name prefix >
+   substring > subsequence, recent bonus). The panel reuses the overlay pattern;
+   there is still no filesystem watcher.
 22. **Project search runs off the UI thread with hard caps.** A worker scans the
    same index rules, skips binary/1 MB files, streams hits over `mpsc` and is
    cancelled with an `AtomicBool` when the query changes; caps are 5k files /

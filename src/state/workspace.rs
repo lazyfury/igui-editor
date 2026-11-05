@@ -102,9 +102,10 @@ impl AppState {
         }
         if self.quick_open.open {
             self.close_quick_open();
-        } else {
-            self.quick_open.index = None;
         }
+        // The index and any build belong to the old root; never let a late
+        // worker result install files from the previous project.
+        self.invalidate_quick_open_index();
         if self.search.open {
             self.close_project_search();
         }

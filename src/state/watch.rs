@@ -87,8 +87,9 @@ impl AppState {
             .any(|event| event.kind != FileEventKind::Changed);
         if structural && self.ws.folder_open {
             self.ws.tree.refresh();
-            // The file list is what Quick Open indexes.
-            self.quick_open.index = None;
+            // The file list is what Quick Open indexes; drop the completed
+            // index and any build still running for the old listing.
+            self.invalidate_quick_open_index();
             self.sidebar.hover = None;
             if self
                 .sidebar

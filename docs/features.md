@@ -570,9 +570,14 @@ clickable.
 
 Fuzzy picker over the workspace: subsequence match on the relative path with
 bonuses for the file name (prefix > substring > subsequence) and recent files.
-Indexing skips `.git`, `target`, `node_modules`, `dist`, `build`, `.venv`,
-hidden entries; capped at 20k files. `↑↓` select, `Enter` opens, `Esc` closes,
-typing filters live; the panel shows file count and match preview.
+The index is built on a background worker, so the first palette frame paints
+immediately with an `indexing project files…` placeholder. Reopening reuses the
+finished index for the same project; a project switch or a structural file
+change drops it and the next open starts a fresh build. Indexing skips `.git`,
+`target`, `node_modules`, `dist`, `build`, `.venv`, hidden entries; capped at 20k
+files. `↑↓` select, `Enter` opens, `Esc` closes, typing filters live (while the
+worker runs the result list stays empty); the panel shows the file count and
+match preview.
 
 ## Search in Project (`⇧⌘F`)
 
@@ -701,9 +706,11 @@ Every second the app polls two things:
 - **the directories you can see** — the loaded Explorer tree plus the parents of
   open tabs — by entry metadata. Files created, deleted or rewritten by another
   tool (a Godot `.gd.uid`, a code generator, `git checkout`) appear in the
-  Explorer without collapsing the folders you expanded, and Quick Open's index is
-  invalidated. The scan is bounded (32 directories / 20k entries per tick), and
-  a directory lists at most 2,000 entries in the sidebar.
+  Explorer without collapsing the folders you expanded, and Quick Open's
+  worker-built index is invalidated. Reopening the palette then starts a fresh
+  build; reopening without a change reuses the cached index. The scan is bounded
+  (32 directories / 20k entries per tick), and a directory lists at most 2,000
+  entries in the sidebar.
 
 Detected changes are also forwarded to the language servers as
 `workspace/didChangeWatchedFiles` (create/change/delete), and saving an open

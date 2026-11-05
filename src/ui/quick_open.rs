@@ -133,7 +133,11 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
     if state.quick_open.results.is_empty() {
         kit::text(
             ctx,
-            "no matching files",
+            if state.quick_open.indexing {
+                "indexing project files…"
+            } else {
+                "no matching files"
+            },
             layout.rows[0].left() + 10.0,
             kit::baseline(measurer, layout.rows[0], m.font_ui),
             m.font_ui,
@@ -149,10 +153,15 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
         m.font_small,
         p.faint,
     );
+    let footer = if state.quick_open.indexing {
+        "indexing…".to_string()
+    } else {
+        format!("{} files", count.min(MAX_RESULTS))
+    };
     kit::text_right(
         ctx,
         measurer,
-        &format!("{} files", count.min(MAX_RESULTS)),
+        &footer,
         layout.footer.right(),
         kit::baseline(measurer, layout.footer, m.font_small),
         m.font_small,

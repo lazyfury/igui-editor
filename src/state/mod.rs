@@ -30,7 +30,7 @@ use crate::model::replace::{self, PlannedFile};
 use crate::model::search::{SearchHit, SearchMessage, SearchWorker};
 use crate::model::session::{Session, WindowGeometry};
 use crate::model::typing;
-use crate::model::workspace_index::{display_path, FileIndex};
+use crate::model::workspace_index::{display_path, FileIndex, IndexWorker};
 use crate::model::Workspace;
 use crate::services::{ServiceRegistry, SidebarContribution};
 use crate::settings::{EditorMetrics, Row, Settings};
@@ -1071,6 +1071,10 @@ pub struct QuickOpenState {
     pub scroll: usize,
     pub results: Vec<PathBuf>,
     pub index: Option<FileIndex>,
+    /// Background build for the current root, if one is still running.
+    pub worker: Option<IndexWorker>,
+    /// True while `worker` is expected to deliver the next index.
+    pub indexing: bool,
     pub preedit: Option<String>,
 }
 
@@ -1127,6 +1131,8 @@ impl Default for QuickOpenState {
             scroll: 0,
             results: Vec::new(),
             index: None,
+            worker: None,
+            indexing: false,
             preedit: None,
         }
     }

@@ -98,9 +98,10 @@ Tests:
 
 Acceptance: `scripts/check.sh`; new session test fails before the fix.
 
-### 1.2 Quick Open without a UI stall (F2)
+### [x] 1.2 Quick Open without a UI stall (F2)
 
 Files: `src/state/quick_open.rs`, `src/model/workspace_index.rs`,
+`src/state/mod.rs`, `src/app.rs`, `src/ui/quick_open.rs`,
 `src/state/search.rs` as the worker pattern, `src/state/watch.rs` for
 invalidation.
 
@@ -111,12 +112,16 @@ invalidation.
   and keeps the `entry.metadata()` fallback for symlinks. State tests cover
   reuse, a missing index and a changed root; the walk tests still cover ignored
   and hidden entries.
-- [ ] **Step B — pending (perceived responsiveness).**
-
-- Build the index on a worker (mirror `model/search.rs`: `mpsc`, generation or
-  `AtomicBool`, cancel on project switch). Paint the palette immediately with an
-  "indexing…" row; never block the keydown frame.
-- Keep `FileIndex` typed data as-is; move it into the worker and send it back.
+- [x] **Step B — landed.** `IndexWorker` in `model/workspace_index.rs` builds
+  the `FileIndex` on one `std::thread` and sends it over `mpsc`; dropping the
+  worker drops the receiver and the thread exits when its send fails. The
+  palette paints immediately with an `indexing project files…` row and a
+  `quick_open_busy()` state that keeps `needs_frame` polling. `quick_open_tick`
+  installs the result only when its root still matches, re-ranks the current
+  query and also caches a result that lands after the palette closed. Project
+  switches and structural changes drop the worker and the index; reopening with
+  a completed index for the same root starts no worker. `refresh_quick_open`
+  never builds.
 
 Acceptance:
 
@@ -329,7 +334,7 @@ the palette; selfcheck covers open/filter/run/escape.
 | Session 4 | 0.3 Index/archive | done | `improvement-log.md` added; plan rewritten for Session 4. |
 | Session 4 | 0.1–0.2 Docs truth | done | Stale session/M13/Godot-headless/milestone claims corrected in `design.md`, `services.md`, `code-map.md`, `features.md`, `README.md`, `main.rs` help and the `preview.rs` module doc; Select Next Occurrence added to `keys.md`. 0.2 is docs-only: the CI claim is gone, workflow restoration deferred to 4.5. |
 | Session 4 | 1.1 Tab restore | done | Tabs no longer capped by `MAX_RECENT` (parse/render/`set_tabs`); recents stay at 8. 2 new session tests, gate green: 358 unit + 2 doc tests, selfcheck. |
-| Session 4 | 1.2 Quick Open | in progress | Step A done: the palette reuses the index for the same root; the walk uses `file_type()` with a symlink `metadata()` fallback. Step B (background worker) pending. Gate green: 362 unit + 2 doc tests, selfcheck. |
+| Session 4 | 1.2 Quick Open | done | Step A: the palette reuses the index for the same root; the walk uses `file_type()` with a symlink `metadata()` fallback. Step B: `IndexWorker` builds the index on one std thread and `quick_open_tick` installs it only for the current root; the palette paints an `indexing project files…` placeholder, `needs_frame` polls while busy, structural changes and project switches drop the worker, and `refresh_quick_open` never builds. 2 new tests (worker round-trip, stale-root discard) plus the updated reuse/worker state tests; selfcheck settles the worker before ranking. Gate green: 368 unit + 2 doc tests, selfcheck. |
 | Session 4 | 1.3 Autosave | done | Autosave writes verbatim through `Document::save_verbatim` (no tidy, no undo step); failures keep the tab dirty and show an error. 4 new tests (2 doc, 2 state). Gate green: 366 unit + 2 doc tests, selfcheck. |
 | Session 4 | 2.1 Command table | pending | Keystone for 3.6. |
 | Session 4 | 2.2 `pub(crate)` | pending | |
@@ -348,5 +353,5 @@ the palette; selfcheck covers open/filter/run/escape.
 2. **`Reuse the Quick Open index and stat less`** — F2 Step A, one index test.
 3. **`Write autosave verbatim and report failures`** — F3, four tests.
 
-Then Phase 0 docs, then Phase 1.2 Step B (background indexing). Each commit is
-green on `scripts/check.sh` before the next one starts.
+Phase 0 docs and Phase 1.2 Step B (background indexing) followed as their own
+commits. Each commit is green on `scripts/check.sh` before the next one starts.

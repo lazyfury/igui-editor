@@ -256,6 +256,8 @@ impl EditorApp {
                 "dirty"
             } else if state.search_busy() {
                 "search"
+            } else if state.quick_open_busy() {
+                "quick-open"
             } else if state.git.pending {
                 "git-pending"
             } else if state.git.loading {
@@ -360,6 +362,7 @@ impl EditorApp {
         self.persist_window_geometry();
         self.pump_drops();
         self.state.borrow_mut().search_tick();
+        self.state.borrow_mut().quick_open_tick();
         let needs_rebuild = self.state.borrow().needs_rebuild;
         if needs_rebuild {
             self.rebuild();
@@ -1324,7 +1327,11 @@ impl EditorApp {
         // `dirty` catches a painter that changed state mid-frame; the rest are
         // "keep polling until the work lands" states. Timed work lives in
         // `AppState::next_wake`, not here.
-        state.dirty || state.search_busy() || state.git_busy() || state.lsp.is_busy()
+        state.dirty
+            || state.search_busy()
+            || state.git_busy()
+            || state.lsp.is_busy()
+            || state.quick_open_busy()
     }
 
     /// Starts a requested dialog (one at a time) and polls the open one. The

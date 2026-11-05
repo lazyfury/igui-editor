@@ -5,6 +5,7 @@
 //! ranked by [`super::fuzzy`].
 
 use std::path::{Component, Path, PathBuf};
+use std::sync::mpsc::{self, Receiver};
 
 use super::fuzzy;
 
@@ -136,6 +137,39 @@ impl FileIndex {
     }
 }
 
+/// Builds one [`FileIndex`] on a background thread and sends it back.
+///
+/// The worker owns no cancellation flag: dropping it drops the receiver, the
+/// thread's `send` fails, and the thread exits without touching the UI.
+pub struct IndexWorker {
+    root: PathBuf,
+    rx: Receiver<FileIndex>,
+}
+
+impl IndexWorker {
+    /// Starts indexing `root` on a new thread.
+    pub fn spawn(root: impl Into<PathBuf>) -> Self {
+        let root = root.into();
+        let (tx, rx) = mpsc::channel();
+        let worker_root = root.clone();
+        std::thread::spawn(move || {
+            let index = FileIndex::build(worker_root);
+            let _ = tx.send(index);
+        });
+        Self { root, rx }
+    }
+
+    /// The root this worker was started for.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// Non-blocking receive of the finished index.
+    pub fn try_recv(&self) -> Option<FileIndex> {
+        self.rx.try_recv().ok()
+    }
+}
+
 /// Workspace-relative display for a path (falls back to the full path).
 pub fn display_path(root: &Path, path: &Path) -> String {
     path.strip_prefix(root)
@@ -215,6 +249,26 @@ mod tests {
         // `DirEntry::metadata` does not follow links, so symlinks stay skipped
         // exactly as they were before the `file_type()` fast path.
         assert!(!names.iter().any(|name| name.starts_with("linked-")));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn worker_builds_the_index_and_stops_after_one_result() {
+        let dir = fixture("worker");
+        let worker = IndexWorker::spawn(dir.clone());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut index = None;
+        while std::time::Instant::now() < deadline {
+            if let Some(built) = worker.try_recv() {
+                index = Some(built);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let index = index.expect("the worker must send the index before the deadline");
+        assert_eq!(index.root, dir);
+        assert!(index.files.iter().any(|path| path.ends_with("main.rs")));
+        assert!(worker.try_recv().is_none());
         let _ = fs::remove_dir_all(dir);
     }
 

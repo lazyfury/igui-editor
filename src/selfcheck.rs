@@ -2516,6 +2516,19 @@ fn check(dir: &Path) -> Result<(), String> {
     }
     expect(&texts(&frame), "Type a file name", "Quick Open placeholder")?;
     harness.type_text("main");
+    let mut frames = 0;
+    loop {
+        std::thread::sleep(Duration::from_millis(15));
+        harness.frame()?;
+        frames += 1;
+        let busy = harness.app.state().quick_open_busy();
+        if !busy || frames > 300 {
+            break;
+        }
+    }
+    if harness.app.state().quick_open_busy() {
+        return Err("Quick Open indexing did not finish before the deadline".into());
+    }
     let frame = harness.frame()?;
     {
         let state = harness.app.state();
