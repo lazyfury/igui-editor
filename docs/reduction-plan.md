@@ -1,6 +1,6 @@
 # Reduction plan — Session 5
 
-Status: **in progress** (phase 1.1 landed). Follows the Session 4 review and the product priority
+Status: **in progress** (phase 1 landed). Follows the Session 4 review and the product priority
 in [`AGENTS.md`](../AGENTS.md): text/Markdown first, Godot second, everything
 else at the LSP/highlight minimum. The goal is a smaller, more reliable editor,
 not a broader one.
@@ -84,6 +84,6 @@ Deferred (behavior-neutral, tracked here so they are not lost):
 |---|---|---|
 | Plan | done | This document; indexed from `docs/README.md` and `AGENTS.md`. |
 | 1.1 Reliability | done | Snapshots are skipped when the revision is unchanged; a flush is scheduled only by an edit or a 30 s failure backoff; restored buffers schedule one snapshot. 3 new tests. |
-| 1.2 Undo cap | pending | |
+| 1.2 Undo cap | done | 64 MB / 5000-entry byte budget, oldest entries dropped, save point shifted. 2 new tests. |
 | 2.1–2.4 Scope cut | pending | |
 | 3.1–3.4 | pending | |

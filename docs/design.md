@@ -64,7 +64,8 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    selection, caret and text itself, using the backend's real `TextMeasurer` so
    caret/selection and glyphs agree. `TextEdit` is *not* reused: the buffer,
    caret math and undo live in `model/doc.rs` (byte offsets, char-aware columns,
-   delta undo).
+   delta undo bounded to 64 MB / 5000 entries; the oldest edits are dropped and
+   the save point is shifted with them).
 2. **No `igui_theme` / `igui_components` dependency.** The requested look
    (compact, square, CJK-capable) is not the component library's default, and its
    radius constants are baked into components. The app owns a small palette +

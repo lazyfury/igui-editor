@@ -114,15 +114,36 @@ struct Edit {
     after: Cursor,
 }
 
+/// Undo history is bounded so a huge selection/delete cannot pin an unbounded
+/// amount of text in memory. One entry may exceed the budget when it is the
+/// only edit (dropping it would lose the user's most recent action).
+const MAX_UNDO_BYTES: usize = 64 * 1024 * 1024;
+const MAX_UNDO_ENTRIES: usize = 5_000;
+
+impl Edit {
+    fn size(&self) -> usize {
+        self.removed.len() + self.inserted.len()
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 struct UndoStack {
     edits: Vec<Edit>,
     /// Number of applied edits (everything above is redo history).
     cursor: usize,
+    /// Total bytes held by `edits`, kept in sync on every mutation.
+    bytes: usize,
 }
 
 impl UndoStack {
-    fn push(&mut self, edit: Edit) {
+    /// Appends one edit and trims the oldest history if the budget is exceeded.
+    /// Returns how many applied entries were dropped (the caller must shift its
+    /// save-point index by the same amount).
+    fn push(&mut self, edit: Edit) -> usize {
+        // A new edit discards the redo tail, including its bytes.
+        for dropped in &self.edits[self.cursor..] {
+            self.bytes = self.bytes.saturating_sub(dropped.size());
+        }
         self.edits.truncate(self.cursor);
         // Coalesce a run of like edits into the previous entry.
         if let Some(last) = self.edits.last_mut() {
@@ -150,6 +171,7 @@ impl UndoStack {
                 Kind::Other => false,
             };
             if coalesced {
+                let previous = last.size();
                 match edit.kind {
                     Kind::Type => {
                         last.inserted.push_str(&edit.inserted);
@@ -164,12 +186,28 @@ impl UndoStack {
                     Kind::Other => unreachable!(),
                 }
                 last.after = edit.after;
+                self.bytes = self.bytes.saturating_sub(previous) + last.size();
                 self.cursor = self.edits.len();
-                return;
+                return self.trim(MAX_UNDO_BYTES, MAX_UNDO_ENTRIES);
             }
         }
+        self.bytes += edit.size();
         self.edits.push(edit);
         self.cursor = self.edits.len();
+        self.trim(MAX_UNDO_BYTES, MAX_UNDO_ENTRIES)
+    }
+
+    /// Drops the oldest entries until both budgets hold (always keeping the
+    /// newest entry). Returns the number of applied entries dropped.
+    fn trim(&mut self, max_bytes: usize, max_entries: usize) -> usize {
+        let mut dropped = 0usize;
+        while self.edits.len() > 1 && (self.bytes > max_bytes || self.edits.len() > max_entries) {
+            let removed = self.edits.remove(0);
+            self.bytes = self.bytes.saturating_sub(removed.size());
+            self.cursor = self.cursor.saturating_sub(1);
+            dropped += 1;
+        }
+        dropped
     }
 }
 
@@ -1834,7 +1872,7 @@ impl Document {
         {
             self.saved_cursor = None;
         }
-        self.undo.push(Edit {
+        let dropped = self.undo.push(Edit {
             start,
             removed,
             inserted: insert.to_string(),
@@ -1845,6 +1883,13 @@ impl Document {
                 anchor: self.anchor,
             },
         });
+        if dropped > 0 {
+            // The stack dropped the oldest applied entries; the save point is
+            // only still reachable when it was newer than the dropped range.
+            self.saved_cursor = self
+                .saved_cursor
+                .and_then(|saved| saved.checked_sub(dropped));
+        }
         self.dirty = true;
     }
 
@@ -2081,6 +2126,58 @@ mod tests {
         doc.dirty = false;
         doc.undo = UndoStack::default();
         doc
+    }
+
+    #[test]
+    fn undo_history_drops_the_oldest_entries_at_the_budget() {
+        let mut stack = UndoStack::default();
+        let edit = |start: usize, text: &str| Edit {
+            start,
+            removed: String::new(),
+            inserted: text.to_string(),
+            kind: Kind::Other,
+            before: Cursor {
+                caret: start,
+                anchor: start,
+            },
+            after: Cursor {
+                caret: start + text.len(),
+                anchor: start + text.len(),
+            },
+        };
+        assert_eq!(stack.push(edit(0, "aaaa")), 0);
+        assert_eq!(stack.push(edit(4, "bbbb")), 0);
+        // The byte budget keeps the newest edit and drops its predecessor.
+        assert_eq!(stack.trim(6, 10), 1);
+        assert_eq!(stack.edits.len(), 1);
+        assert_eq!(stack.cursor, 1);
+        assert_eq!(stack.bytes, 4);
+        // The entry budget works the same way.
+        for index in 0..4 {
+            stack.push(edit(index * 4, "x"));
+        }
+        stack.trim(MAX_UNDO_BYTES, 2);
+        assert_eq!(stack.edits.len(), 2);
+        assert_eq!(stack.cursor, 2);
+    }
+
+    #[test]
+    fn dropping_old_undo_entries_shifts_the_save_point() {
+        let mut doc = Document::untitled(1, 1);
+        doc.insert_text("a");
+        doc.undo.bytes = MAX_UNDO_BYTES;
+        doc.saved_cursor = Some(1);
+        doc.insert_text("\n");
+        assert_eq!(doc.undo.edits.len(), 1, "the oldest edit was dropped");
+        assert_eq!(doc.saved_cursor, Some(0));
+        assert!(doc.is_dirty());
+
+        // A save point inside the dropped range is no longer reachable.
+        doc.undo.bytes = MAX_UNDO_BYTES;
+        doc.saved_cursor = Some(0);
+        doc.insert_text("\n");
+        assert_eq!(doc.saved_cursor, None);
+        assert!(doc.is_dirty());
     }
 
     #[test]
