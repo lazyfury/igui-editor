@@ -290,7 +290,7 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    serializes `git status --porcelain=v2 -z --branch` and diff requests on a
    worker thread; the UI reads immutable `RepoStatus`/`GitDiff` snapshots. The
    GIT sidebar tab is a plugin contribution, and the diff is an app overlay.
-   Stage/unstage/commit run through the same worker; network/auth stays in the
+   The editor never writes to the repository; network/auth stays in the
    terminal. The built-in terminal is a second native plugin (`portable-pty` +
    `vt100`) with a cell-grid renderer and a dedicated focus mode.
 
@@ -560,11 +560,11 @@ header, header drag, double-click maximize/restore and native zoom/minimize
 routing; the in-app header menu is hidden on macOS.
 
 **M8/M9 (done)** — native service/built-in plugin registry (Git and Terminal
-descriptors), Git status/diff/stage/unstage/commit, native PTY terminal with
+descriptors), Git status/diff, native PTY terminal with
 vt100 cell rendering and `⌃\`` toggle. Extension host remains deferred.
 
-**M10 (done)** — visible focus states for editor/terminal, Git commit History
-(last 50) and read-only commit detail overlay.
+**M10 (done)** — visible focus states for editor/terminal. Git history and
+commit detail were removed in the Session 5 reduction.
 
 **M11 (done)** — terminal horizontal shared handle, persisted height/open, IME
 caret, vim application cursor mode, live PTY repaint, vt100 scrollback,

@@ -4203,10 +4203,6 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
     fs::write(&tracked, original).map_err(|error| format!("fixture: {error}"))?;
     git(&["add", "tracked.txt"])?;
     git(&["commit", "-qm", "initial"])?;
-    for index in 0..30 {
-        let message = format!("history {index}");
-        git(&["commit", "--allow-empty", "-qm", &message])?;
-    }
     let changed: String = (0..5)
         .map(|index| format!("changed line {index}\n"))
         .collect();
@@ -4282,8 +4278,8 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
         .git
         .rows
         .iter()
-        .find(|(path, _, _, _)| path == Path::new("tracked.txt"))
-        .map(|(_, _, rect, _)| rect.center())
+        .find(|(path, _, _)| path == Path::new("tracked.txt"))
+        .map(|(_, _, rect)| rect.center())
         .ok_or("Git panel has no tracked.txt row")?;
     harness.click(row);
     for _ in 0..50 {
@@ -4312,22 +4308,7 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
     let frame = harness.frame()?;
     let diff_accent = crate::theme::Theme::new(Mode::Dark).p.accent.to_rgba8();
     if !draw_text_has_color(&frame, "+changed line 0", diff_accent) {
-        let sample: Vec<String> = texts(&frame)
-            .into_iter()
-            .filter(|text| text.contains("changed line"))
-            .take(8)
-            .collect();
-        return Err(format!(
-            "Git diff additions are not highlighted: sample={:?} accent={:?} text={:?}",
-            sample,
-            diff_accent,
-            harness
-                .app
-                .state()
-                .ws
-                .active_doc()
-                .map(|doc| { doc.text().lines().take(12).collect::<Vec<_>>().join("|") })
-        ));
+        return Err("Git diff additions are not highlighted".into());
     }
     let before_edit = harness
         .app
@@ -4347,159 +4328,17 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
     {
         return Err("Git diff view accepted text input".into());
     }
-    // Stage all, then commit through the in-app prompt.
+    // Hover follows the painted refresh button exactly.
     harness.frame()?;
-    let stage_all = harness.app.state().git.stage_all_rect.center();
-    harness.click(stage_all);
-    for _ in 0..50 {
-        harness.frame()?;
-        if !harness.app.state().git.loading && harness.app.state().git.status.staged.len() >= 2 {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    if harness.app.state().git.status.staged.len() < 2 {
-        return Err(format!(
-            "Stage all did not stage the Git changes: loading={} status={:?} error={:?} write_gen={} gen={}",
-            harness.app.state().git.loading,
-            harness.app.state().git.status,
-            harness.app.state().git.error,
-            harness.app.state().git.write_generation,
-            harness.app.state().git.generation
-        ));
-    }
-    let commit_button = harness.app.state().git.commit_rect.center();
-    harness.click(commit_button);
-    harness.frame()?;
-    if !harness.app.state().git.commit_open {
-        return Err("the Commit button did not open the prompt".into());
-    }
-    harness.type_text("selfcheck commit");
-    harness.key(Key::Enter);
-    for _ in 0..50 {
-        harness.frame()?;
-        if !harness.app.state().git.loading && !harness.app.state().git.commit_open {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    {
-        let state = harness.app.state();
-        if state.git.commit_open {
-            return Err(format!(
-                "Git commit did not finish: {:?}",
-                state.git.commit_error
-            ));
-        }
-        if !state.git.status.staged.is_empty() || !state.git.status.changes.is_empty() {
-            return Err("Git commit did not clean the worktree".into());
-        }
-    }
-
-    // Git history + commit detail.
-    harness.frame()?;
-    let history_tab = harness.app.state().git.history_rect.center();
-    harness.click(history_tab);
-    for _ in 0..50 {
-        harness.frame()?;
-        if harness.app.state().git.commits.len() >= 2 {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    if harness.app.state().git.commits.len() < 2 {
-        return Err("Git history did not load the commits".into());
-    }
-    let commit_row = harness
-        .app
-        .state()
-        .git
-        .history_rows
-        .first()
-        .map(|(_, rect)| rect.center())
-        .ok_or("Git history has no commit row")?;
-    harness.click(commit_row);
-    for _ in 0..50 {
-        harness.frame()?;
-        if !harness.app.state().git.detail_loading && harness.app.state().git.detail.is_some() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    let first_commit = {
-        let state = harness.app.state();
-        let detail = state
-            .git
-            .detail
-            .as_ref()
-            .ok_or("Git commit detail did not load")?;
-        let doc = state.ws.active_doc().ok_or("no Git commit view")?;
-        if !doc.is_read_only()
-            || !doc
-                .view_key()
-                .is_some_and(|key| key == format!("git:commit:{}", detail.commit.hash))
-            || !doc.text().contains(&detail.commit.hash)
-        {
-            return Err("Git commit detail did not open as a read-only editor view".into());
-        }
-        detail.commit.hash.clone()
-    };
-    // Hover follows the painted Commit button exactly.
-    harness.frame()?;
-    let commit_hover = harness.app.state().git.commit_rect;
+    let refresh = harness.app.state().git.refresh_rect;
     harness.event(InputEvent::PointerMove {
-        position: commit_hover.center(),
+        position: refresh.center(),
     });
     harness.frame()?;
-    if harness.app.state().git.hover != Some(commit_hover) {
-        return Err("Git commit hover rect is offset from the pointer".into());
+    if harness.app.state().git.hover != Some(refresh) {
+        return Err("Git refresh hover rect is offset from the pointer".into());
     }
-    // A second history row must open its own commit, not an empty overlay.
-    let second = harness
-        .app
-        .state()
-        .git
-        .history_rows
-        .get(1)
-        .map(|(hash, rect)| (hash.clone(), rect.center()))
-        .ok_or("Git history has no second commit row")?;
-    harness.click(second.1);
-    for _ in 0..50 {
-        harness.frame()?;
-        if !harness.app.state().git.detail_loading && harness.app.state().git.detail.is_some() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    {
-        let state = harness.app.state();
-        let doc = state.ws.active_doc().ok_or("no second Git commit view")?;
-        if !doc.is_read_only() || !doc.text().contains(&second.0) || first_commit == second.0 {
-            return Err(format!(
-                "second Git commit view has the wrong content: expected {}",
-                second.0
-            ));
-        }
-    }
-    let sidebar_center = harness.app.state().sidebar.rect.center();
-    let before_scroll = harness.app.state().git.scroll;
-    harness.event(InputEvent::Wheel {
-        position: sidebar_center,
-        delta: Vec2::new(0.0, 40.0),
-        phase: igui_core::TouchPhase::Moved,
-        device: igui_core::ScrollDevice::Wheel,
-    });
-    harness.frame()?;
-    if harness.app.state().git.scroll <= before_scroll {
-        return Err(format!(
-            "Git history did not scroll: mode={:?} scroll={} max={} before={} commits={}",
-            harness.app.state().git.mode,
-            harness.app.state().git.scroll,
-            harness.app.state().git.scroll_max,
-            before_scroll,
-            harness.app.state().git.commits.len()
-        ));
-    }
+    harness.app.state_mut().close_git_diff();
 
     // Terminal service: PTY, vt100 screen, panel and close.
     harness.shortcut(

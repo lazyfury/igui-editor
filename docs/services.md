@@ -1,6 +1,6 @@
 # Native services and built-in plugins
 
-Status: Git status/diff/stage/unstage/commit, the first native PTY terminal slice,
+Status: Git status/diff, the first native PTY terminal slice,
 and LSP for Rust, Go, TypeScript/JavaScript, C/C++, Python and Godot GDScript are
 implemented. Extension host remains deferred.
 
@@ -39,10 +39,6 @@ BuiltinPlugin (compile time)
 ```text
 git.read.status
 git.read.diff
-git.read.log
-git.read.commit
-git.write.stage
-git.write.commit
 terminal.create
 terminal.write
 terminal.resize
@@ -54,7 +50,7 @@ lsp.definition
 lsp.symbols
 ```
 
-Git read + stage/unstage/commit are wired. Terminal capabilities are declared;
+Git status/diff are wired (the editor is read-only for Git). Terminal capabilities are declared;
 the first panel exposes one session with a draggable, persisted height,
 open state, vt100 scrollback, cell selection/copy and multiple shell tabs.
 
@@ -65,7 +61,7 @@ open state, vt100 scrollback, cell selection/copy and multiple shell tabs.
 - `--porcelain=v2 -z --branch` parsing is pure and unit-tested.
 - `git diff --no-ext-diff --no-color --unified=3`, capped at 2 MB.
 - UI triggers refresh on open/save/tab/folder changes and manually; no polling.
-- Read-only diff overlay; stage/unstage/commit is M8.2.
+- Read-only diff overlay; staging/commit/history are deliberately not exposed.
 
 Not exposed: arbitrary git command strings, network/auth UI, libgit2.
 

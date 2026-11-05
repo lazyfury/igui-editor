@@ -5,7 +5,7 @@ src/
   model/doc.rs        text buffer, caret/selection, movement, delta undo stack
   model/fileicon.rs   Explorer file-type table: name/extension -> FileKind
   model/find.rs       plain-text matcher (case / whole-word)
-  model/git.rs        git status/diff/stage/commit worker + porcelain parser
+  model/git.rs        git status/diff worker + porcelain parser
   model/pty.rs        portable-pty PTY session
   model/fuzzy.rs      Quick Open ranking
   model/workspace_index.rs  ignored-dir file index (Quick Open)
@@ -42,7 +42,7 @@ src/
   native.rs           Finder/Dock/quit request queue (main-thread)
   macos/              Apple Event open, Dock menu, recent, quit guard, chrome
   services/           native service registry + built-in plugin descriptors
-  ui/git.rs           GIT sidebar tab + diff overlay + commit prompt
+  ui/git.rs           GIT sidebar tab + read-only diff overlay
   ui/lsp.rs           hover card + completion list overlays
   ui/dock.rs          shared dock tab strip (layout, paint, hit tests, close)
   ui/problems.rs      bottom-dock PROBLEMS list (workspace diagnostics, jump)

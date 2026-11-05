@@ -47,10 +47,10 @@ Each item removes a surface that does not serve text/Markdown or Godot editing.
 
 - [x] **2.1 Image asset preview** — removed the read-only image tab, PNG
   decode, setting, session key (v18) and the `igui_assets` dependency.
-- **2.2 Git stage/commit/history** — keep repository status markers and the
-  read-only diff; drop `stage`/`unstage`/`commit`/`log`/commit detail. Git is
-  outside the priority and the editor already refused destructive/network
-  operations.
+- [x] **2.2 Git stage/commit/history** — repository status markers and the
+  read-only diff stay; `stage`/`unstage`/`commit`/`log`/commit detail and their
+  capabilities are gone. Git is outside the priority and the editor already
+  refused destructive/network operations.
 - **2.3 Material file-type icons** — 43 embedded SVGs and a fill-span
   rasterizer. Folder disclosure and row rhythm stay; files are labelled by name.
 - **2.4 Extra language servers** — keep the generic LSP client, Rust and Godot;
@@ -85,6 +85,7 @@ Deferred (behavior-neutral, tracked here so they are not lost):
 | 1.1 Reliability | done | Snapshots are skipped when the revision is unchanged; a flush is scheduled only by an edit or a 30 s failure backoff; restored buffers schedule one snapshot. 3 new tests. |
 | 1.2 Undo cap | done | 64 MB / 5000-entry byte budget, oldest entries dropped, save point shifted. 2 new tests. |
 | 2.1 Image preview | done | Model/state/ui modules, `igui_assets`, the setting and session v17 key removed; selfcheck image checks deleted. |
-| 2.2–2.4 Scope cut | pending | |
+| 2.2 Git read-only | done | Worker requests/events, state, UI prompts and history/detail views removed; selfcheck now covers status + diff only. |
+| 2.3–2.4 Scope cut | pending | |
 | 3.1 Markdown extensions | done | `MARKDOWN_EXTENSIONS` is the single table; the syntax provider and file icons read it. 2 new tests. |
 | 3.2–3.4 | pending | |

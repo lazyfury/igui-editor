@@ -11,15 +11,13 @@ teal), and the footer shows `GIT <branch> ↑ahead ↓behind` on its left. The s
 `EXPLORER / GIT` tabs. GIT shows the repository branch,
 ahead/behind, and staged/changes/conflicts sections from `git status
 --porcelain=v2 -z`. Click a file for a read-only unified diff overlay; `Esc` or
-the overlay ✕ closes it. `+` / `−` stage or unstage a row, `Stage all` stages the
-worktree, and `Commit` opens a one-line message prompt. `Changes / History`
-switches to the last 50 commits; clicking one opens a read-only commit detail
-with author/date/subject, changed files and patch. Diff and commit details open
-as read-only tabs in the main editor (never persisted, never editable; the status
-bar shows `READ-ONLY`). Diff lines are colored (`+` accent, `-` error, hunk
-headers faint); change views append a full current-file preview after the diff. Refreshes happen on
-open/save/tab/project changes, commit and via the panel button. Discard and
-network operations are intentionally not exposed.
+the overlay ✕ closes it. Diff views open as read-only tabs in the main editor
+(never persisted, never editable; the status bar shows `READ-ONLY`). Diff lines
+are colored (`+` accent, `-` error, hunk headers faint); change views append a
+full current-file preview after the diff. Refreshes happen on open/save/tab/
+project changes and via the panel button. Staging, committing, history and
+network operations are intentionally not exposed: use your Git client for
+writes.
 
 Git is a **built-in plugin** (`services/git.rs`) over a native worker
 (`model/git.rs`), not a JS or dynamic-library extension. See

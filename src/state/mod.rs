@@ -19,9 +19,7 @@ use crate::keymap::{KeyChord, Keymap, KeymapId, Resolution, Scope};
 use crate::model::brackets::match_bracket;
 use crate::model::doc::Document;
 use crate::model::find::Matcher;
-use crate::model::git::{
-    GitCommit, GitCommitDetail, GitDiff, GitEvent, GitRequest, GitWorker, RepoStatus,
-};
+use crate::model::git::{GitDiff, GitEvent, GitRequest, GitWorker, RepoStatus};
 use crate::model::highlight::HighlightCache;
 use crate::model::lsp::{self as model_lsp, LspController};
 use crate::model::pty::PtySession;
@@ -710,12 +708,6 @@ pub struct DocsViewUi {
     pub wrap: crate::model::wrap::WrapLayout,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum GitMode {
-    Changes,
-    History,
-}
-
 /// Built-in terminal panel/session.
 /// Inclusive cell range selected in the terminal grid.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -871,31 +863,12 @@ pub struct GitState {
     pub diff_loading: bool,
     pub diff_visible: bool,
     pub diff_scroll: f32,
-    pub rows: Vec<(PathBuf, bool, Rect, Rect)>,
+    pub rows: Vec<(PathBuf, bool, Rect)>,
     pub refresh_rect: Rect,
-    pub stage_all_rect: Rect,
-    pub commit_rect: Rect,
     pub scroll: f32,
     pub scroll_max: f32,
     pub error: Option<String>,
-    pub mode: GitMode,
-    pub commits: Vec<GitCommit>,
-    pub history_generation: u64,
-    /// A `git log` request is in flight (drives frame polling).
-    pub history_loading: bool,
-    pub history_rows: Vec<(String, Rect)>,
-    pub history_rect: Rect,
-    pub changes_rect: Rect,
-    pub detail: Option<GitCommitDetail>,
-    pub detail_generation: u64,
-    pub detail_visible: bool,
-    pub detail_loading: bool,
-    pub detail_scroll: f32,
     pub hover: Option<Rect>,
-    pub write_generation: u64,
-    pub commit_open: bool,
-    pub commit_message: TextEdit,
-    pub commit_error: Option<String>,
 }
 
 impl Default for GitState {
@@ -915,28 +888,10 @@ impl Default for GitState {
             diff_scroll: 0.0,
             rows: Vec::new(),
             refresh_rect: Rect::ZERO,
-            stage_all_rect: Rect::ZERO,
-            commit_rect: Rect::ZERO,
             scroll: 0.0,
             scroll_max: 0.0,
             error: None,
-            mode: GitMode::Changes,
-            commits: Vec::new(),
-            history_generation: 0,
-            history_loading: false,
-            history_rows: Vec::new(),
-            history_rect: Rect::ZERO,
-            changes_rect: Rect::ZERO,
-            detail: None,
-            detail_generation: 0,
-            detail_visible: false,
-            detail_loading: false,
-            detail_scroll: 0.0,
             hover: None,
-            write_generation: 0,
-            commit_open: false,
-            commit_message: TextEdit::new(""),
-            commit_error: None,
         }
     }
 }

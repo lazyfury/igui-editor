@@ -6,7 +6,7 @@ A compact, square-cornered **text / Markdown editor** built on the
 
 Tabs · undo/redo · find & replace · syntax highlighting · native LSP · outline ·
 Markdown split preview (tables included) · Quick Open · project search +
-replace · Git status/diff/stage/commit · built-in terminal · scroll sync ·
+replace · Git status/diff · built-in terminal · scroll sync ·
 soft wrap · external-change detection · macOS Finder/Dock integration ·
 drag & drop · settings · native dialogs · session/window restore · autosave and
 crash recovery · large-file guards.
@@ -154,7 +154,7 @@ reproduce them.
   Python/GDScript (diagnostics, hover, completion, definition, symbols).
 - **Navigation** — file tree, Quick Open, outline, tab drag/reorder and context
   menu, project search.
-- **Native** — Git panel (status/diff/stage/commit), PTY terminal, native macOS
+- **Native** — Git panel (status/diff), PTY terminal, native macOS
   system menu bar + custom borderless window chrome, Finder/`open -a`/Dock
   Recent/open events, native open/save dialogs.
 - **Reliability** — external-change detection, autosave, crash recovery,

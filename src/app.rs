@@ -264,10 +264,6 @@ impl EditorApp {
                 "git-loading"
             } else if state.git.diff_loading {
                 "git-diff"
-            } else if state.git.detail_loading {
-                "git-detail"
-            } else if state.git.history_loading {
-                "git-history"
             } else if state.lsp.is_busy() {
                 "lsp"
             } else {
@@ -443,8 +439,6 @@ impl EditorApp {
         let measurer = igui_ui::text_measurer(&self.tree);
         let mut state = self.state.borrow_mut();
         ui::git::paint_diff(&mut state, measurer.as_ref(), ctx);
-        ui::git::paint_commit(&mut state, measurer.as_ref(), ctx);
-        ui::git::paint_commit_detail(&mut state, measurer.as_ref(), ctx);
         drop(state);
         // Overlays, in stacking order: menu drop-down, settings, modal.
         let measurer = igui_ui::text_measurer(&self.tree);
@@ -565,14 +559,6 @@ impl EditorApp {
                 state.hover_leave_at = None;
                 // The bar sits above the drop-down: a press on a bar item
                 // toggles that menu (including closing the open one).
-                if state.git.detail_visible {
-                    ui::git::click_commit_detail(&mut state, *position);
-                    return EventResult::Handled;
-                }
-                if state.git.commit_open {
-                    ui::git::commit_click(&mut state, *position);
-                    return EventResult::Handled;
-                }
                 if state.git.diff_visible {
                     ui::git::click_diff(&mut state, *position);
                     return EventResult::Handled;
@@ -958,13 +944,6 @@ impl EditorApp {
                     }
                     return EventResult::Handled;
                 }
-                if state.git.detail_visible {
-                    let (panel, _) = ui::git::detail_layout(&state);
-                    if panel.contains(*position) {
-                        ui::git::wheel_commit_detail(&mut state, *delta);
-                        return EventResult::Handled;
-                    }
-                }
                 if state.git.diff_visible {
                     let (panel, _) = ui::git::diff_layout(&state);
                     if panel.contains(*position) {
@@ -1032,13 +1011,6 @@ impl EditorApp {
                     && *key == Key::Space
                 {
                     state.request_lsp_completion();
-                    return EventResult::Handled;
-                }
-                if state.git.detail_visible && *key == Key::Escape {
-                    state.close_git_commit_detail();
-                    return EventResult::Handled;
-                }
-                if state.git.commit_open && ui::git::commit_key(&mut state, *key, modifiers) {
                     return EventResult::Handled;
                 }
                 if state.git.diff_visible && *key == Key::Escape {
@@ -1179,10 +1151,6 @@ impl EditorApp {
                     state.terminal_write(text.as_bytes());
                     return EventResult::Handled;
                 }
-                if state.git.commit_open {
-                    ui::git::commit_text(&mut state, text);
-                    return EventResult::Handled;
-                }
                 if state.new_file.open {
                     ui::new_file::on_text(&mut state, text);
                     return EventResult::Handled;
@@ -1273,12 +1241,6 @@ impl EditorApp {
                 if state.focus == Focus::Terminal {
                     if let igui_core::ImeEvent::Commit(text) = ime {
                         state.terminal_write(text.as_bytes());
-                    }
-                    return EventResult::Handled;
-                }
-                if state.git.commit_open {
-                    if let igui_core::ImeEvent::Commit(text) = ime {
-                        ui::git::commit_text(&mut state, text);
                     }
                     return EventResult::Handled;
                 }

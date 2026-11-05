@@ -25,7 +25,7 @@ remaining scope.
 | Views | Edit/split/preview, soft wrap, scroll sync |
 | Language | Syntax highlighting, language packs, LSP diagnostics/hover/completion/definition, semantic tokens |
 | Terminal | Native PTY, key encoding, focus/caret, resize |
-| Git | Status, diff/commit read-only views, stage/commit/history |
+| Git | Status markers and read-only diff views |
 
 ### Gaps and rough edges
 

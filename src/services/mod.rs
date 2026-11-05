@@ -23,10 +23,6 @@ use std::collections::BTreeMap;
 pub enum Capability {
     GitReadStatus,
     GitReadDiff,
-    GitReadLog,
-    GitReadCommit,
-    GitWriteStage,
-    GitWriteCommit,
     TerminalCreate,
     TerminalWrite,
     TerminalResize,
@@ -43,10 +39,6 @@ impl Capability {
         match self {
             Capability::GitReadStatus => "git.read.status",
             Capability::GitReadDiff => "git.read.diff",
-            Capability::GitReadLog => "git.read.log",
-            Capability::GitReadCommit => "git.read.commit",
-            Capability::GitWriteStage => "git.write.stage",
-            Capability::GitWriteCommit => "git.write.commit",
             Capability::TerminalCreate => "terminal.create",
             Capability::TerminalWrite => "terminal.write",
             Capability::TerminalResize => "terminal.resize",

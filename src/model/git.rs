@@ -61,22 +61,6 @@ impl RepoStatus {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct GitCommit {
-    pub hash: String,
-    pub short: String,
-    pub author: String,
-    pub date: String,
-    pub subject: String,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct GitCommitDetail {
-    pub commit: GitCommit,
-    pub files: Vec<String>,
-    pub diff: String,
-}
-
 #[derive(Clone, Debug, Default)]
 pub struct GitDiff {
     pub path: PathBuf,
@@ -98,55 +82,12 @@ pub enum GitRequest {
         path: PathBuf,
         staged: bool,
     },
-    Stage {
-        generation: u64,
-        cwd: PathBuf,
-        paths: Vec<PathBuf>,
-    },
-    Unstage {
-        generation: u64,
-        cwd: PathBuf,
-        paths: Vec<PathBuf>,
-    },
-    Commit {
-        generation: u64,
-        cwd: PathBuf,
-        message: String,
-    },
-    Log {
-        generation: u64,
-        cwd: PathBuf,
-        limit: usize,
-    },
-    ShowCommit {
-        generation: u64,
-        cwd: PathBuf,
-        hash: String,
-    },
 }
 
 #[derive(Clone, Debug)]
 pub enum GitEvent {
-    Status {
-        generation: u64,
-        status: RepoStatus,
-    },
-    Diff {
-        generation: u64,
-        diff: GitDiff,
-    },
-    Write {
-        generation: u64,
-        result: Result<String, String>,
-    },
-    Log {
-        generation: u64,
-        commits: Vec<GitCommit>,
-    },
-    CommitDetail {
-        generation: u64,
-        detail: Result<GitCommitDetail, String>,
-    },
+    Status { generation: u64, status: RepoStatus },
+    Diff { generation: u64, diff: GitDiff },
 }
 
 /// Worker handle. Dropping the sender stops the thread after its current job.
@@ -181,74 +122,6 @@ impl GitWorker {
                         } => {
                             let diff = run_diff(&cwd, &path, staged);
                             if event_tx.send(GitEvent::Diff { generation, diff }).is_err() {
-                                break;
-                            }
-                        }
-                        GitRequest::Stage {
-                            generation,
-                            cwd,
-                            paths,
-                        } => {
-                            let result = run_stage(&cwd, &paths);
-                            if event_tx
-                                .send(GitEvent::Write { generation, result })
-                                .is_err()
-                            {
-                                break;
-                            }
-                        }
-                        GitRequest::Unstage {
-                            generation,
-                            cwd,
-                            paths,
-                        } => {
-                            let result = run_unstage(&cwd, &paths);
-                            if event_tx
-                                .send(GitEvent::Write { generation, result })
-                                .is_err()
-                            {
-                                break;
-                            }
-                        }
-                        GitRequest::Commit {
-                            generation,
-                            cwd,
-                            message,
-                        } => {
-                            let result = run_commit(&cwd, &message);
-                            if event_tx
-                                .send(GitEvent::Write { generation, result })
-                                .is_err()
-                            {
-                                break;
-                            }
-                        }
-                        GitRequest::Log {
-                            generation,
-                            cwd,
-                            limit,
-                        } => {
-                            let commits = run_log(&cwd, limit);
-                            if event_tx
-                                .send(GitEvent::Log {
-                                    generation,
-                                    commits,
-                                })
-                                .is_err()
-                            {
-                                break;
-                            }
-                        }
-                        GitRequest::ShowCommit {
-                            generation,
-                            cwd,
-                            hash,
-                        } => {
-                            let detail = run_show_commit(&cwd, &hash);
-                            if event_tx
-                                .send(GitEvent::CommitDetail { generation, detail })
-                                .is_err()
-                            {
                                 break;
                             }
                         }
@@ -534,182 +407,6 @@ pub fn run_diff(cwd: &Path, path: &Path, staged: bool) -> GitDiff {
     }
 }
 
-fn relative_paths(root: &Path, paths: &[PathBuf]) -> Vec<String> {
-    paths
-        .iter()
-        .map(|path| {
-            path.strip_prefix(root)
-                .unwrap_or(path)
-                .to_string_lossy()
-                .into_owned()
-        })
-        .collect()
-}
-
-pub fn run_stage(cwd: &Path, paths: &[PathBuf]) -> Result<String, String> {
-    let root = repo_root(cwd)?;
-    let paths = relative_paths(&root, paths);
-    let mut args = vec!["add", "--"];
-    args.extend(paths.iter().map(String::as_str));
-    let output = command(&root, &args)?;
-    if output.status.success() {
-        Ok(format!("staged {} path(s)", paths.len()))
-    } else {
-        Err(stderr(&output))
-    }
-}
-
-pub fn run_unstage(cwd: &Path, paths: &[PathBuf]) -> Result<String, String> {
-    let root = repo_root(cwd)?;
-    let paths = relative_paths(&root, paths);
-    let mut args = vec!["restore", "--staged", "--"];
-    args.extend(paths.iter().map(String::as_str));
-    let output = command(&root, &args)?;
-    if output.status.success() {
-        Ok(format!("unstaged {} path(s)", paths.len()))
-    } else {
-        Err(stderr(&output))
-    }
-}
-
-pub fn run_commit(cwd: &Path, message: &str) -> Result<String, String> {
-    let root = repo_root(cwd)?;
-    let mut child = Command::new("git")
-        .arg("-C")
-        .arg(&root)
-        .args(["commit", "-F", "-"])
-        .env("LC_ALL", "C")
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_EDITOR", "true")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("git: {error}"))?;
-    if let Some(stdin) = child.stdin.as_mut() {
-        use std::io::Write;
-        stdin
-            .write_all(message.as_bytes())
-            .map_err(|error| format!("git commit stdin: {error}"))?;
-    }
-    let output = child
-        .wait_with_output()
-        .map_err(|error| format!("git commit: {error}"))?;
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-    } else {
-        Err(stderr(&output))
-    }
-}
-
-pub fn run_log(cwd: &Path, limit: usize) -> Vec<GitCommit> {
-    let Ok(root) = repo_root(cwd) else {
-        return Vec::new();
-    };
-    let limit = limit.clamp(1, 200).to_string();
-    let output = match command(
-        &root,
-        &[
-            "log",
-            "-n",
-            &limit,
-            "--date=short",
-            "--format=%H%x00%h%x00%an%x00%ad%x00%s%x00",
-        ],
-    ) {
-        Ok(output) if output.status.success() => output,
-        _ => return Vec::new(),
-    };
-    let fields: Vec<String> = output
-        .stdout
-        .split(|byte| *byte == 0)
-        .filter(|chunk| !chunk.is_empty())
-        .map(|chunk| {
-            String::from_utf8_lossy(chunk)
-                .trim_start_matches(['\n', '\r'])
-                .to_string()
-        })
-        .collect();
-    fields
-        .chunks_exact(5)
-        .map(|chunk| GitCommit {
-            hash: chunk[0].clone(),
-            short: chunk[1].clone(),
-            author: chunk[2].clone(),
-            date: chunk[3].clone(),
-            subject: chunk[4].clone(),
-        })
-        .collect()
-}
-
-pub fn run_show_commit(cwd: &Path, hash: &str) -> Result<GitCommitDetail, String> {
-    if !(7..=40).contains(&hash.len()) || !hash.chars().all(|ch| ch.is_ascii_hexdigit()) {
-        return Err("invalid commit hash".into());
-    }
-    let root = repo_root(cwd)?;
-    let meta = command(
-        &root,
-        &[
-            "show",
-            "-s",
-            "--date=short",
-            "--format=%H%x00%h%x00%an%x00%ad%x00%s%x00",
-            hash,
-        ],
-    )?;
-    if !meta.status.success() {
-        return Err(stderr(&meta));
-    }
-    let fields: Vec<String> = meta
-        .stdout
-        .split(|byte| *byte == 0)
-        .filter(|chunk| !chunk.is_empty())
-        .map(|chunk| String::from_utf8_lossy(chunk).into_owned())
-        .collect();
-    if fields.len() < 5 {
-        return Err("could not parse commit".into());
-    }
-    let commit = GitCommit {
-        hash: fields[0].clone(),
-        short: fields[1].clone(),
-        author: fields[2].clone(),
-        date: fields[3].clone(),
-        subject: fields[4].clone(),
-    };
-    let files_output = command(&root, &["show", "--name-status", "--format=", hash])?;
-    let files = String::from_utf8_lossy(&files_output.stdout)
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| {
-            line.split_once('\t')
-                .map(|(status, path)| format!("{status} {path}"))
-                .unwrap_or_else(|| line.to_string())
-        })
-        .collect();
-    let diff_output = command(
-        &root,
-        &[
-            "show",
-            "--no-color",
-            "--no-ext-diff",
-            "--format=",
-            "--patch",
-            hash,
-        ],
-    )?;
-    let mut diff = String::from_utf8_lossy(&diff_output.stdout).into_owned();
-    if diff.len() > OUTPUT_CAP {
-        diff.truncate(OUTPUT_CAP);
-        diff.push_str("\n… diff truncated …\n");
-    }
-    Ok(GitCommitDetail {
-        commit,
-        files,
-        diff,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -771,20 +468,18 @@ u UU N... 100644 100644 100644 a b conflict.rs\0";
         assert!(diff.text.contains("-one") && diff.text.contains("+two"));
         let untracked = run_diff(&dir, &dir.join("new.txt"), false);
         assert!(untracked.text.contains("+new"));
-        run_stage(&dir, &[dir.join("a.txt"), dir.join("new.txt")]).unwrap();
+        // A staged file keeps a read-only diff (`--cached`) without any write
+        // operation from the editor.
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(["add", "a.txt"])
+            .output()
+            .unwrap();
         let staged = run_status(&dir);
-        assert_eq!(staged.staged.len(), 2);
-        run_unstage(&dir, &[dir.join("new.txt")]).unwrap();
-        let partial = run_status(&dir);
-        assert_eq!(partial.staged.len(), 1);
-        run_stage(&dir, &[dir.join("new.txt")]).unwrap();
-        run_commit(&dir, "update files\n").unwrap();
-        let clean = run_status(&dir);
-        assert!(clean.staged.is_empty() && clean.changes.is_empty());
-        let log = run_log(&dir, 10);
-        assert_eq!(log.len(), 2);
-        let detail = run_show_commit(&dir, &log[0].hash).unwrap();
-        assert!(detail.files.iter().any(|file| file.contains("new.txt")));
+        assert_eq!(staged.staged.len(), 1);
+        let cached = run_diff(&dir, &dir.join("a.txt"), true);
+        assert!(cached.text.contains("+two"));
         let _ = std::fs::remove_dir_all(dir);
     }
 }
