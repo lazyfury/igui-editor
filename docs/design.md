@@ -390,6 +390,18 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    **Format Document**; Tab/Shift+Tab and GDScript's `:` newline use the same
    per-document unit.
 
+41. **Explorer visibility is a display filter, not a data filter.** Hidden dot
+   entries and generated/tool files (`<script>.gd.uid`, `*.tmp`, `*~`, swap
+   files, OS junk — see `model/ignore.rs`) are decided when a directory is read,
+   from two settings: **Hidden Files** (off by default) and **Ignored Files**
+   (`OFF` / `DIM` / `HIDE`, default `DIM`). The tree stores a `dim` flag per row,
+   so paint never re-classifies names, and applying a filter re-reads the loaded
+   directories while keeping every expansion. The filter only affects the
+   sidebar: the external-change poll and the language servers still see every
+   entry, so hiding a `.uid` companion cannot hide a tool's change from Godot's
+   server. Both settings are session-wide; per-project overrides were rejected
+   as scope growth (Quick Open keeps its own build/VCS exclusions).
+
 ## Theme spec (geek / compact / no corners)
 
 Rules:

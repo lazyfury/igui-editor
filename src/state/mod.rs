@@ -1497,6 +1497,7 @@ impl AppState {
         }
         state.git.cwd = state.git_cwd_for_tab();
         state.git.pending = true;
+        state.apply_explorer_filter();
         state
     }
 
@@ -1604,6 +1605,8 @@ fn settings_from_session(session: &Session) -> Settings {
         lsp: session.lsp,
         trust_local_servers: session.trust_local_servers,
         sidebar_width: session.sidebar_width,
+        show_hidden: session.show_hidden,
+        ignored_files: crate::model::ignore::IgnoreMode::from_session(&session.ignored_files),
         keymap: KeymapId::from_session(&session.keymap),
     }
     .normalized()

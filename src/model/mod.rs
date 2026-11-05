@@ -16,6 +16,7 @@ pub mod git;
 pub mod godot;
 pub(crate) mod grapheme;
 pub mod highlight;
+pub mod ignore;
 pub mod lsp;
 pub mod markdown;
 pub mod processes;

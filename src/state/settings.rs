@@ -255,6 +255,8 @@ impl AppState {
             Row::LanguageIntelligence => on_off(self.settings.lsp),
             Row::TrustLocalServers => on_off(self.settings.trust_local_servers),
             Row::SidebarWidth => format!("{} px", self.settings.sidebar_width as i32),
+            Row::HiddenFiles => on_off(self.settings.show_hidden),
+            Row::IgnoredFiles => self.settings.ignored_files.label().into(),
             Row::Keymap => self.settings.keymap.name().into(),
             Row::Reset => "DEFAULT".into(),
         }
@@ -325,6 +327,32 @@ impl AppState {
                 self.settings_changed();
                 self.pending_sidebar_sync = true;
             }
+            Row::HiddenFiles => {
+                self.settings.show_hidden = !self.settings.show_hidden;
+                self.settings_changed();
+                self.apply_explorer_filter();
+                self.status(format!(
+                    "hidden files: {}",
+                    if self.settings.show_hidden {
+                        "ON"
+                    } else {
+                        "OFF"
+                    }
+                ));
+            }
+            Row::IgnoredFiles => {
+                self.settings.ignored_files = if delta < 0 {
+                    self.settings.ignored_files.previous()
+                } else {
+                    self.settings.ignored_files.next()
+                };
+                self.settings_changed();
+                self.apply_explorer_filter();
+                self.status(format!(
+                    "ignored files: {}",
+                    self.settings.ignored_files.label()
+                ));
+            }
             Row::Keymap => {
                 if delta != 0 {
                     self.settings.keymap = if delta > 0 {
@@ -356,8 +384,24 @@ impl AppState {
         self.settings = Settings::default();
         self.rebuild_keymap();
         self.settings_changed();
+        self.apply_explorer_filter();
         self.pending_sidebar_sync = true;
         self.status("settings reset");
+    }
+
+    /// Pushes the Explorer visibility settings into the sidebar tree. The
+    /// filter is a display rule only: watches and language servers still see
+    /// every file. Returns whether the visible rows changed.
+    pub(crate) fn apply_explorer_filter(&mut self) -> bool {
+        let changed = self.ws.tree.set_filter(crate::model::fs_tree::Filter {
+            show_hidden: self.settings.show_hidden,
+            ignore: self.settings.ignored_files,
+        });
+        if changed {
+            self.sidebar.hover = None;
+            self.dirty = true;
+        }
+        changed
     }
 
     /// Writes the current settings into the session (call after a live drag).
@@ -376,6 +420,8 @@ impl AppState {
         self.session.lsp = self.settings.lsp;
         self.session.trust_local_servers = self.settings.trust_local_servers;
         self.session.sidebar_width = self.settings.sidebar_width;
+        self.session.show_hidden = self.settings.show_hidden;
+        self.session.ignored_files = self.settings.ignored_files.session_value().into();
         self.session.keymap = self.settings.keymap.session_value().into();
         self.session.theme = match self.theme.mode {
             Mode::Dark => "dark".into(),

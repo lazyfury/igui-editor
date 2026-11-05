@@ -46,11 +46,14 @@ pub fn run() -> Result<(), String> {
     let dir = fixture()?;
     let result = check(&dir)
         .and_then(|()| check_workspace_and_recovery(&dir))
+        .and_then(|()| check_explorer_filters(&dir))
         .and_then(|()| check_lsp(&dir))
         .and_then(|()| check_keymaps(&dir));
     let _ = fs::remove_dir_all(&dir);
     if result.is_ok() {
-        println!("selfcheck ok: main flow + workspace/recovery + LSP + keymap checks");
+        println!(
+            "selfcheck ok: main flow + workspace/recovery + explorer filters + LSP + keymap checks"
+        );
     }
     result
 }
@@ -3235,6 +3238,104 @@ fn check(dir: &Path) -> Result<(), String> {
         frame.command_count(),
         harness.app.control_count()
     );
+    Ok(())
+}
+
+/// Explorer visibility: dot entries, dimmed tool files and the hide mode,
+/// driven through the settings path and asserted on the painted sidebar.
+fn check_explorer_filters(dir: &Path) -> Result<(), String> {
+    let root = dir.join("explorer-filters");
+    fs::create_dir_all(root.join("src")).map_err(|error| format!("fixture: {error}"))?;
+    fs::write(root.join("main.rs"), "fn main() {}\n")
+        .map_err(|error| format!("fixture: {error}"))?;
+    fs::write(root.join("src").join("inner.rs"), "fn inner() {}\n")
+        .map_err(|error| format!("fixture: {error}"))?;
+    fs::write(root.join(".env"), "SECRET=1\n").map_err(|error| format!("fixture: {error}"))?;
+    fs::write(root.join("player.gd"), "extends Node\n")
+        .map_err(|error| format!("fixture: {error}"))?;
+    fs::write(root.join("player.gd.uid"), "uid://abc\n")
+        .map_err(|error| format!("fixture: {error}"))?;
+
+    let mut harness = Harness::new(
+        Some(root.join("main.rs")),
+        root.join("session.conf"),
+        ScriptedDialogs::new(vec![]),
+    );
+    // A changed filter must not collapse the folders the user expanded.
+    let src = fs::canonicalize(root.join("src")).map_err(|error| format!("fixture: {error}"))?;
+    {
+        let mut state = harness.app.state_mut();
+        assert!(state.ws.tree.toggle(&src));
+    }
+    let frame = harness.frame()?;
+    {
+        let state = harness.app.state();
+        let rows = state.ws.tree.rows();
+        let names: Vec<&str> = rows.iter().map(|row| row.name.as_str()).collect();
+        if names.contains(&".env") {
+            return Err("the Explorer lists dot entries before Hidden Files is enabled".into());
+        }
+        let uid = rows
+            .iter()
+            .find(|row| row.name == "player.gd.uid")
+            .ok_or("the default ignore mode must keep the .uid sidecar visible")?;
+        if !uid.dim {
+            return Err("the .uid sidecar is not marked as ignored (dim)".into());
+        }
+        let dim = state.theme.p.dim.to_rgba8();
+        if !draw_text_has_color(&frame, "player.gd.uid", dim) {
+            return Err("the ignored .uid row did not paint in the secondary color".into());
+        }
+    }
+
+    // Hidden Files ON reveals dot entries, still dimmed, without collapsing.
+    harness.app.state_mut().activate_setting(Row::HiddenFiles);
+    let frame = harness.frame()?;
+    let painted = texts(&frame);
+    expect(
+        &painted,
+        ".env",
+        "the Hidden Files setting reveals dot entries",
+    )?;
+    expect(&painted, "inner.rs", "an expanded folder stays open")?;
+    {
+        let state = harness.app.state();
+        if !state.settings.show_hidden || !state.session.show_hidden {
+            return Err("Hidden Files did not persist to the session".into());
+        }
+    }
+
+    // Ignored Files DIM -> HIDE removes the sidecar; -> OFF shows it normally.
+    harness.app.state_mut().activate_setting(Row::IgnoredFiles);
+    let frame = harness.frame()?;
+    if texts(&frame).iter().any(|text| text == "player.gd.uid") {
+        return Err("HIDE still painted the ignored .uid row".into());
+    }
+    {
+        let state = harness.app.state();
+        if state.session.ignored_files != "hide" {
+            return Err(format!(
+                "the ignore mode did not persist to the session ({})",
+                state.session.ignored_files
+            ));
+        }
+    }
+    harness.app.state_mut().activate_setting(Row::IgnoredFiles);
+    let frame = harness.frame()?;
+    {
+        let state = harness.app.state();
+        let text_color = state.theme.p.text.to_rgba8();
+        if !draw_text_has_color(&frame, "player.gd.uid", text_color) {
+            return Err("OFF did not paint the ignored row as a normal file".into());
+        }
+    }
+
+    // Reset restores the hidden/dim defaults.
+    harness.app.state_mut().activate_setting(Row::Reset);
+    let frame = harness.frame()?;
+    if texts(&frame).iter().any(|text| text == ".env") {
+        return Err("Reset did not hide dot entries again".into());
+    }
     Ok(())
 }
 

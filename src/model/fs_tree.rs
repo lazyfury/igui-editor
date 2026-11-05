@@ -1,13 +1,34 @@
 //! Lazy directory tree for the sidebar.
 //!
 //! Only the root is read up front; expanding a directory reads it the first
-//! time. Hidden entries are skipped, directories sort before files, and both
-//! groups sort case-insensitively — the ordering a file browser implies.
+//! time. Dot entries are hidden unless the user asks for them, generated/temp
+//! files are shown dimmed or hidden by [`IgnoreMode`], directories sort before
+//! files, and both groups sort case-insensitively — the ordering a file browser
+//! implies.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use super::ignore::{self, IgnoreMode};
 use super::watch::MAX_DIR_ENTRIES;
+
+/// What the Explorer shows at all, and how it marks tool noise.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Filter {
+    /// Include dot entries (`.git`, `.env`, …).
+    pub show_hidden: bool,
+    /// Presentation of generated/temp files ([`ignore::is_ignored`]).
+    pub ignore: IgnoreMode,
+}
+
+impl Default for Filter {
+    fn default() -> Self {
+        Self {
+            show_hidden: false,
+            ignore: IgnoreMode::Dim,
+        }
+    }
+}
 
 /// A flattened, visible row (what the sidebar paints and hit-tests).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -17,6 +38,8 @@ pub struct Row {
     pub depth: usize,
     pub is_dir: bool,
     pub expanded: bool,
+    /// Hidden dot entry or ignored tool file: paint it secondary.
+    pub dim: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -26,6 +49,7 @@ struct FsNode {
     is_dir: bool,
     depth: usize,
     expanded: bool,
+    dim: bool,
     children: Option<Vec<FsNode>>,
 }
 
@@ -39,6 +63,7 @@ pub struct FsTree {
     flat: Vec<Row>,
     /// `read_dir` failure on the root, surfaced in the sidebar.
     pub error: Option<String>,
+    filter: Filter,
 }
 
 impl FsTree {
@@ -49,6 +74,7 @@ impl FsTree {
             nodes: Vec::new(),
             flat: Vec::new(),
             error: None,
+            filter: Filter::default(),
         }
     }
 
@@ -59,6 +85,7 @@ impl FsTree {
             nodes: Vec::new(),
             flat: Vec::new(),
             error: None,
+            filter: Filter::default(),
         };
         tree.reload();
         tree
@@ -66,7 +93,7 @@ impl FsTree {
 
     /// Re-reads the root (and drops every expansion).
     pub fn reload(&mut self) {
-        match read_dir(&self.root, 0) {
+        match read_dir(&self.root, 0, self.filter) {
             Ok(nodes) => {
                 self.nodes = nodes;
                 self.error = None;
@@ -79,6 +106,29 @@ impl FsTree {
         self.rebuild_flat();
     }
 
+    /// Applies new visibility rules, keeping every expansion. Returns whether
+    /// the visible rows changed.
+    pub fn set_filter(&mut self, filter: Filter) -> bool {
+        if self.filter == filter {
+            return false;
+        }
+        self.filter = filter;
+        if self.root.as_os_str().is_empty() {
+            return false;
+        }
+        let previous = std::mem::take(&mut self.flat);
+        match reload_loaded(&self.root, 0, &self.nodes, filter) {
+            Ok(nodes) => {
+                self.nodes = nodes;
+                self.error = None;
+            }
+            // Keep the last good tree when the root cannot be read.
+            Err(error) => self.error = Some(error),
+        }
+        self.rebuild_flat();
+        self.flat != previous
+    }
+
     /// Re-reads the directories that are already loaded, keeping every
     /// expansion. Returns whether the visible rows changed.
     ///
@@ -87,7 +137,7 @@ impl FsTree {
     /// must not do to the user's expanded folders.
     pub fn refresh(&mut self) -> bool {
         let previous = std::mem::take(&mut self.flat);
-        match reload_loaded(&self.root, 0, &self.nodes) {
+        match reload_loaded(&self.root, 0, &self.nodes, self.filter) {
             Ok(nodes) => {
                 self.nodes = nodes;
                 self.error = None;
@@ -112,7 +162,7 @@ impl FsTree {
 
     /// Expands or collapses the directory at `path`.
     pub fn toggle(&mut self, path: &Path) -> bool {
-        let changed = toggle_in(&mut self.nodes, path);
+        let changed = toggle_in(&mut self.nodes, path, self.filter);
         if changed {
             self.rebuild_flat();
         }
@@ -124,7 +174,7 @@ impl FsTree {
         if !path.starts_with(&self.root) {
             return false;
         }
-        let changed = expand_ancestors(&mut self.nodes, path);
+        let changed = expand_ancestors(&mut self.nodes, path, self.filter);
         if changed {
             self.rebuild_flat();
         }
@@ -151,6 +201,7 @@ fn flatten(nodes: &[FsNode], rows: &mut Vec<Row>) {
             depth: node.depth,
             is_dir: node.is_dir,
             expanded: node.expanded,
+            dim: node.dim,
         });
         if node.expanded {
             if let Some(children) = &node.children {
@@ -160,7 +211,7 @@ fn flatten(nodes: &[FsNode], rows: &mut Vec<Row>) {
     }
 }
 
-fn toggle_in(nodes: &mut [FsNode], path: &Path) -> bool {
+fn toggle_in(nodes: &mut [FsNode], path: &Path, filter: Filter) -> bool {
     for node in nodes {
         if node.path == path {
             if !node.is_dir {
@@ -168,13 +219,13 @@ fn toggle_in(nodes: &mut [FsNode], path: &Path) -> bool {
             }
             node.expanded = !node.expanded;
             if node.expanded && node.children.is_none() {
-                node.children = read_dir(&node.path, node.depth + 1).ok();
+                node.children = read_dir(&node.path, node.depth + 1, filter).ok();
             }
             return true;
         }
         if node.expanded {
             if let Some(children) = &mut node.children {
-                if toggle_in(children, path) {
+                if toggle_in(children, path, filter) {
                     return true;
                 }
             }
@@ -183,13 +234,18 @@ fn toggle_in(nodes: &mut [FsNode], path: &Path) -> bool {
     false
 }
 
-fn read_dir(path: &Path, depth: usize) -> Result<Vec<FsNode>, String> {
+fn read_dir(path: &Path, depth: usize, filter: Filter) -> Result<Vec<FsNode>, String> {
     let entries = fs::read_dir(path).map_err(|error| format!("{}: {error}", path.display()))?;
     let mut nodes = Vec::new();
     for entry in entries.flatten().take(MAX_DIR_ENTRIES) {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with('.') {
-            continue; // hidden files stay hidden, like every editor's sidebar
+        let hidden = name.starts_with('.');
+        if hidden && !filter.show_hidden {
+            continue; // hidden files stay hidden unless the setting asks for them
+        }
+        let ignored = ignore::is_ignored(&name);
+        if ignored && filter.ignore == IgnoreMode::Hide {
+            continue;
         }
         // `metadata` follows symlinks; a dangling link is simply skipped.
         let Ok(metadata) = entry.metadata() else {
@@ -202,6 +258,7 @@ fn read_dir(path: &Path, depth: usize) -> Result<Vec<FsNode>, String> {
             is_dir,
             depth,
             expanded: false,
+            dim: hidden || (ignored && filter.ignore == IgnoreMode::Dim),
             children: None,
         });
     }
@@ -215,8 +272,13 @@ fn read_dir(path: &Path, depth: usize) -> Result<Vec<FsNode>, String> {
 
 /// Rebuilds one directory level, carrying over `expanded`/loaded children from
 /// `previous` so a refresh never collapses the tree.
-fn reload_loaded(path: &Path, depth: usize, previous: &[FsNode]) -> Result<Vec<FsNode>, String> {
-    let mut nodes = read_dir(path, depth)?;
+fn reload_loaded(
+    path: &Path,
+    depth: usize,
+    previous: &[FsNode],
+    filter: Filter,
+) -> Result<Vec<FsNode>, String> {
+    let mut nodes = read_dir(path, depth, filter)?;
     for node in &mut nodes {
         if !node.is_dir {
             continue;
@@ -226,7 +288,7 @@ fn reload_loaded(path: &Path, depth: usize, previous: &[FsNode]) -> Result<Vec<F
         };
         node.expanded = old.expanded;
         if let Some(children) = old.children.as_deref() {
-            if let Ok(children) = reload_loaded(&node.path, depth + 1, children) {
+            if let Ok(children) = reload_loaded(&node.path, depth + 1, children, filter) {
                 node.children = Some(children);
             }
         }
@@ -244,7 +306,7 @@ fn collect_watch_dirs(nodes: &[FsNode], out: &mut Vec<PathBuf>) {
     }
 }
 
-fn expand_ancestors(nodes: &mut [FsNode], path: &Path) -> bool {
+fn expand_ancestors(nodes: &mut [FsNode], path: &Path, filter: Filter) -> bool {
     for node in nodes.iter_mut() {
         if !node.is_dir || !path.starts_with(&node.path) {
             continue;
@@ -252,12 +314,12 @@ fn expand_ancestors(nodes: &mut [FsNode], path: &Path) -> bool {
         let was_expanded = node.expanded;
         node.expanded = true;
         if node.children.is_none() {
-            node.children = read_dir(&node.path, node.depth + 1).ok();
+            node.children = read_dir(&node.path, node.depth + 1, filter).ok();
         }
         let mut changed = !was_expanded;
         if node.path != path {
             if let Some(children) = &mut node.children {
-                changed |= expand_ancestors(children, path);
+                changed |= expand_ancestors(children, path, filter);
             }
         }
         return changed;
@@ -287,6 +349,77 @@ mod tests {
         let tree = FsTree::new(&dir);
         let names: Vec<String> = tree.rows().iter().map(|row| row.name.clone()).collect();
         assert_eq!(names, ["src", "a.md", "b.txt"]);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn show_hidden_reveals_dot_entries_and_keeps_expansions() {
+        let dir = temp_dir("show-hidden");
+        fs::write(dir.join(".env"), "SECRET=1").unwrap();
+        let mut tree = FsTree::new(&dir);
+        let src = dir.join("src");
+        assert!(tree.toggle(&src));
+        assert!(!tree.rows().iter().any(|row| row.name == ".env"));
+
+        let filter = Filter {
+            show_hidden: true,
+            ignore: IgnoreMode::Dim,
+        };
+        assert!(tree.set_filter(filter));
+        let rows = tree.rows();
+        let env = rows
+            .iter()
+            .find(|row| row.name == ".env")
+            .expect("the dot file appears when hidden entries are shown");
+        assert!(env.dim, "a hidden row stays secondary");
+        assert!(
+            rows.iter().any(|row| row.name == ".hidden" && row.is_dir),
+            "hidden directories are listed too"
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row.name == "main.rs" && row.depth == 1),
+            "applying the filter must not collapse the expansion"
+        );
+
+        assert!(
+            tree.set_filter(Filter::default()),
+            "hiding dot entries changes the rows"
+        );
+        assert!(!tree.rows().iter().any(|row| row.name == ".env"));
+        assert!(tree.rows().iter().any(|row| row.name == "main.rs"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn ignored_tool_files_are_dimmed_or_hidden() {
+        let dir = temp_dir("ignore");
+        fs::write(dir.join("player.gd.uid"), "uid://x").unwrap();
+        fs::write(dir.join("scratch.tmp"), "x").unwrap();
+        let mut tree = FsTree::new(&dir);
+        let dimmed = |tree: &FsTree, name: &str| {
+            tree.rows()
+                .iter()
+                .find(|row| row.name == name)
+                .map(|row| row.dim)
+        };
+        assert_eq!(dimmed(&tree, "player.gd.uid"), Some(true));
+        assert_eq!(dimmed(&tree, "scratch.tmp"), Some(true));
+        assert_eq!(dimmed(&tree, "a.md"), Some(false));
+
+        assert!(tree.set_filter(Filter {
+            show_hidden: false,
+            ignore: IgnoreMode::Hide,
+        }));
+        assert_eq!(dimmed(&tree, "player.gd.uid"), None);
+        assert_eq!(dimmed(&tree, "scratch.tmp"), None);
+        assert_eq!(dimmed(&tree, "a.md"), Some(false));
+
+        assert!(tree.set_filter(Filter {
+            show_hidden: false,
+            ignore: IgnoreMode::Off,
+        }));
+        assert_eq!(dimmed(&tree, "player.gd.uid"), Some(false));
         let _ = fs::remove_dir_all(dir);
     }
 

@@ -28,10 +28,11 @@ src/
   services/godot.rs   built-in Godot GDScript spec (attach to the running editor, else spawn headless with the rescan profile)
   model/recovery.rs   crash snapshots (txt + metadata)
   model/replace.rs    replace-in-files planning/apply (conflict + open skip)
-  model/fs_tree.rs    lazy sidebar tree (dirs first, hidden entries skipped)
+  model/fs_tree.rs    lazy sidebar tree (dirs first, visibility filter per session)
+  model/ignore.rs     Explorer ignore rules + OFF/DIM/HIDE mode for tool files
   model/fsutil.rs     atomic temp+fsync+rename writer shared by model IO
   model/markdown.rs   Markdown event stream -> flat block model
-  model/session.rs    key=value session file (atomic write, escaping, v15)
+  model/session.rs    key=value session file (atomic write, escaping, v16)
   model/watch.rs      directory snapshots, change diffs, watcher globs
   model/workspace.rs  tabs + file IO (open/save/move/close folder)
   model/wrap.rs       soft-wrap display rows + visual row/column mapping

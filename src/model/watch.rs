@@ -63,8 +63,9 @@ pub struct EntryStamp {
 }
 
 /// Reads one directory into a snapshot sorted by path. Hidden entries are
-/// included: the tree hides them, but a hidden file can still matter to a
-/// language server (and `.gd.uid`-style companions are not hidden anyway).
+/// included: the Explorer's visibility filter is display-only, and a hidden
+/// file can still matter to a language server (and `.gd.uid`-style companions
+/// are not dot files anyway).
 pub fn snapshot(dir: &Path) -> Option<Vec<EntryStamp>> {
     let entries = std::fs::read_dir(dir).ok()?;
     let mut out = Vec::new();

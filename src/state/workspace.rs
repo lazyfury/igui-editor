@@ -39,6 +39,7 @@ impl AppState {
             self.error(message);
             return;
         }
+        self.apply_explorer_filter();
         self.session.project = Some(self.ws.root.clone());
         self.session.push_recent_project(&self.ws.root);
         crate::macos::note_recent(&self.ws.root);

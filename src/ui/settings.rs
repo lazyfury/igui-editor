@@ -47,7 +47,12 @@ pub fn layout(viewport: Rect) -> Layout {
         rows_rect.push(rect);
         let steppable = matches!(
             row,
-            Row::Theme | Row::FontSize | Row::TabWidth | Row::SidebarWidth | Row::Keymap
+            Row::Theme
+                | Row::FontSize
+                | Row::TabWidth
+                | Row::SidebarWidth
+                | Row::IgnoredFiles
+                | Row::Keymap
         );
         if steppable {
             let plus_rect = Rect::from_min_size(
@@ -163,6 +168,7 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
                 Row::Syntax => state.settings.syntax,
                 Row::LanguageIntelligence => state.settings.lsp,
                 Row::TrustLocalServers => state.settings.trust_local_servers,
+                Row::HiddenFiles => state.settings.show_hidden,
                 _ => false,
             };
             let label = if on { "ON" } else { "OFF" };
@@ -343,6 +349,31 @@ mod tests {
             .expect("line-number row");
         assert!(click(&mut state, layout.rows_rect[toggle_row].center()));
         assert!(!state.settings.line_numbers);
+    }
+
+    #[test]
+    fn explorer_visibility_rows_persist_to_the_session() {
+        let mut state = state();
+        state.open_settings();
+        state.activate_setting(Row::HiddenFiles);
+        assert!(state.settings.show_hidden);
+        assert!(state.session.show_hidden);
+        state.activate_setting(Row::IgnoredFiles);
+        assert_eq!(
+            state.settings.ignored_files,
+            crate::model::ignore::IgnoreMode::Hide
+        );
+        assert_eq!(state.session.ignored_files, "hide");
+        state.adjust_setting(Row::IgnoredFiles, -1);
+        assert_eq!(
+            state.settings.ignored_files,
+            crate::model::ignore::IgnoreMode::Dim
+        );
+        assert_eq!(state.session.ignored_files, "dim");
+        state.activate_setting(Row::Reset);
+        assert!(!state.settings.show_hidden);
+        assert_eq!(state.session.ignored_files, "dim");
+        assert!(state.config_dirty);
     }
 
     #[test]

@@ -22,7 +22,7 @@ const MAX_RECENT: usize = 8;
 /// Persisted application state. Missing/corrupt files fall back to defaults.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Session {
-    /// Format version (currently `15`); unknown keys are ignored so
+    /// Format version (currently `16`); unknown keys are ignored so
     /// older/newer files keep loading.
     pub version: u32,
     /// `"dark"` or `"light"`.
@@ -54,6 +54,10 @@ pub struct Session {
     pub syntax: bool,
     /// Sidebar width.
     pub sidebar_width: f32,
+    /// Show dot entries in the Explorer.
+    pub show_hidden: bool,
+    /// Explorer presentation of generated/temp files (`off`, `dim`, `hide`).
+    pub ignored_files: String,
     /// Editor/preview split ratio (0.2–0.8).
     pub split: f32,
     /// Autosave enabled.
@@ -92,7 +96,7 @@ pub struct WindowGeometry {
 impl Default for Session {
     fn default() -> Self {
         Self {
-            version: 15,
+            version: 16,
             theme: "dark".into(),
             sidebar: true,
             outline: true,
@@ -109,6 +113,8 @@ impl Default for Session {
             indent_guides: true,
             syntax: true,
             sidebar_width: 232.0,
+            show_hidden: false,
+            ignored_files: "dim".into(),
             split: 0.5,
             autosave: true,
             lsp: true,
@@ -175,6 +181,8 @@ impl Session {
                 "sidebar_width" => {
                     session.sidebar_width = value.parse().unwrap_or(session.sidebar_width)
                 }
+                "show_hidden" => session.show_hidden = value == "1",
+                "ignored_files" => session.ignored_files = value,
                 "split" => session.split = value.parse().unwrap_or(session.split),
                 "autosave" => session.autosave = value == "1",
                 "lsp" => session.lsp = value == "1",
@@ -253,7 +261,7 @@ impl Session {
     pub fn render(&self) -> String {
         let mut out = String::new();
         // Always write the current format; parsing older files still works.
-        out.push_str("version=15\n");
+        out.push_str("version=16\n");
         out.push_str(&format!("theme={}\n", self.theme));
         out.push_str(&format!("sidebar={}\n", u8::from(self.sidebar)));
         out.push_str(&format!("outline={}\n", u8::from(self.outline)));
@@ -271,6 +279,8 @@ impl Session {
         out.push_str(&format!("guides={}\n", u8::from(self.indent_guides)));
         out.push_str(&format!("syntax={}\n", u8::from(self.syntax)));
         out.push_str(&format!("sidebar_width={}\n", self.sidebar_width));
+        out.push_str(&format!("show_hidden={}\n", u8::from(self.show_hidden)));
+        out.push_str(&format!("ignored_files={}\n", escape(&self.ignored_files)));
         out.push_str(&format!("split={}\n", self.split));
         out.push_str(&format!("autosave={}\n", u8::from(self.autosave)));
         out.push_str(&format!("lsp={}\n", u8::from(self.lsp)));
@@ -460,6 +470,8 @@ mod tests {
             autosave: false,
             lsp: false,
             trust_local_servers: true,
+            show_hidden: true,
+            ignored_files: "hide".into(),
             languages: vec![(PathBuf::from("/tmp/x.lua"), "lua".into())],
             sync_scroll: false,
             soft_wrap: true,

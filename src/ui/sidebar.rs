@@ -269,7 +269,9 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             .map(|(text, entry)| (text, git_color(entry, &theme)));
         let color: Color = if selected {
             p.text
-        } else if row.is_dir {
+        } else if row.is_dir || row.dim {
+            // Directories, hidden dot entries and ignored tool files are all
+            // secondary: the row stays clickable, it just does not compete.
             p.dim
         } else if let Some(entry) = git {
             git_color(entry, &theme)

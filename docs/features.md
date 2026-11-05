@@ -236,6 +236,15 @@ vendored under `assets/icons/material`. Those files are filled silhouettes, so
 `src/model/fileicon.rs` maps names and extensions to a kind. Folder rows keep
 the disclosure chevron in the same marker slot, so labels stay aligned.
 
+Dot entries (`.git`, `.env`, …) stay out of the tree until **Settings → Hidden
+Files** is on; when shown they are dimmed. Generated and temporary files
+(Godot's `<script>.gd.uid` companions, `*.tmp`, `*~`, swap files, `Thumbs.db`)
+follow **Settings → Ignored Files**: `DIM` (the default — visible but secondary,
+so they still open with a click), `HIDE` (not listed), or `OFF` (normal color).
+The filter is display-only: the external-change poll and the language servers
+still see every entry, and switching the setting keeps the folders you already
+expanded open.
+
 ## Outline (`⌘⌥O`, View → Outline)
 
 The right sidebar shows LSP document symbols (`textDocument/documentSymbol`) for
@@ -441,9 +450,11 @@ setting is persisted in the session. Preview-only and Edit modes ignore it.
 | Line Numbers | on / off |
 | Indent Guides | on / off |
 | Syntax Highlight | on / off |
-| Keymap | VS Code / JetBrains / Vim |
 | Autosave | on / off |
 | Sidebar Width | 180–420 px |
+| Hidden Files | on / off (dot entries in the Explorer; default off) |
+| Ignored Files | OFF / DIM / HIDE (generated + temp files; default DIM) |
+| Keymap | VS Code / JetBrains / Vim |
 | Language Intelligence | on / off (start/stop all language servers) |
 | Trust Local Servers | on / off (allow repository `node_modules/.bin` shims) |
 | Reset to Defaults | — |
@@ -595,7 +606,8 @@ remembered per document and the last ratio is persisted.
   original name/path and are marked dirty so the first save writes them back.
 - **Window state**: size, position and the maximized flag are persisted and
   restored (fullscreen is not persisted).
-- Session format is version 15 (v15 added `bottom_tab` and
+- Session format is version 16 (v16 added `show_hidden` and `ignored_files`;
+  v15 added `bottom_tab` and
   `indent_tabs`; v14 split
   `recent_project.*` / `recent_file.*`; v13 added `trust_local_servers`, v12
   added `window.max`, v10 added the current-tab/window geometry set, v9

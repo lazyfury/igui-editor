@@ -8,6 +8,7 @@
 //! edited session cannot put the editor into an unusable state.
 
 use crate::keymap::KeymapId;
+use crate::model::ignore::IgnoreMode;
 
 /// Font size bounds (logical pixels).
 pub const FONT_MIN: f32 = 11.0;
@@ -41,6 +42,10 @@ pub struct Settings {
     pub trust_local_servers: bool,
     /// Sidebar width in logical pixels.
     pub sidebar_width: f32,
+    /// Show dot entries (`.git`, `.env`, …) in the Explorer.
+    pub show_hidden: bool,
+    /// Presentation of generated/temp Explorer files (Godot `.uid` sidecars).
+    pub ignored_files: IgnoreMode,
     /// Selectable keyboard profile.
     pub keymap: KeymapId,
 }
@@ -58,6 +63,8 @@ impl Default for Settings {
             lsp: true,
             trust_local_servers: false,
             sidebar_width: 232.0,
+            show_hidden: false,
+            ignored_files: IgnoreMode::Dim,
             keymap: KeymapId::VsCode,
         }
     }
@@ -77,6 +84,8 @@ impl Settings {
             lsp: self.lsp,
             trust_local_servers: self.trust_local_servers,
             sidebar_width: clamp_sidebar(self.sidebar_width),
+            show_hidden: self.show_hidden,
+            ignored_files: self.ignored_files,
             keymap: self.keymap,
         }
     }
@@ -169,11 +178,13 @@ pub enum Row {
     LanguageIntelligence,
     TrustLocalServers,
     SidebarWidth,
+    HiddenFiles,
+    IgnoredFiles,
     Keymap,
     Reset,
 }
 
-pub const ROWS: [Row; 13] = [
+pub const ROWS: [Row; 15] = [
     Row::Theme,
     Row::FontSize,
     Row::IndentStyle,
@@ -183,6 +194,8 @@ pub const ROWS: [Row; 13] = [
     Row::Syntax,
     Row::Autosave,
     Row::SidebarWidth,
+    Row::HiddenFiles,
+    Row::IgnoredFiles,
     Row::Keymap,
     Row::LanguageIntelligence,
     Row::TrustLocalServers,
@@ -203,6 +216,8 @@ impl Row {
             Row::LanguageIntelligence => "Language Intelligence",
             Row::TrustLocalServers => "Trust Local Servers",
             Row::SidebarWidth => "Sidebar Width",
+            Row::HiddenFiles => "Hidden Files",
+            Row::IgnoredFiles => "Ignored Files",
             Row::Keymap => "Keymap",
             Row::Reset => "Reset to Defaults",
         }
@@ -218,6 +233,7 @@ impl Row {
                 | Row::Syntax
                 | Row::LanguageIntelligence
                 | Row::TrustLocalServers
+                | Row::HiddenFiles
         )
     }
 }
@@ -254,6 +270,21 @@ mod tests {
         assert!(Row::LanguageIntelligence.is_toggle());
         assert!(Row::TrustLocalServers.is_toggle());
         assert!(ROWS.contains(&Row::Reset));
+    }
+
+    #[test]
+    fn explorer_visibility_defaults_keep_dotfiles_hidden_and_dim_tool_files() {
+        let settings = Settings::default();
+        assert!(!settings.show_hidden);
+        assert_eq!(
+            settings.ignored_files,
+            crate::model::ignore::IgnoreMode::Dim
+        );
+        assert!(ROWS.contains(&Row::HiddenFiles));
+        assert!(ROWS.contains(&Row::IgnoredFiles));
+        assert!(Row::HiddenFiles.is_toggle());
+        assert!(!Row::IgnoredFiles.is_toggle());
+        assert_eq!(settings.normalized(), settings);
     }
 
     #[test]
