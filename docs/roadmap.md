@@ -35,8 +35,8 @@ GDScript plugins (diagnostics, hover, completion, definition and symbols), plus
 data-only language-pack language-server specs.
 
 Delivered (M13): Go/TypeScript/C-C++/Python language servers with monorepo root
-selection, a shared copy-only tooling prompt, and LSP start/stop in the footer
-and settings.
+selection and a shared copy-only tooling prompt (the four extra specs were
+removed in M15); LSP start/stop in the footer and settings.
 
 Quality pass (see [improvement-plan.md](improvement-plan.md)): keyboard
 shortcuts now have one source, saves are atomic with EOL preservation, find and

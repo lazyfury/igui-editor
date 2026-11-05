@@ -21,10 +21,6 @@ src/
   model/bbcode.rs     Godot BBCode -> text spans + clickable references
   model/docs.rs       native symbol -> docs view text + link ranges
   services/lsp.rs     built-in Rust language-server spec (rust-analyzer)
-  services/go.rs      built-in Go language-server spec (gopls)
-  services/typescript.rs  built-in TS/JS language-server spec
-  services/clang.rs   built-in C/C++ language-server spec (clangd)
-  services/python.rs  built-in Python language-server spec (pyright)
   services/godot.rs   built-in Godot GDScript spec (attach-only to the running editor; rescan profile)
   model/recovery.rs   crash snapshots (txt + metadata)
   model/replace.rs    replace-in-files planning/apply (conflict + open skip)

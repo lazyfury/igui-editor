@@ -571,8 +571,13 @@ shares one header with the workspace-wide PROBLEMS panel.
 **M14 (superseded)** — image-asset preview tabs were removed in the Session 5
 reduction; the editor is not an asset viewer.
 
-Next candidates: Git discard/branch/network operations, Dock reopen, cross-file
-undo and incremental preview layout for very large documents.
+**M15 (done, Session 5 reduction)** — image preview, Git staging/commit/history,
+Material file-type icons and the Go/TypeScript/C-C++/Python language-server
+specs were removed; crash snapshots and the undo history are bounded. The
+release binary is gated at 6 MB (currently 4.41 MB).
+
+Next candidates: Dock reopen, cross-file undo and incremental preview layout for
+very large documents.
 
 ## Non-goals for the editor core
 
@@ -581,7 +586,9 @@ undo and incremental preview layout for very large documents.
 - Syntax trees: highlighting needs coloring, not parsing.
 - Multi-cursor beyond Select Next Occurrence (per-caret or column selection):
   not planned.
-- Git network/auth operations: owned by the terminal, not a Git integration.
+- Git write operations (staging/commit/history) and network/auth: owned by the
+  user's Git client and the terminal, not this editor.
+- Image asset viewing/editing: the editor opens text assets only.
 - An OS filesystem watcher: the visible directories are polled once a second and
   the Explorer refreshes from those snapshots; project search still scans on
   demand.

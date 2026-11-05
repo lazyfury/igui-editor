@@ -1,6 +1,6 @@
 # Reduction plan — Session 5
 
-Status: **in progress** (phases 1 and 2 landed). Follows the Session 4 review and the product priority
+Status: **complete** (phases 1–3 landed; intentionally deferred items below). Follows the Session 4 review and the product priority
 in [`AGENTS.md`](../AGENTS.md): text/Markdown first, Godot second, everything
 else at the LSP/highlight minimum. The goal is a smaller, more reliable editor,
 not a broader one.
@@ -67,16 +67,30 @@ terminal split panes; terminal profiles; further Git write operations.
 - 3.2 One `SESSION_VERSION` constant and an explicit migration chain.
 - [x] 3.3 `scripts/check.sh --release` asserts the shipped binary size (6 MB),
   so "keep it lightweight" is measured rather than asserted.
-- 3.4 Documentation truth: features, roadmap, design, code map, README,
+- [x] 3.4 Documentation truth: features, roadmap, design, code map, README,
   `AGENTS.md` routing and the Session 4 plan status.
 
-Deferred (behavior-neutral, tracked here so they are not lost):
+## Results
 
+- `src/` 57,782 → 54,707 lines; `assets/icons` 204 KB → 36 KB.
+- Shipped binary 4.8 MB → 4.41 MB (6 MB budget).
+- `scripts/check.sh`: 379 unit + 2 doc tests, `--selfcheck` green; release gate
+  green.
+- 8 commits, one logical change each.
+
+Deferred on purpose (recorded so they are not lost):
+
+- Moving autosave/recovery writes off the UI thread. The repeated-write loop is
+  fixed (dedupe + 30 s backoff); a worker would still need save-point
+  reconciliation and is a separate change.
 - Splitting `selfcheck.rs` / `model/lsp.rs` / `app.rs` / `state/mod.rs`.
 - A shared `ui::list` row/scroll/hit helper.
-- A table-driven settings/session record (only the version constant and the
-  migration seam land in this session).
+- A table-driven settings/session record (the version constant and migration
+  seam landed; the 12-site setting plumbing did not).
 - Adaptive filesystem-poll backoff (needs a window-focus signal from the host).
+- Explorer keyboard navigation, preview links and reopen-closed-tab (feature
+  work, not reduction).
+- CI is intentionally out of scope.
 
 ## Progress log
 
@@ -92,4 +106,4 @@ Deferred (behavior-neutral, tracked here so they are not lost):
 | 3.1 Markdown extensions | done | `MARKDOWN_EXTENSIONS` is the single table; the syntax provider and file icons read it. 2 new tests. |
 | 3.2 Session version | done | `SESSION_VERSION` constant and one `Session::migrate` seam; render writes the constant. |
 | 3.3 Binary budget | done | `check.sh --release` gates 6 MB; current binary 4.41 MB. |
-| 3.4 Docs | pending | |
+| 3.4 Docs | done | Features, roadmap, design, code map, README, AGENTS routing, verification and the Session 4 plan are current. |

@@ -1,6 +1,8 @@
 # Improvement plan — Session 4
 
-Status: **ready to start**. Baseline verified on the current tree:
+Status: **historical** (Session 4). Phases 0–3.2 landed; the Session 5
+[reduction plan](reduction-plan.md) supersedes the remaining scope. 3.6 (command
+palette) is dropped: Quick Open already covers that surface.
 
 - `scripts/check.sh` green: fmt, clippy, **356 unit tests + 2 doc tests**,
   `--selfcheck` (main flow, typing, LSP attach/rescan, tooling, keymap).
@@ -40,7 +42,7 @@ everything else at the LSP/highlight minimum. History lives in
 | F9 | P2 | `AppState` exposes 107 `pub` fields (rule asks for `pub(crate)`); `new` is ~270 lines | `state/mod.rs:1212-1382` |
 | F10 | P2 | CI is documented but `.github/workflows/check.yml` was deleted (`37873b1`) | `docs/verification.md:8` |
 | F11 | P3 | Megafiles: `selfcheck.rs` 7.3k, `model/lsp.rs` 4.7k, `state/mod.rs` 2.3k, `app.rs` 2k | line counts |
-| F12 | P3 | Markdown extension list duplicated in 3 places, with different sets | `state/mod.rs:151`; `model/doc.rs:758`; `syntax/markdown.rs:20`; `model/fileicon.rs:198` |
+| F12 | P3 | Markdown extension list duplicated in 3 places, with different sets | `state/mod.rs:151`; `model/doc.rs:758`; `syntax/markdown.rs:20`; file-icon table (removed in Session 5) |
 | F13 | P3 | Outline is LSP-only, so Markdown documents have no outline | `ui/outline.rs:1`; `model/markdown.rs:69,313` |
 | F14 | P3 | Preview links are inert and images render as `▢ alt` only | `ui/preview.rs:9` |
 | F15 | P3 | No Go to Line; menus are the only path to some commands off macOS | no command/overlay |
@@ -317,7 +319,7 @@ Files: `src/state/tabs.rs`, `src/keymap.rs`, `src/ui/tabs.rs`.
   it reuses the existing popup list pattern.
 - Tests: reopen after close, stack cap, restore keeps order.
 
-### 3.6 Command palette (F5, F15; depends on 2.1)
+### 3.6 Command palette (F5, F15; dropped in Session 5)
 
 Files: new `src/ui/palette.rs`, `src/state/palette.rs`, `src/keymap.rs`.
 
@@ -348,7 +350,7 @@ the palette; selfcheck covers open/filter/run/escape.
   `settings`, `git`, `recovery`, `tooling`. Only after Phase 2 reduces the
   surface.
 - **4.4 Markdown extension single source (F12):** `model::markdown::is_markdown_path`
-  used by `ViewMode`, `tidy`, syntax and the file-icon table.
+  used by `ViewMode`, `tidy`, syntax and the (now removed) file-icon table.
 - **4.5 CI:** restore the macOS gate and add a Linux compile + test job (no
   workflow is checked in today); keep the pinned engine revision in one place
   and document how to update it.
@@ -380,11 +382,11 @@ the palette; selfcheck covers open/filter/run/escape.
 | Session 4 | 2.3 State pruning | done | `close_tab_now` calls one `forget_document` helper (`doc_views`, `doc_revs`, `language_by_id`, `recovery`, `external`); `reset_project_state` reuses it and `delete_path_now` drops path/folder stamps. `language_by_path` still outlives the tab. 3 new state tests. Gate green: 371 unit + 2 doc tests, selfcheck. |
 | Session 4 | 3.1 Markdown outline | done | Without LSP symbols, Markdown files derive outline rows from a line scanner (`model::markdown::headings`) that handles ATX/setext headings, fenced/indented code and blockquote prefixes; rows are cached by `(doc id, rev)`, use `MARKDOWN_HEADING_KIND`/`H`, and click reuses `byte_for_position`. `model::markdown::is_markdown_path` is now the shared extension check for outline/view mode/tidy. 12 new tests (7 model, 3 state, 1 UI glyph, 1 truncate helper) plus a selfcheck open/paint/click flow. Gate green: 396 unit + 2 doc tests, selfcheck. Bench before → after (median of 3): parse 1.826 → 0.762 ms, layout 2.712 → 1.627 ms, paint 0.018 → 0.019 ms, typing 1.485 → 1.490 ms/frame (< 2 ms budget, no >20% regression). |
 | Session 4 | 3.2 Go to Line | done | `⌃G` / `⌘L` opens a prefilled, digit-only prompt; `Enter` validates `1..=line_count`, moves to the line start, reveals it and reports `line N`; invalid input keeps an inline `line must be 1..=<count>` error that editing clears; Esc and outside clicks close without moving; image previews report a status instead. Command id `edit.gotoLine`, Edit-menu entry and shared movement binding. 7 new tests (5 state, 1 keymap, 1 command-id round-trip) plus a selfcheck flow. Gate green: 384 unit + 2 doc tests, selfcheck. |
-| Session 4 | 3.3 Preview links | pending | |
-| Session 4 | 3.4 Explorer keys | pending | |
-| Session 4 | 3.5 Reopen/overflow | pending | |
-| Session 4 | 3.6 Command palette | pending | After 2.1. |
-| Session 4 | 4.x | pending | Deferred. 4.5 CI restoration is a separate decision; no workflow file is checked in. |
+| Session 4 | 3.3 Preview links | deferred | Not part of the Session 5 reduction. |
+| Session 4 | 3.4 Explorer keys | deferred | Not part of the Session 5 reduction. |
+| Session 4 | 3.5 Reopen/overflow | deferred | Not part of the Session 5 reduction. |
+| Session 4 | 3.6 Command palette | dropped | Quick Open already covers the surface; no second fuzzy overlay. |
+| Session 4 | 4.x | partial | 4.1 only got the session version constant; 4.2/4.3 remain deferred. 4.5 CI is out of scope. |
 
 ## First three commits (ready to start)
 
