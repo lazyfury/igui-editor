@@ -78,6 +78,8 @@ impl ScriptedDialogs {
     }
 
     /// Queues the answer to the next dialog call.
+    // Only `--selfcheck` queues answers after construction.
+    #[cfg_attr(not(feature = "selfcheck"), allow(dead_code))]
     pub fn push(&self, result: Option<PathBuf>) {
         self.state.borrow_mut().results.push_back(result);
     }

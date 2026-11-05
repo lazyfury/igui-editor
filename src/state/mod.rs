@@ -821,10 +821,14 @@ impl TerminalState {
         self.active()?.parser.as_ref()
     }
 
+    // Both are `--selfcheck` diagnostics (PTY resize assertions); the shipped
+    // binary never resizes the terminal from outside the session.
+    #[cfg_attr(not(feature = "selfcheck"), allow(dead_code))]
     pub fn active_rows(&self) -> u16 {
         self.active().map_or(24, |session| session.rows)
     }
 
+    #[cfg_attr(not(feature = "selfcheck"), allow(dead_code))]
     pub fn active_cols(&self) -> u16 {
         self.active().map_or(80, |session| session.cols)
     }
@@ -950,6 +954,8 @@ pub struct TabsUi {
     /// Horizontal scroll offset when the tabs do not fit.
     pub scroll: f32,
     /// The strip rectangle (scroll/hit diagnostics).
+    // Only `--selfcheck` reads it; the shipped binary drops the recorder seam.
+    #[cfg_attr(not(feature = "selfcheck"), allow(dead_code))]
     pub strip: Rect,
     /// Scroll so the active tab is visible on the next paint (set by tab
     /// switches/new/close, not by manual wheel scrolling).
