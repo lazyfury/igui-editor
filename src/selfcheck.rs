@@ -4952,6 +4952,10 @@ while True:
                 "full": True,
                 "legend": {"tokenTypes": ["variable", "function"], "tokenModifiers": []},
             },
+            "signatureHelpProvider": {"triggerCharacters": ["(", ","]},
+            "referencesProvider": True,
+            "documentHighlightProvider": True,
+            "renameProvider": {"prepareProvider": True},
         }}})
         # Ask for every file change; the editor must report externally created
         # files through workspace/didChangeWatchedFiles.
@@ -4985,6 +4989,17 @@ while True:
         }})
     elif method == "textDocument/hover":
         send({"jsonrpc": "2.0", "id": request_id, "result": {"contents": {"kind": "markdown", "value": "lsp hover card\n\nUse `struct` inline.\n\n```rust\nfn main() {}\n```"}}})
+    elif method == "textDocument/signatureHelp":
+        send({"jsonrpc": "2.0", "id": request_id, "result": {
+            "signatures": [{
+                "label": "func clamp(value: Variant, min: Variant, max: Variant) -> Variant",
+                "documentation": {"kind": "markdown", "value": "Clamp the value.\n\nMore docs."},
+                "parameters": [{"label": "value: Variant"}, {"label": "min: Variant"},
+                               {"label": "max: Variant"}],
+            }],
+            "activeSignature": 0,
+            "activeParameter": 1,
+        }})
     elif method == "textDocument/completion":
         items = [{"label": "completion_item", "detail": "fake"}]
         items += [{"label": "filler_%d" % i, "insertText": "filler_%d" % i} for i in range(300)]
@@ -5593,6 +5608,52 @@ fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
     }
     harness.app.state_mut().lsp.dismiss_transient();
     harness.frame()?;
+
+    // -- signature help -------------------------------------------------
+    // Typing `(` in an argument list asks the server for the signature; the
+    // active parameter is painted with the accent color.
+    {
+        let mut state = harness.app.state_mut();
+        let doc = state.ws.active_doc_mut().expect("active document");
+        let end = doc.text().len();
+        doc.set_caret(end);
+    }
+    harness.type_text("\ncall(");
+    for _ in 0..100 {
+        harness.frame()?;
+        if harness.app.state().lsp.signature_help.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let frame = harness.frame()?;
+    {
+        let state = harness.app.state();
+        if state.lsp.signature_help.is_none() {
+            return Err(format!(
+                "typing `(` did not request signature help (status {:?})",
+                state.lsp.status()
+            ));
+        }
+        let theme = state.theme;
+        if !texts(&frame).iter().any(|text| text.contains("clamp")) {
+            return Err("signature help did not paint the signature".into());
+        }
+        if !draw_text_has_color(&frame, "min: Variant", theme.p.accent.to_rgba8()) {
+            return Err("signature help did not highlight the active parameter".into());
+        }
+        if !texts(&frame)
+            .iter()
+            .any(|text| text.contains("Clamp the value."))
+        {
+            return Err("signature help did not paint its documentation".into());
+        }
+    }
+    harness.key(Key::Escape);
+    harness.frame()?;
+    if harness.app.state().lsp.signature_help.is_some() {
+        return Err("Escape did not dismiss signature help".into());
+    }
 
     // Embedded Godot docs are a normal read-only editor tab.
     {

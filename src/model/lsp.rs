@@ -188,6 +188,44 @@ pub struct CompletionUi {
     pub native: Option<NativeTarget>,
 }
 
+/// One candidate from `textDocument/signatureHelp`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Signature {
+    /// Display label (`func clamp(value: Variant, min: Variant, …)`).
+    pub label: String,
+    pub documentation: Option<String>,
+    /// Parameter spans as byte offsets into [`label`], for the active highlight.
+    pub parameters: Vec<(usize, usize)>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SignatureHelpUi {
+    pub signatures: Vec<Signature>,
+    pub active_signature: usize,
+    pub active_parameter: usize,
+}
+
+impl SignatureHelpUi {
+    pub fn active(&self) -> Option<&Signature> {
+        self.signatures.get(
+            self.active_signature
+                .min(self.signatures.len().saturating_sub(1)),
+        )
+    }
+
+    /// Byte span of the active parameter in the active signature's label.
+    pub fn active_span(&self) -> Option<(usize, usize)> {
+        let signature = self.active()?;
+        if signature.parameters.is_empty() {
+            return None;
+        }
+        let index = self
+            .active_parameter
+            .min(signature.parameters.len().saturating_sub(1));
+        signature.parameters.get(index).copied()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Location {
     pub path: PathBuf,
@@ -202,6 +240,7 @@ enum PendingKind {
     HoverDocs,
     Completion,
     CompletionResolve { index: usize },
+    SignatureHelp,
     Definition,
     NativeSymbol { class: String, symbol: String },
     Semantic(PathBuf),
@@ -891,6 +930,7 @@ impl Session {
                 PendingKind::Hover
                     | PendingKind::Completion
                     | PendingKind::CompletionResolve { .. }
+                    | PendingKind::SignatureHelp
             )
         });
     }
@@ -1345,6 +1385,7 @@ pub struct LspController {
     pub completion_doc_hit: igui_core::Rect,
     pub completion: Option<CompletionUi>,
     completion_prefix: String,
+    pub signature_help: Option<SignatureHelpUi>,
     native_docs_target: Option<NativeTarget>,
     location: Option<Location>,
     native_result: Option<(String, String, NativeSymbol)>,
@@ -1380,6 +1421,7 @@ impl Default for LspController {
             completion_doc_hit: igui_core::Rect::ZERO,
             completion: None,
             completion_prefix: String::new(),
+            signature_help: None,
             native_docs_target: None,
             location: None,
             native_result: None,
@@ -1516,6 +1558,7 @@ impl LspController {
         self.completion_doc_hit = igui_core::Rect::ZERO;
         self.completion = None;
         self.completion_prefix.clear();
+        self.signature_help = None;
         self.native_docs_target = None;
         self.location = None;
         self.native_result = None;
@@ -1954,6 +1997,12 @@ impl LspController {
                     }
                 }
             }
+            PendingKind::SignatureHelp => {
+                if is_active {
+                    self.signature_help = parse_signature_help(&result);
+                    self.changed = true;
+                }
+            }
             PendingKind::Definition => {
                 if is_active {
                     self.location = parse_location(&result);
@@ -2068,6 +2117,28 @@ impl LspController {
         }
         self.completion_prefix = completion_prefix(doc);
         self.send_position("textDocument/completion", PendingKind::Completion, doc)
+    }
+
+    /// Asks for the call signature around the caret. The request is only made
+    /// when the server advertised `signatureHelpProvider`.
+    pub fn request_signature_help(&mut self, doc: &Document) -> bool {
+        {
+            let Some(session) = self.active_session_mut() else {
+                return false;
+            };
+            if !session.capabilities.signature_help || session.status != LspStatus::Ready {
+                return false;
+            }
+            // A newer caret position wins over an in-flight request.
+            session
+                .pending
+                .retain(|_, (kind, _)| !matches!(kind, PendingKind::SignatureHelp));
+        }
+        self.send_position(
+            "textDocument/signatureHelp",
+            PendingKind::SignatureHelp,
+            doc,
+        )
     }
 
     pub fn request_definition(&mut self, doc: &Document) -> bool {
@@ -2938,6 +3009,64 @@ fn completion_documentation(result: &Value) -> Option<String> {
     (!text.trim().is_empty()).then_some(text)
 }
 
+fn parse_signature_help(result: &Value) -> Option<SignatureHelpUi> {
+    let items = result["signatures"].as_array()?;
+    let mut signatures = Vec::new();
+    for item in items.iter().take(8) {
+        let Some(label) = item["label"].as_str().filter(|label| !label.is_empty()) else {
+            continue;
+        };
+        let mut parameters = Vec::new();
+        if let Some(items) = item["parameters"].as_array() {
+            for parameter in items.iter().take(64) {
+                let span = match &parameter["label"] {
+                    Value::String(text) => {
+                        label.find(text).map(|start| (start, start + text.len()))
+                    }
+                    Value::Array(range) if range.len() == 2 => {
+                        let mut start = range[0].as_u64().unwrap_or(0) as usize;
+                        let mut end = range[1].as_u64().unwrap_or(0) as usize;
+                        start = start.min(label.len());
+                        end = end.min(label.len());
+                        while start > 0 && !label.is_char_boundary(start) {
+                            start -= 1;
+                        }
+                        while end > 0 && !label.is_char_boundary(end) {
+                            end -= 1;
+                        }
+                        (start < end).then_some((start, end))
+                    }
+                    _ => None,
+                };
+                if let Some(span) = span {
+                    parameters.push(span);
+                }
+            }
+        }
+        signatures.push(Signature {
+            label: label.to_string(),
+            documentation: completion_documentation(item),
+            parameters,
+        });
+    }
+    if signatures.is_empty() {
+        return None;
+    }
+    let active_signature =
+        (result["activeSignature"].as_u64().unwrap_or(0) as usize).min(signatures.len() - 1);
+    let active_parameter = if signatures[active_signature].parameters.is_empty() {
+        0
+    } else {
+        (result["activeParameter"].as_u64().unwrap_or(0) as usize)
+            .min(signatures[active_signature].parameters.len() - 1)
+    };
+    Some(SignatureHelpUi {
+        signatures,
+        active_signature,
+        active_parameter,
+    })
+}
+
 fn parse_completions(result: &Value, prefix: &str) -> Vec<CompletionItem> {
     let items = result
         .as_array()
@@ -3778,6 +3907,35 @@ mod tests {
         let caps = server_capabilities(&json!({"capabilities": {"renameProvider": true}}), "rust");
         assert!(caps.rename && !caps.prepare_rename);
         assert!(!caps.signature_help && !caps.references && !caps.document_highlight);
+    }
+
+    #[test]
+    fn parses_signature_help_labels_and_active_parameter() {
+        let result = json!({
+            "signatures": [{
+                "label": "func clamp(value: Variant, min: Variant, max: Variant) -> Variant",
+                "documentation": {"kind": "markdown", "value": "Clamp docs."},
+                "parameters": [
+                    {"label": "value: Variant"},
+                    {"label": [27, 39]},
+                ],
+            }],
+            "activeSignature": 4,
+            "activeParameter": 1,
+        });
+        let help = parse_signature_help(&result).expect("signature help");
+        assert_eq!(help.signatures.len(), 1);
+        assert_eq!(help.active_signature, 0);
+        assert_eq!(help.active_parameter, 1);
+        let signature = help.active().unwrap();
+        assert_eq!(
+            &signature.label[help.active_span().unwrap().0..help.active_span().unwrap().1],
+            "min: Variant"
+        );
+        assert_eq!(signature.documentation.as_deref(), Some("Clamp docs."));
+
+        assert!(parse_signature_help(&json!(null)).is_none());
+        assert!(parse_signature_help(&json!({"signatures": []})).is_none());
     }
 
     #[test]

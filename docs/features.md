@@ -146,7 +146,10 @@ diagnostics/semantic tokens/outline. The same switch is the
 - Optional LSP features are read from the `initialize` result and gated per
   server (`signatureHelpProvider`, `referencesProvider`,
   `documentHighlightProvider`, `renameProvider`). An older server simply gets a
-  status line instead of a `Method not found` round trip.
+  status line instead of a `Method not found` round trip. Signature help is
+  requested on `(` and `,` (and refreshed while typing inside the call): the
+  active parameter is highlighted and the first documentation line is shown
+  under the signature. `)` or `Esc` dismisses it.
 - When a hover is a Godot native class or member, the card shows **OPEN GODOT
   DOCS**; clicking it opens a **read-only editor tab** backed by Godot's
   `textDocument/nativeSymbol` response. The tab uses the normal file-tab strip,

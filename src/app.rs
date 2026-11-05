@@ -347,6 +347,7 @@ impl EditorApp {
         self.state.borrow_mut().tick_git();
         self.state.borrow_mut().tick_lsp();
         self.state.borrow_mut().tick_auto_completion();
+        self.state.borrow_mut().tick_signature_help();
         self.state.borrow_mut().tick_hover();
         self.state.borrow_mut().tick_terminal();
         self.state.borrow_mut().tick_reliability();
@@ -541,8 +542,13 @@ impl EditorApp {
                     return EventResult::Handled;
                 }
                 let lsp_chip = state.lsp_hit.contains(*position);
-                if !lsp_chip && (state.lsp.hover.is_some() || state.lsp.completion.is_some()) {
+                if !lsp_chip
+                    && (state.lsp.hover.is_some()
+                        || state.lsp.completion.is_some()
+                        || state.lsp.signature_help.is_some())
+                {
                     state.lsp.dismiss_transient();
+                    state.clear_signature_help();
                     state.dirty = true;
                     if !definition_click {
                         return EventResult::Handled;
@@ -976,6 +982,10 @@ impl EditorApp {
                     state.dirty = true;
                     return EventResult::Handled;
                 }
+                if *key == Key::Escape && state.lsp.signature_help.is_some() {
+                    state.clear_signature_help();
+                    return EventResult::Handled;
+                }
                 if state.focus == Focus::Editor
                     && !modifiers.meta
                     && !modifiers.ctrl
@@ -1162,6 +1172,7 @@ impl EditorApp {
                     state.focus = Focus::Editor;
                 }
                 state.schedule_auto_completion(text);
+                state.schedule_signature_help(text);
                 drop(state);
                 igui_ui::route_input(&mut self.tree, event)
             }

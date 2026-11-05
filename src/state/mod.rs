@@ -1188,6 +1188,10 @@ pub struct AppState {
     pub hover_leave_at: Option<Instant>,
     /// Debounced auto-completion activation while typing.
     pub auto_completion_at: Option<Instant>,
+    /// Pending signature-help request (trigger characters or an edit refresh).
+    pub signature_help_at: Option<Instant>,
+    /// Document/revision/caret the visible signature help belongs to.
+    pub signature_help_doc: Option<(u64, u64, usize)>,
     pub editor: EditorUi,
     pub tabs: TabsUi,
     pub tab_drag: Option<TabDrag>,
@@ -1374,6 +1378,8 @@ impl AppState {
             hover_target: None,
             hover_leave_at: None,
             auto_completion_at: None,
+            signature_help_at: None,
+            signature_help_doc: None,
             editor: EditorUi {
                 reveal: true,
                 wrap: crate::model::wrap::WrapLayout::default(),

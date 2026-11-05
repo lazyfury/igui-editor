@@ -30,6 +30,31 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
     } else if state.lsp.hover.is_some() {
         paint_hover(state, measurer, ctx);
     }
+    if state.lsp.signature_help.is_some() {
+        paint_signature_help(state, measurer, ctx);
+    }
+}
+
+/// Completion panel geometry, shared by its painter and the signature-help
+/// card (which sits under it instead of on top of it).
+fn completion_panel_rect(state: &AppState) -> Option<Rect> {
+    let completion = state.lsp.completion.as_ref()?;
+    let rows = completion.items.len().min(COMPLETION_MAX_ROWS);
+    if rows == 0 {
+        return None;
+    }
+    let viewport = state.viewport.logical_rect();
+    let width = COMPLETION_W.min(viewport.width() - 32.0);
+    let height = 10.0 + rows as f32 * COMPLETION_ROW_H + 28.0;
+    let caret = state.editor.caret_rect;
+    let mut origin = Vec2::new(caret.right() + 4.0, caret.bottom() + 4.0);
+    if origin.x + width > viewport.right() - 8.0 {
+        origin.x = (viewport.right() - width - 8.0).max(viewport.left() + 8.0);
+    }
+    if origin.y + height > viewport.bottom() - 8.0 {
+        origin.y = (caret.top() - height - 4.0).max(viewport.top() + 8.0);
+    }
+    Some(Rect::from_min_size(origin, Size::new(width, height)))
 }
 
 /// One display line in a hover card. Fenced code keeps its syntax tokens so
@@ -525,32 +550,20 @@ fn paint_completion(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut
     let Some(completion) = state.lsp.completion.as_ref() else {
         return;
     };
+    let Some(panel) = completion_panel_rect(state) else {
+        return;
+    };
     let theme = state.theme;
     let m = theme.m;
     let p = theme.p;
-    let viewport = state.viewport.logical_rect();
     let font = m.font_small;
-    let rows = completion.items.len().min(COMPLETION_MAX_ROWS);
-    if rows == 0 {
-        return;
-    }
-    let width = COMPLETION_W.min(viewport.width() - 32.0);
-    let height = 10.0 + rows as f32 * COMPLETION_ROW_H + 28.0;
-    let caret = state.editor.caret_rect;
-    let mut origin = Vec2::new(caret.right() + 4.0, caret.bottom() + 4.0);
-    if origin.x + width > viewport.right() - 8.0 {
-        origin.x = (viewport.right() - width - 8.0).max(viewport.left() + 8.0);
-    }
-    if origin.y + height > viewport.bottom() - 8.0 {
-        origin.y = (caret.top() - height - 4.0).max(viewport.top() + 8.0);
-    }
-    let panel = Rect::from_min_size(origin, Size::new(width, height));
+    let viewport = state.viewport.logical_rect();
+    let selected = completion.selected.min(completion.items.len() - 1);
     kit::fill(ctx, panel, p.raised);
     ctx.stroke_rect(panel, 1.0, p.border);
     kit::hline(ctx, panel.left(), panel.right(), panel.top(), p.accent);
 
     let mut first = 0usize;
-    let selected = completion.selected.min(completion.items.len() - 1);
     if selected >= COMPLETION_MAX_ROWS {
         first = selected + 1 - COMPLETION_MAX_ROWS;
     }
@@ -626,6 +639,97 @@ fn paint_completion(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut
         p.faint,
     );
     paint_completion_preview(state, measurer, ctx, panel, viewport);
+}
+
+fn paint_signature_help(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintContext) {
+    let Some(help) = state.lsp.signature_help.as_ref() else {
+        return;
+    };
+    let Some(signature) = help.active() else {
+        return;
+    };
+    let theme = state.theme;
+    let m = theme.m;
+    let p = theme.p;
+    let font = m.font_ui;
+    let label = signature.label.as_str();
+    let documentation = signature.documentation.as_deref().and_then(|text| {
+        text.lines()
+            .map(|line| clean_inline(line.trim()))
+            .find(|line| !line.is_empty() && line != label)
+    });
+    let count = help.signatures.len() > 1;
+    let viewport = state.viewport.logical_rect();
+    let width = (kit::width(measurer, label, font) + 40.0)
+        .clamp(260.0, 620.0)
+        .min(viewport.width() - 32.0)
+        .max(240.0);
+    let height = if documentation.is_some() { 54.0 } else { 36.0 };
+    let caret = state.editor.caret_rect;
+    let mut origin = completion_panel_rect(state).map_or_else(
+        || Vec2::new(caret.left(), caret.bottom() + 4.0),
+        |panel| Vec2::new(panel.left(), panel.bottom() + 6.0),
+    );
+    if origin.x + width > viewport.right() - 8.0 {
+        origin.x = (viewport.right() - width - 8.0).max(viewport.left() + 8.0);
+    }
+    if origin.y + height > viewport.bottom() - 8.0 {
+        origin.y = (caret.top() - height - 4.0).max(viewport.top() + 8.0);
+    }
+    let panel = Rect::from_min_size(origin, Size::new(width, height));
+    kit::fill(ctx, panel, p.raised);
+    ctx.stroke_rect(panel, 1.0, p.border);
+    kit::hline(ctx, panel.left(), panel.right(), panel.top(), p.accent);
+
+    let reserved = if count { 44.0 } else { 0.0 };
+    let shown = kit::truncate(measurer, label, font, panel.width() - 20.0 - reserved);
+    let line_rect = Rect::from_min_size(
+        Vec2::new(panel.left() + 10.0, panel.top() + 4.0),
+        Size::new(panel.width() - 20.0, 22.0),
+    );
+    let baseline = kit::baseline(measurer, line_rect, font);
+    let mut x = line_rect.left();
+    let mut cursor = 0usize;
+    if let Some((start, end)) = help.active_span() {
+        let start = start.min(shown.len());
+        let end = end.min(shown.len()).max(start);
+        if start > cursor {
+            kit::text(ctx, &shown[cursor..start], x, baseline, font, p.text);
+            x += kit::width(measurer, &shown[cursor..start], font);
+        }
+        if end > start {
+            kit::text(ctx, &shown[start..end], x, baseline, font, p.accent);
+            x += kit::width(measurer, &shown[start..end], font);
+        }
+        cursor = end;
+    }
+    if cursor < shown.len() {
+        kit::text(ctx, &shown[cursor..], x, baseline, font, p.text);
+    }
+
+    if let Some(documentation) = documentation {
+        let doc = kit::truncate(measurer, &documentation, m.font_small, panel.width() - 20.0);
+        kit::text(
+            ctx,
+            &doc,
+            panel.left() + 10.0,
+            panel.top() + 32.0,
+            m.font_small,
+            p.faint,
+        );
+    }
+    if count {
+        let index = help.active_signature.min(help.signatures.len() - 1) + 1;
+        kit::text_right(
+            ctx,
+            measurer,
+            &format!("{index}/{}", help.signatures.len()),
+            panel.right() - 10.0,
+            baseline,
+            m.font_small,
+            p.faint,
+        );
+    }
 }
 
 fn paint_completion_preview(

@@ -396,6 +396,76 @@ impl AppState {
         self.auto_completion_at.is_some()
     }
 
+    /// Schedules signature help for a call argument trigger, and refreshes a
+    /// visible card while the user keeps typing inside the call.
+    pub fn schedule_signature_help(&mut self, text: &str) {
+        if self.focus != Focus::Editor || self.modal.is_some() {
+            return;
+        }
+        let Some(last) = text.chars().last() else {
+            return;
+        };
+        if self.ws.active_doc().is_some_and(|doc| doc.is_read_only()) {
+            return;
+        }
+        if last == ')' {
+            self.clear_signature_help();
+            return;
+        }
+        if !matches!(last, '(' | ',') {
+            if self.lsp.signature_help.is_some()
+                && (last.is_ascii_alphanumeric() || matches!(last, '_' | '.' | ' ' | '"' | '\''))
+            {
+                self.signature_help_at = Some(Instant::now() + Duration::from_millis(140));
+            }
+            return;
+        }
+        if self.lsp.capabilities().signature_help {
+            self.signature_help_at = Some(Instant::now());
+        }
+    }
+
+    pub(crate) fn clear_signature_help(&mut self) {
+        self.signature_help_at = None;
+        self.signature_help_doc = None;
+        if self.lsp.signature_help.take().is_some() {
+            self.dirty = true;
+        }
+    }
+
+    /// Fires the pending signature-help request and drops a card that belongs
+    /// to a document the editor is no longer showing.
+    pub fn tick_signature_help(&mut self) {
+        let active_id = self.ws.active_doc().map(|doc| doc.id());
+        if let Some((doc_id, _, _)) = self.signature_help_doc {
+            if Some(doc_id) != active_id {
+                self.clear_signature_help();
+                return;
+            }
+        }
+        let Some(at) = self.signature_help_at else {
+            return;
+        };
+        if Instant::now() < at {
+            return;
+        }
+        self.signature_help_at = None;
+        if self.focus != Focus::Editor || self.modal.is_some() {
+            return;
+        }
+        let Some(doc) = self.ws.active_doc() else {
+            return;
+        };
+        if doc.is_read_only() || !self.lsp.capabilities().signature_help {
+            return;
+        }
+        let key = (doc.id(), doc.rev(), doc.caret());
+        if self.lsp.request_signature_help(doc) {
+            self.signature_help_doc = Some(key);
+            self.dirty = true;
+        }
+    }
+
     /// Fires the debounced completion request without surfacing "no LSP"
     /// errors while the user is merely typing.
     pub fn tick_auto_completion(&mut self) {
