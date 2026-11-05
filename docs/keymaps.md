@@ -87,19 +87,29 @@ Keep the existing `Action` as the first command set, then split it into stable
 command ids:
 
 ```text
-file.save, file.saveAs, file.open, file.openProject (alias file.openFolder),
-file.closeProject (alias file.closeFolder), file.closeTab
+file.new, file.newFile, file.open, file.openFolder (alias file.openProject),
+file.closeFolder (alias file.closeProject), file.save, file.saveAs, file.closeTab,
+file.clearRecent
 edit.undo, edit.redo, edit.cut, edit.copy, edit.paste, edit.selectAll,
-edit.selectNextOccurrence
-edit.cutLine, edit.copyLine, edit.deleteLine, edit.duplicateLine
-edit.moveLineUp, edit.moveLineDown, edit.toggleComment, editor.format
-motion.left, motion.right, motion.wordLeft, motion.wordRight
+edit.selectNextOccurrence, edit.deleteLine, edit.duplicateLine, edit.moveLineUp,
+edit.moveLineDown, edit.deleteWordBackward, edit.deleteWordForward,
+edit.toggleComment, editor.format
 motion.lineStart, motion.lineEnd, motion.docStart, motion.docEnd
-editor.find, editor.findNext, editor.findPrevious
-view.split, view.preview, view.softWrap, view.sidebar, view.explorer, view.git,
-view.outline, view.terminal, view.problems
+find.find, find.replace, find.next, find.previous
+quickOpen, projectSearch, settings
+view.edit, view.split, view.preview, view.cycle, view.softWrap, view.sidebar,
+view.scrollSync, view.theme, view.explorer, view.git, view.outline, view.terminal,
+view.problems
+panel.terminal, panel.outline
+language.auto
 lsp.hover, lsp.completion, lsp.definition, lsp.references, lsp.rename, lsp.restart
+tabs.next, tabs.previous, tabs.select1 … tabs.select9
 ```
+
+Short aliases (`new`, `open`, `save`, `undo`, `redo`, `cut`, `copy`, `paste`,
+`selectAll`, `selectNextOccurrence`, `deleteLine`, `duplicateLine`,
+`moveLineUp`, `moveLineDown`, `deleteWordBackward`, `deleteWordForward`,
+`toggleComment`) stay accepted for user overrides.
 
 A command carries metadata used by menus, settings and conflict reporting:
 `id`, `label`, `available(context)`, `checked(state)`, optional platform
@@ -213,9 +223,9 @@ schema:
 
 ## Implementation status
 
-1. **Inventory + command ids** — done in `keymap.rs` and the expanded `Action`
-   set; global and editor keys route through it, with the old input fallback
-   removed.
+1. **Inventory + command ids** — done: `Action` is the command set and
+   `src/state/commands.rs` is the canonical id table; global and editor keys
+   route through it, with the old input fallback removed.
 2. **Resolver + VS Code profile** — done; tests cover primary/Cmd/Ctrl,
    profile bindings and user overrides.
 3. **Settings/session** — done: Keymap row, session `keymap=`, and
@@ -242,8 +252,8 @@ schema:
 }
 ```
 
-Null unbinds a chord. Known command ids are listed in `action_from_id` in
-`src/keymap.rs`; unknown ids are ignored. The file is read once at startup;
+Null unbinds a chord. Known command ids are listed in `COMMANDS` in
+`src/state/commands.rs`; unknown ids are ignored. The file is read once at startup;
 changing the profile re-applies it synchronously.
 
 ## Test plan

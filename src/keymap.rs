@@ -497,7 +497,7 @@ impl Keymap {
                 let Some(id) = action.as_str() else {
                     continue;
                 };
-                if let Some(action) = action_from_id(id) {
+                if let Some(action) = Action::from_id(id) {
                     self.bindings.push(Binding {
                         scope,
                         sequence,
@@ -561,75 +561,6 @@ impl Keymap {
                 .join(" "),
         )
     }
-}
-
-/// Stable ids accepted by `keymaps.json`; they mirror the command names used in
-/// `docs/keymaps.md`. A user only needs the subset they override.
-fn action_from_id(id: &str) -> Option<Action> {
-    Some(match id {
-        "file.new" | "new" => Action::New,
-        "file.newFile" => Action::NewFile,
-        "file.open" | "open" => Action::Open,
-        "file.openFolder" | "file.openProject" => Action::OpenFolder,
-        "file.closeFolder" | "file.closeProject" => Action::CloseFolder,
-        "file.save" | "save" => Action::Save,
-        "file.saveAs" => Action::SaveAs,
-        "file.closeTab" => Action::CloseTab,
-        "edit.undo" | "undo" => Action::Undo,
-        "edit.redo" | "redo" => Action::Redo,
-        "edit.cut" | "cut" => Action::Cut,
-        "edit.copy" | "copy" => Action::Copy,
-        "edit.paste" | "paste" => Action::Paste,
-        "edit.selectAll" | "selectAll" => Action::SelectAll,
-        "edit.selectNextOccurrence" | "selectNextOccurrence" => Action::SelectNextOccurrence,
-        "edit.deleteLine" | "deleteLine" => Action::DeleteLine,
-        "edit.duplicateLine" | "duplicateLine" => Action::DuplicateLine,
-        "edit.moveLineUp" | "moveLineUp" => Action::MoveLineUp,
-        "edit.moveLineDown" | "moveLineDown" => Action::MoveLineDown,
-        "edit.deleteWordBackward" | "deleteWordBackward" => Action::DeleteWordBackward,
-        "edit.deleteWordForward" | "deleteWordForward" => Action::DeleteWordForward,
-        "edit.toggleComment" | "toggleComment" => Action::ToggleComment,
-        "motion.lineStart" => Action::MoveLineStart(false),
-        "motion.lineEnd" => Action::MoveLineEnd(false),
-        "motion.docStart" => Action::MoveDocStart(false),
-        "motion.docEnd" => Action::MoveDocEnd(false),
-        "editor.format" => Action::FormatDocument,
-        "find.find" => Action::Find,
-        "find.replace" => Action::FindReplace,
-        "find.next" => Action::FindNext,
-        "find.previous" => Action::FindPrevious,
-        "quickOpen" => Action::QuickOpen,
-        "projectSearch" => Action::ProjectSearch,
-        "view.cycle" => Action::CycleView,
-        "view.sidebar" => Action::ToggleSidebar,
-        "view.explorer" => Action::ShowPanel(Panel::Explorer),
-        "view.git" => Action::ShowPanel(Panel::Git),
-        "view.outline" => Action::ToggleOutline,
-        "view.theme" => Action::ToggleTheme,
-        "view.scrollSync" => Action::ToggleScrollSync,
-        "view.softWrap" => Action::ToggleSoftWrap,
-        "view.terminal" => Action::ToggleTerminal,
-        "view.problems" => Action::ShowPanel(Panel::Problems),
-        "settings" => Action::Settings,
-        "lsp.hover" => Action::LspHover,
-        "lsp.completion" => Action::LspCompletion,
-        "lsp.definition" => Action::LspDefinition,
-        "lsp.references" => Action::LspReferences,
-        "lsp.rename" => Action::LspRename,
-        "lsp.restart" => Action::LspRestart,
-        "tabs.next" => Action::NextTab,
-        "tabs.previous" => Action::PreviousTab,
-        "tabs.select1" => Action::SelectTab(1),
-        "tabs.select2" => Action::SelectTab(2),
-        "tabs.select3" => Action::SelectTab(3),
-        "tabs.select4" => Action::SelectTab(4),
-        "tabs.select5" => Action::SelectTab(5),
-        "tabs.select6" => Action::SelectTab(6),
-        "tabs.select7" => Action::SelectTab(7),
-        "tabs.select8" => Action::SelectTab(8),
-        "tabs.select9" => Action::SelectTab(9),
-        _ => return None,
-    })
 }
 
 fn applies(binding: Scope, requested: Scope) -> bool {

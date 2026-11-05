@@ -46,6 +46,7 @@ pub(crate) mod schedule;
 // in this module; each child owns one concern so no single file becomes a god
 // object. Fields remain private to `state`, which child modules may access.
 mod actions;
+mod commands;
 mod dock;
 mod files;
 mod find;

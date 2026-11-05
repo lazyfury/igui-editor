@@ -162,6 +162,21 @@ the explicit path only.
 
 ### 2.1 One command table (F7, prerequisite for 3.6)
 
+Status: **2.1a landed; 2.1b metadata/palette pending.**
+
+2.1a (done): `src/state/commands.rs` holds the canonical id table consumed by
+`Action::id()`/`Action::from_id()`; `keymap::apply_overrides` resolves through
+it. Every id the old `keymap::action_from_id` accepted still maps to the same
+`Action`, including the `view.terminal` → `ToggleTerminal` and `view.outline` →
+`ToggleOutline` collisions. The header-panel actions gained distinct
+`panel.terminal`/`panel.outline` ids. No binding, label, enabled predicate or
+dispatch changed.
+
+2.1b (pending): add label, menu category and enabled predicate columns; derive
+menu labels/hints and the palette from the table. The palette itself is 3.6.
+
+The original scope follows.
+
 Files: `src/state/mod.rs` (extract), `src/state/commands.rs` (new),
 `src/keymap.rs`, `src/ui/menu.rs`.
 
@@ -351,7 +366,7 @@ the palette; selfcheck covers open/filter/run/escape.
 | Session 4 | 1.1 Tab restore | done | Tabs no longer capped by `MAX_RECENT` (parse/render/`set_tabs`); recents stay at 8. 2 new session tests, gate green: 358 unit + 2 doc tests, selfcheck. |
 | Session 4 | 1.2 Quick Open | done | Step A: the palette reuses the index for the same root; the walk uses `file_type()` with a symlink `metadata()` fallback. Step B: `IndexWorker` builds the index on one std thread and `quick_open_tick` installs it only for the current root; the palette paints an `indexing project files…` placeholder, `needs_frame` polls while busy, structural changes and project switches drop the worker, and `refresh_quick_open` never builds. 2 new tests (worker round-trip, stale-root discard) plus the updated reuse/worker state tests; selfcheck settles the worker before ranking. Gate green: 368 unit + 2 doc tests, selfcheck. |
 | Session 4 | 1.3 Autosave | done | Autosave writes verbatim through `Document::save_verbatim` (no tidy, no undo step); failures keep the tab dirty and show an error. 4 new tests (2 doc, 2 state). Gate green: 366 unit + 2 doc tests, selfcheck. |
-| Session 4 | 2.1 Command table | pending | Keystone for 3.6. |
+| Session 4 | 2.1 Command table | partial | 2.1a id table landed; 2.1b metadata/palette pending. `src/state/commands.rs` is the single canonical id table; `Action::id`/`Action::from_id` read it and `keymap::apply_overrides` delegates. Old ids/aliases and the `view.terminal`/`view.outline`/`view.problems` mappings are preserved; new ids: `view.edit`/`view.split`/`view.preview`, `tabs.select1..9`, `file.clearRecent`, `language.auto`, and `panel.terminal`/`panel.outline` for the header-panel actions. 5 new tests (id uniqueness/round-trip, aliases, legacy regression list, header collisions, dynamic actions). Gate green: 376 unit + 2 doc tests, selfcheck. |
 | Session 4 | 2.2 `pub(crate)` | done | All 107 `AppState` fields are `pub(crate)`; no field name/type/order, `new` or method changed, so behavior is unchanged. The narrowing removed the `pub`-field reachability chain that had masked dead code and exposed 11 unused items (model helpers, service-manifest metadata, three overlay fields); they keep their shape with a targeted `#[expect(dead_code, …)]` (three gated by `cfg_attr(not(test), …)` because only tests use them). UI state structs keep `pub` fields; that split follows 2.1. Gate green: 371 unit + 2 doc tests, selfcheck. |
 | Session 4 | 2.3 State pruning | done | `close_tab_now` calls one `forget_document` helper (`doc_views`, `doc_revs`, `language_by_id`, `recovery`, `external`); `reset_project_state` reuses it and `delete_path_now` drops path/folder stamps. `language_by_path` still outlives the tab. 3 new state tests. Gate green: 371 unit + 2 doc tests, selfcheck. |
 | Session 4 | 3.1 Markdown outline | pending | |
