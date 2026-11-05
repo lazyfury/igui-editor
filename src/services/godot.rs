@@ -158,13 +158,13 @@ fn settings_dirs() -> Vec<std::path::PathBuf> {
 /// installs and tests). Otherwise the newest `editor_settings-<version>.tres`
 /// in the platform settings directory wins.
 pub fn discover_lsp_port() -> Option<u16> {
-    if let Some(path) = std::env::var_os("IGUI_EDITOR_GODOT_SETTINGS")
-        .map(std::path::PathBuf::from)
-        .filter(|path| path.is_file())
+    if let Some(path) = std::env::var_os("IGUI_EDITOR_GODOT_SETTINGS").map(std::path::PathBuf::from)
     {
-        if let Ok(text) = std::fs::read_to_string(path) {
-            return lsp_port_from_settings(&text);
-        }
+        // An explicit override wins even when the file is missing: falling
+        // back to the platform directory would ignore the user's intent.
+        return std::fs::read_to_string(path)
+            .ok()
+            .and_then(|text| lsp_port_from_settings(&text));
     }
     settings_dirs()
         .into_iter()

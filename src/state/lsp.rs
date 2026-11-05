@@ -517,12 +517,16 @@ impl AppState {
     /// Fires the pending signature-help request and drops a card that belongs
     /// to a document the editor is no longer showing.
     pub fn tick_signature_help(&mut self) {
-        let active_id = self.ws.active_doc().map(|doc| doc.id());
-        if let Some((doc_id, _, _)) = self.signature_help_doc {
-            if Some(doc_id) != active_id {
+        let active = self.ws.active_doc().map(|doc| (doc.id(), doc.rev()));
+        if let Some((doc_id, rev, _)) = self.signature_help_doc {
+            if active != Some((doc_id, rev)) {
                 self.clear_signature_help();
                 return;
             }
+        }
+        if self.focus != Focus::Editor || self.modal.is_some() {
+            self.clear_signature_help();
+            return;
         }
         let Some(at) = self.signature_help_at else {
             return;
