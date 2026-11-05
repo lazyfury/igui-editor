@@ -69,21 +69,25 @@ vt100 = "0.18"
 # Linux needs the XDG portal backend, macOS/Windows use their system APIs.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = [
+# `objc2-app-kit`/`objc2-foundation` default features enable the entire AppKit
+# surface (~300 modules each); the bridge in `src/macos/` uses a handful. With
+# defaults off, `std` has to be requested explicitly.
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+    "std",
     "NSApplication",
     "NSDocumentController",
+    "NSEvent",
     "NSMenu",
     "NSMenuItem",
-    "NSResponder",
-    "NSWindow",
-    "NSEvent",
     "NSScreen",
+    "NSWindow",
 ] }
-objc2-foundation = { version = "0.3", features = [
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std",
     "NSAppleEventDescriptor",
     "NSAppleEventManager",
     "NSArray",
-    "NSData",
+    "NSGeometry",
     "NSObject",
     "NSString",
     "NSURL",
