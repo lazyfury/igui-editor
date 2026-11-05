@@ -17,6 +17,7 @@
 | `⌘D` / `⌘⌫` (JetBrains) | duplicate / delete the current line |
 | `⌥↑` / `⌥↓` | move the current line up / down (VS Code profile) |
 | `⌘A` | select all |
+| `⌘D` (VS Code) / `⌥J` (JetBrains) | Select Next Occurrence: add the next whole-word match to a multi-site edit ([features.md](features.md) §Select Next Occurrence, [keymaps.md](keymaps.md)) |
 | `⌘P` | Quick Open (fuzzy file picker) |
 | `⇧⌘F` | search in folder |
 | `⌘⌥O` | toggle the right outline panel |

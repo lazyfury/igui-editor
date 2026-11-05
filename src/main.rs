@@ -40,7 +40,7 @@ igui-editor — a compact text/Markdown editor built on igui
   Tab / ⇧Tab 缩进 / 反缩进     ⌘← / ⌘→ 行首 / 行尾     ⌘↑ / ⌘↓ 文档首 / 尾
 
 说明:
-  侧栏点目录展开、点文件打开；标签页的 × 关闭标签（有未保存修改时拒绝关闭）。
+  侧栏点目录展开、点文件打开；标签页的 × 关闭标签（有未保存修改时询问保存 / 放弃 / 取消）。
 ";
 
 fn main() {

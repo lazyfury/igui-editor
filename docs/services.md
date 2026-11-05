@@ -69,7 +69,7 @@ open state, vt100 scrollback, cell selection/copy and multiple shell tabs.
 
 Not exposed: arbitrary git command strings, network/auth UI, libgit2.
 
-## Terminal service (first slice implemented)
+## Terminal service (PTY, tabs, scrollback, selection)
 
 - `portable-pty` + `vt100`; native cell-grid renderer, no WebView/JS.
 - Native children are registered in `model::processes`; `kill_all` runs before
@@ -126,9 +126,11 @@ PluginHost
 
 An `attach` target is tried before anything is spawned: `LspClient::spawn`
 connects with a 250 ms timeout and, on success, never starts a child, so the
-running editor keeps owning the project. Only when nothing listens does the
-declared `command` start. A session reports which mode it used in the status
-bar (`… language server: attached to the running editor` / `started …`).
+running editor keeps owning the project. For servers with a spawnable
+`command`, only when nothing listens does it start; Godot is attach-only and
+never falls back to a spawned server. A session reports which mode it used in
+the status bar (`… language server: attached to the running editor` /
+`started …`).
 
 Repository-local `node_modules/.bin` shims are only considered when
 `IGUI_EDITOR_TRUST_WORKSPACE=1`; the default is PATH plus the user/global
@@ -142,7 +144,7 @@ its own language-server binary.
 | `typescript` | `typescript-language-server --stdio` (`…_TS_SERVER`) | stdio | `package.json`, `tsconfig.json`, `jsconfig.json` | `pnpm-workspace.yaml`, `lerna.json`, `nx.json`, `turbo.json`, `rush.json`, `tsconfig.base.json` |
 | `clangd` | `clangd` (`…_CLANGD`) | stdio | `compile_commands.json`, `CMakeLists.txt`, `.clangd`, `.git` | `.clangd`, `.git` |
 | `python` | `pyright-langserver --stdio` (`…_PYRIGHT`) | stdio | `pyproject.toml`, `setup.py`, `setup.cfg`, `requirements.txt`, `.git` | `pyrightconfig.json` |
-| `gdscript` | Godot editor (`…_GODOT`) | TCP (attach `…_GODOT_LSP`, else spawn) | `project.godot` | — |
+| `gdscript` | — (attach-only; `…_GODOT_LSP` overrides the address) | TCP | `project.godot` | — |
 
 - `language_ids` maps extensions to LSP `languageId`: `.tsx → typescriptreact`,
   `.jsx → javascriptreact`, `.h → c`, `.hpp → cpp`, everything else falls back
@@ -163,15 +165,15 @@ its own language-server binary.
   by path, so background tabs keep their state.
 - **Enable/disable**: `Settings::lsp` (settings row **Language Intelligence** and
   the footer `LSP` dot) stops every child and clears transient state; re-enabling
-  starts the active project lazily. Persisted in the session (format v13).
+  starts the active project lazily. Persisted in the session (format v17).
 - **Missing tools**: a spawn error with `ErrorKind::NotFound` opens the shared
   tooling prompt (`state/tooling.rs` + `ui/tooling.rs`) with the spec's
   `ToolInstall` hint. It offers **COPY COMMAND**, **RETRY** and **CLOSE** only —
   the editor never installs or executes the hint. The same prompt is generic and
   reusable by future native services.
 - **Process**: shell-free `Command` with argument vectors; `stderr` discarded;
-  `PATH` augmented for Finder launches. Godot is launched headless with a fresh
-  loopback port and the client connects on a background thread.
+  `PATH` augmented for Finder launches. Godot is never spawned: the client only
+  attaches to the running editor's loopback port on a background thread.
 - **Sync**: full-text `didOpen`/`didChange`/`didClose`; edits are debounced
   (140 ms) and use LSP UTF-16 positions.
 - **Server requests**: `workspace/configuration`, `workspace/workspaceFolders`,

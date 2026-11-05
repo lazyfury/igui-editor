@@ -209,8 +209,9 @@ are still compile-time (no dylib ABI).
 ### Godot project
 
 Open a project (or any `.gd` file inside it); `.gd` tabs use the GDScript
-syntax provider immediately, and opening one starts Godot's headless language
-server for the nearest `project.godot`. For example:
+syntax provider immediately, and opening one attaches to the language server of
+the **running** Godot editor that has the nearest `project.godot` open. For
+example:
 
 ```bash
 cargo run --release -- "/path/to/godot_project/new_script.gd"

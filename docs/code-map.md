@@ -26,7 +26,7 @@ src/
   services/typescript.rs  built-in TS/JS language-server spec
   services/clang.rs   built-in C/C++ language-server spec (clangd)
   services/python.rs  built-in Python language-server spec (pyright)
-  services/godot.rs   built-in Godot GDScript spec (attach to the running editor, else spawn headless with the rescan profile)
+  services/godot.rs   built-in Godot GDScript spec (attach-only to the running editor; rescan profile)
   model/recovery.rs   crash snapshots (txt + metadata)
   model/replace.rs    replace-in-files planning/apply (conflict + open skip)
   model/fs_tree.rs    lazy sidebar tree (dirs first, visibility filter per session)

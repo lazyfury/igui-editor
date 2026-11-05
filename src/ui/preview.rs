@@ -6,8 +6,8 @@
 //! `(document id, revision, width, theme mode)`, so typing only relayouts when
 //! the document actually changed and a resize/theme switch invalidates it too.
 //!
-//! The pane is display-only in M2: links are styled but do not navigate, images
-//! render as `▢ alt`, tables are not rendered yet (M3).
+//! Links and images remain display-only: links are styled but do not navigate
+//! and images render as `▢ alt`. Tables are rendered with per-column alignment.
 
 use std::cell::RefCell;
 use std::rc::Rc;

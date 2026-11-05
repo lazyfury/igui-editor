@@ -5,9 +5,12 @@ scripts/check.sh                            # fmt + clippy + tests + self-check
 scripts/check.sh --release                  # also builds the shipped binary
 ```
 
-CI (`.github/workflows/check.yml`) checks out this repository plus the `igui`
-engine at tag `v0.6.0` as siblings, installs Rust 1.85 with rustfmt/clippy and
-runs the same `scripts/check.sh` gate on `macos-latest`.
+The local gate is `scripts/check.sh`; run it before every commit. CI automation
+is **not currently checked in** — restoring the macOS gate is deferred and
+tracked in [improvement-plan.md §4.5](improvement-plan.md).
+When restored it must check out this repository plus the `igui` engine at tag
+`v0.6.0` as siblings, install Rust 1.85 with rustfmt/clippy and run the same
+gate on `macos-latest`.
 
 Or individually:
 

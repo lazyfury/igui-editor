@@ -187,7 +187,7 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    metadata snapshot under `<config>/recovery/`, and a startup prompt offers
    Restore All / Discard All. Window size/position and the maximized flag
    persist in the session and are restored on launch. Session format is version
-   13 (`trust_local_servers` stores the local-server trust switch). Saves use temp + fsync + rename
+   17 (`trust_local_servers` stores the local-server trust switch). Saves use temp + fsync + rename
    (remove + rename on Windows) and preserve the file's LF/CRLF style,
    permissions and the undo save point.
 24. **Language packs are data, not code.** `<config>/languages/*.json` packs are
@@ -566,15 +566,15 @@ borderless full-size-content window, simulated traffic lights in the custom
 header, header drag, double-click maximize/restore and native zoom/minimize
 routing; the in-app header menu is hidden on macOS.
 
-**M8/M9 (first slice)** — native service/built-in plugin registry (Git and
-Terminal descriptors), Git status/diff/stage/unstage/commit, native PTY terminal
-with vt100 cell rendering and `⌃\`` toggle. Extension host remains deferred.
+**M8/M9 (done)** — native service/built-in plugin registry (Git and Terminal
+descriptors), Git status/diff/stage/unstage/commit, native PTY terminal with
+vt100 cell rendering and `⌃\`` toggle. Extension host remains deferred.
 
 **M10 (done)** — visible focus states for editor/terminal, Git commit History
 (last 50) and read-only commit detail overlay.
 
-**M11 (in progress)** — terminal horizontal shared handle, persisted height/open,
-IME caret, vim application cursor mode, live PTY repaint, vt100 scrollback,
+**M11 (done)** — terminal horizontal shared handle, persisted height/open, IME
+caret, vim application cursor mode, live PTY repaint, vt100 scrollback,
 inclusive cell selection/copy, multiple shell tabs and a tabbed bottom dock that
 shares one header with the workspace-wide PROBLEMS panel.
 
@@ -590,7 +590,9 @@ undo and incremental preview layout for very large documents.
 - Rope/CRDT: a `String` with a line-start index is enough while files are
   bounded; revisit if large-file work demands it.
 - Syntax trees: highlighting needs coloring, not parsing.
-- Multi-cursor, VCS integration: not planned.
+- Multi-cursor beyond Select Next Occurrence (per-caret or column selection):
+  not planned.
+- Git network/auth operations: owned by the terminal, not a Git integration.
 - An OS filesystem watcher: the visible directories are polled once a second and
   the Explorer refreshes from those snapshots; project search still scans on
   demand.

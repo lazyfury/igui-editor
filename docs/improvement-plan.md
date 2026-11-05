@@ -51,7 +51,7 @@ everything else at the LSP/highlight minimum. History lives in
 
 Cheap, and it unblocks trust in every later doc update.
 
-- [ ] **0.1** Correct stale facts:
+- [x] **0.1** Correct stale facts:
   - `docs/design.md:189` (session v13 → current), `:569` (M8/M9 "first slice"),
     `:576` (M11 "in progress"), `:593` ("VCS integration: not planned").
   - `docs/services.md:127,145,173` (Godot headless spawn) and
@@ -60,11 +60,11 @@ Cheap, and it unblocks trust in every later doc update.
   - `src/main.rs:43` help text ("refuses close" → modal) and
     `src/ui/preview.rs:9` ("tables not rendered").
   - `docs/keys.md`: add Select Next Occurrence (`⌘D` / `Alt+J`).
-- [ ] **0.2** CI decision: either restore
-  `.github/workflows/check.yml` (macOS gate) **and** add a Linux
-  compile + `cargo test` job, or remove the CI claim from
-  `docs/verification.md` and the archived plan. Pick one; do not leave the
-  contradiction.
+- [x] **0.2** CI decision: shipped as **docs-only**. The CI claim was removed
+  from `docs/verification.md`; the deleted `.github/workflows/check.yml` is
+  **not** restored in this task. Restoring the macOS gate and adding a Linux
+  compile + `cargo test` job is deferred to **4.5**; no workflow file is
+  checked in.
 - [x] **0.3** Add `docs/improvement-log.md` to the index and link it from
   [docs/README.md](README.md).
 
@@ -306,8 +306,9 @@ the palette; selfcheck covers open/filter/run/escape.
   surface.
 - **4.4 Markdown extension single source (F12):** `model::markdown::is_markdown_path`
   used by `ViewMode`, `tidy`, syntax and the file-icon table.
-- **4.5 CI:** Linux compile + test job; keep the pinned engine revision in one
-  place and document how to update it.
+- **4.5 CI:** restore the macOS gate and add a Linux compile + test job (no
+  workflow is checked in today); keep the pinned engine revision in one place
+  and document how to update it.
 
 ## Explicitly deferred / not planned
 
@@ -326,7 +327,7 @@ the palette; selfcheck covers open/filter/run/escape.
 |---|---|---|---|
 | Session 4 | Baseline | done | `scripts/check.sh` green (356 unit + 2 doc tests, selfcheck). |
 | Session 4 | 0.3 Index/archive | done | `improvement-log.md` added; plan rewritten for Session 4. |
-| Session 4 | 0.1–0.2 Docs truth | pending | |
+| Session 4 | 0.1–0.2 Docs truth | done | Stale session/M13/Godot-headless/milestone claims corrected in `design.md`, `services.md`, `code-map.md`, `features.md`, `README.md`, `main.rs` help and the `preview.rs` module doc; Select Next Occurrence added to `keys.md`. 0.2 is docs-only: the CI claim is gone, workflow restoration deferred to 4.5. |
 | Session 4 | 1.1 Tab restore | done | Tabs no longer capped by `MAX_RECENT` (parse/render/`set_tabs`); recents stay at 8. 2 new session tests, gate green: 358 unit + 2 doc tests, selfcheck. |
 | Session 4 | 1.2 Quick Open | in progress | Step A done: the palette reuses the index for the same root; the walk uses `file_type()` with a symlink `metadata()` fallback. Step B (background worker) pending. Gate green: 362 unit + 2 doc tests, selfcheck. |
 | Session 4 | 1.3 Autosave | done | Autosave writes verbatim through `Document::save_verbatim` (no tidy, no undo step); failures keep the tab dirty and show an error. 4 new tests (2 doc, 2 state). Gate green: 366 unit + 2 doc tests, selfcheck. |
@@ -339,7 +340,7 @@ the palette; selfcheck covers open/filter/run/escape.
 | Session 4 | 3.4 Explorer keys | pending | |
 | Session 4 | 3.5 Reopen/overflow | pending | |
 | Session 4 | 3.6 Command palette | pending | After 2.1. |
-| Session 4 | 4.x | pending | Deferred. |
+| Session 4 | 4.x | pending | Deferred. 4.5 CI restoration is a separate decision; no workflow file is checked in. |
 
 ## First three commits (ready to start)
 
