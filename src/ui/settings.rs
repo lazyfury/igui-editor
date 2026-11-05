@@ -167,6 +167,8 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
                 Row::IndentGuides => state.settings.indent_guides,
                 Row::AutoPairs => state.settings.auto_pairs,
                 Row::Syntax => state.settings.syntax,
+                Row::Autosave => state.settings.autosave,
+                Row::ImagePreview => state.settings.image_preview,
                 Row::LanguageIntelligence => state.settings.lsp,
                 Row::TrustLocalServers => state.settings.trust_local_servers,
                 Row::HiddenFiles => state.settings.show_hidden,

@@ -15,7 +15,7 @@ use igui_core::{
 use igui_render::PaintContext;
 use igui_scene::SceneTree;
 use igui_ui::{Control, ControlData, TextMeasurer};
-use igui_winit::SharedWindow;
+use igui_winit::{SharedBackend, SharedWindow};
 
 use crate::dialogs::{poll_dialog, DialogFuture, Dialogs};
 use crate::drop::SharedDropTarget;
@@ -344,6 +344,7 @@ impl EditorApp {
         self.analysis_behind = self.state.borrow_mut().tick_analysis();
         self.state.borrow_mut().tick_preview_debounce();
         self.state.borrow_mut().tick_external_changes();
+        self.state.borrow_mut().tick_image_preview();
         self.state.borrow_mut().tick_git();
         self.state.borrow_mut().tick_lsp();
         self.state.borrow_mut().tick_auto_completion();
@@ -1786,7 +1787,24 @@ fn build_shell(tree: &mut SceneTree, state: &Rc<RefCell<AppState>>) -> (NodeId, 
         .ws
         .active_doc()
         .is_some_and(|doc| doc.is_docs_view());
-    let editor = if docs_view {
+    let image_view = state
+        .borrow()
+        .ws
+        .active_doc()
+        .is_some_and(|doc| doc.is_image_view());
+    let editor = if image_view {
+        {
+            let mut state = state.borrow_mut();
+            state.split_editor = None;
+            state.split_preview = None;
+            state.split_dragging = false;
+        }
+        let image = ui::image::build(tree, main, state.clone());
+        kit::flex(tree, image, 1.0, None, 1.0);
+        kit::min_size(tree, image, 0.0, 0.0);
+        state.borrow_mut().content_node = Some(image);
+        Some(image)
+    } else if docs_view {
         {
             let mut state = state.borrow_mut();
             state.split_editor = None;
@@ -1902,6 +1920,7 @@ fn build_shell(tree: &mut SceneTree, state: &Rc<RefCell<AppState>>) -> (NodeId, 
         let mut state = state.borrow_mut();
         state.built_view = view;
         state.built_docs = docs_view;
+        state.built_image = image_view;
         if view == ViewMode::Split {
             state.built_split = state.split_of_active();
         }
@@ -1933,6 +1952,21 @@ impl AppLogic for EditorApp {
         }
         if let Some(drop) = ctx.service::<SharedDropTarget>() {
             self.drop = Some(drop.clone());
+        }
+        if let Some(backend) = ctx.service::<SharedBackend>() {
+            let backend = backend.clone();
+            self.state.borrow_mut().images.set_uploader(Box::new(
+                move |id, width, height, rgba| {
+                    igui_render::RenderBackend::register_texture(
+                        &mut *backend.borrow_mut(),
+                        id,
+                        width,
+                        height,
+                        rgba,
+                    )
+                    .map_err(|error| format!("{error:?}"))
+                },
+            ));
         }
         crate::macos::install_dock();
         self.sync_title();

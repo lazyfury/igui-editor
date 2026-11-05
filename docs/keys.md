@@ -94,6 +94,12 @@ label, nested lists, quotes with an accent rule, rules, images as `▢ alt`,
 styled links (no navigation) and **tables with per-column alignment**. The
 preview scrolls with the wheel/trackpad or its scrollbar.
 
+Binary image files open in a read-only preview tab (default on; **Settings →
+Image Preview** toggles decoding) that fits the asset to the pane. PNG is
+decoded; other binary formats keep the tab with a neutral explanation, while
+SVG opens as source text in the normal editor. `⇧⌘M` does not apply to image
+tabs.
+
 On macOS the application menu is the **native system menu bar** (App, File,
 Edit, View, Window, Help); the in-app header only carries the simulated window
 controls. The custom header's red / yellow / green lights route to the quit

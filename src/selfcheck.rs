@@ -42,11 +42,21 @@ const NOTES_MD: &str = "# Notes\n\n## Notes\n\n- square corners\n- compact rows\
                         | Key | Meaning |\n|:----|--------:|\n| a   | alpha   |\n| b   | **beta** |\n\n\
                         ```rust\nfn preview() {}\n```\n";
 
+/// A 2x2 RGBA PNG used by the image-asset preview check.
+const ICON_PNG: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x08, 0x06, 0x00, 0x00, 0x00, 0x72, 0xb6, 0x0d,
+    0x24, 0x00, 0x00, 0x00, 0x12, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0xf8, 0xcf, 0xc0, 0xf0,
+    0x1f, 0x0c, 0x81, 0x34, 0x18, 0x00, 0x00, 0x49, 0xc8, 0x09, 0xf7, 0x03, 0xd9, 0x64, 0xf1, 0x00,
+    0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+];
+
 pub fn run() -> Result<(), String> {
     let dir = fixture()?;
     let result = check(&dir)
         .and_then(|()| check_workspace_and_recovery(&dir))
         .and_then(|()| check_explorer_filters(&dir))
+        .and_then(|()| check_image_preview(&dir))
         .and_then(|()| check_typing(&dir))
         .and_then(|()| check_lsp(&dir))
         .and_then(|()| check_keymaps(&dir));
@@ -2173,6 +2183,7 @@ fn check(dir: &Path) -> Result<(), String> {
     if !harness.app.state().settings.autosave {
         return Err("turning autosave back on failed".into());
     }
+    harness.key(Key::ArrowDown); // Image Preview
     harness.key(Key::ArrowDown); // Sidebar Width
     harness.key(Key::ArrowRight);
     harness.frame()?;
@@ -2186,7 +2197,7 @@ fn check(dir: &Path) -> Result<(), String> {
         }
     }
     // Persist an 8-space tab width for the session-restore assertion.
-    for _ in 0..6 {
+    for _ in 0..7 {
         harness.key(Key::ArrowUp); // -> Tab Width row
     }
     harness.key(Key::ArrowRight);
@@ -3293,6 +3304,128 @@ fn check(dir: &Path) -> Result<(), String> {
         frame.command_count(),
         harness.app.control_count()
     );
+    Ok(())
+}
+
+/// Image assets open as read-only preview tabs by default, fit the pane with
+/// their aspect ratio, and respect Settings -> Image Preview.
+fn check_image_preview(dir: &Path) -> Result<(), String> {
+    let path = dir.join("icon.png");
+    let mut harness = Harness::new(
+        Some(path.clone()),
+        dir.join("image.conf"),
+        ScriptedDialogs::new(vec![]),
+    );
+    let frame = harness.frame()?;
+    {
+        let state = harness.app.state();
+        let doc = state.ws.active_doc().ok_or("image: no active document")?;
+        if !doc.is_image_view() {
+            return Err("opening a PNG did not mount the image preview".into());
+        }
+        if !doc.is_read_only() {
+            return Err("the image preview tab must be read-only".into());
+        }
+        let opened = doc
+            .path()
+            .ok_or("the image preview tab has no path")?
+            .to_path_buf();
+        if !matches!(
+            state.images.status(&opened),
+            Some(crate::state::ImageStatus::Ready(_))
+        ) {
+            return Err(format!(
+                "the PNG fixture was not decoded: {:?}",
+                state.images.status(&opened)
+            ));
+        }
+    }
+    let destination = frame
+        .commands()
+        .iter()
+        .find_map(|command| match command {
+            DrawCommand::DrawImage { destination, .. } => Some(*destination),
+            _ => None,
+        })
+        .ok_or("the image preview painted no DrawImage")?;
+    if destination.width() <= 1.0 || destination.height() <= 1.0 {
+        return Err(format!(
+            "the image preview has an empty destination: {destination:?}"
+        ));
+    }
+    if (destination.width() - destination.height()).abs() > 1.0 {
+        return Err(format!(
+            "the 2x2 image was not fitted with its aspect ratio: {destination:?}"
+        ));
+    }
+    expect(&texts(&frame), "2 × 2", "image dimensions")?;
+
+    // Unsupported binary formats stay in the image tab with a neutral message;
+    // they must not raise the red error status.
+    harness.app.state_mut().open_path(dir.join("photo.jpg"));
+    let frame = harness.frame()?;
+    {
+        let state = harness.app.state();
+        let doc = state.ws.active_doc().ok_or("jpg: no active document")?;
+        if !doc.is_image_view() {
+            return Err("a binary image did not open the image tab".into());
+        }
+        let opened = doc.path().ok_or("the JPG tab has no path")?.to_path_buf();
+        match state.images.status(&opened) {
+            Some(crate::state::ImageStatus::Failed(message))
+                if message.contains("binary") && message.contains("opened") => {}
+            other => {
+                return Err(format!(
+                    "the unsupported image did not explain itself: {other:?}"
+                ))
+            }
+        }
+        if state.message.as_ref().is_some_and(|(_, error, _)| *error) {
+            return Err("an unsupported image raised the red error status".into());
+        }
+    }
+    if !texts(&frame)
+        .iter()
+        .any(|text| text.contains("cannot be opened"))
+    {
+        return Err("the unsupported image tab painted no explanation".into());
+    }
+
+    // SVG is text: it opens in the normal editor as source, not the image tab.
+    harness.app.state_mut().open_path(dir.join("icon.svg"));
+    let _ = harness.frame()?;
+    {
+        let state = harness.app.state();
+        let doc = state.ws.active_doc().ok_or("svg: no active document")?;
+        if doc.is_image_view() {
+            return Err("SVG opened the image tab instead of the text editor".into());
+        }
+        if !doc.text().contains("<svg") {
+            return Err(format!("SVG source did not open as text: {:?}", doc.text()));
+        }
+    }
+    harness.app.state_mut().open_path(path.clone());
+    let _ = harness.frame()?;
+
+    // The mode is on by default; turning it off must remove the draw but keep
+    // an explanation in the tab.
+    harness.app.state_mut().activate_setting(Row::ImagePreview);
+    let frame = harness.frame()?;
+    if frame
+        .commands()
+        .iter()
+        .any(|command| matches!(command, DrawCommand::DrawImage { .. }))
+    {
+        return Err(
+            "image preview stayed on after Settings -> Image Preview was toggled off".into(),
+        );
+    }
+    if !texts(&frame)
+        .iter()
+        .any(|text| text.contains("Image preview is off"))
+    {
+        return Err("the disabled image preview did not explain the setting".into());
+    }
     Ok(())
 }
 
@@ -6900,6 +7033,14 @@ fn fixture() -> Result<PathBuf, String> {
     fs::write(dir.join("notes.md"), notes).map_err(|error| format!("fixture: {error}"))?;
     fs::write(dir.join("src").join("lib.rs"), "pub fn lib() {}\n")
         .map_err(|error| format!("fixture: {error}"))?;
+    fs::write(dir.join("icon.png"), ICON_PNG).map_err(|error| format!("fixture: {error}"))?;
+    fs::write(dir.join("photo.jpg"), [0xff, 0xd8, 0xff, 0xe0])
+        .map_err(|error| format!("fixture: {error}"))?;
+    fs::write(
+        dir.join("icon.svg"),
+        "<svg xmlns=\"http://www.w3.org/2000/svg\"><rect width=\"2\" height=\"2\"/></svg>\n",
+    )
+    .map_err(|error| format!("fixture: {error}"))?;
     let mut large = String::new();
     for index in 0..6_000 {
         large.push_str(&format!(

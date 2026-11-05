@@ -46,7 +46,11 @@ impl AppState {
 
     pub fn save_active(&mut self) {
         if self.ws.active_doc().is_some_and(|doc| doc.is_read_only()) {
-            self.status("read-only Git view");
+            if self.ws.active_doc().is_some_and(|doc| doc.is_image_view()) {
+                self.status("image preview is read-only");
+            } else {
+                self.status("read-only Git view");
+            }
             return;
         }
         match self.ws.save_active() {

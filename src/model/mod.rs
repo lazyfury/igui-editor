@@ -17,6 +17,7 @@ pub mod godot;
 pub(crate) mod grapheme;
 pub mod highlight;
 pub mod ignore;
+pub mod image;
 pub mod lsp;
 pub mod markdown;
 pub mod processes;

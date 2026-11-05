@@ -9,6 +9,7 @@ pub mod find_bar;
 pub mod git;
 pub mod handle;
 pub mod icon;
+pub mod image;
 pub mod lsp;
 pub mod menu;
 pub mod modal;

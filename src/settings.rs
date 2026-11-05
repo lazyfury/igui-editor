@@ -38,6 +38,8 @@ pub struct Settings {
     pub autosave: bool,
     /// Run language servers (start on demand, stop all when disabled).
     pub lsp: bool,
+    /// Decode and display image assets in a read-only preview tab.
+    pub image_preview: bool,
     /// Allow repository-local language-server binaries (`node_modules/.bin`).
     pub trust_local_servers: bool,
     /// Sidebar width in logical pixels.
@@ -64,6 +66,7 @@ impl Default for Settings {
             syntax: true,
             autosave: true,
             lsp: true,
+            image_preview: true,
             trust_local_servers: false,
             sidebar_width: 232.0,
             show_hidden: false,
@@ -86,6 +89,7 @@ impl Settings {
             syntax: self.syntax,
             autosave: self.autosave,
             lsp: self.lsp,
+            image_preview: self.image_preview,
             trust_local_servers: self.trust_local_servers,
             sidebar_width: clamp_sidebar(self.sidebar_width),
             show_hidden: self.show_hidden,
@@ -181,6 +185,7 @@ pub enum Row {
     AutoPairs,
     Syntax,
     Autosave,
+    ImagePreview,
     LanguageIntelligence,
     TrustLocalServers,
     SidebarWidth,
@@ -190,7 +195,7 @@ pub enum Row {
     Reset,
 }
 
-pub const ROWS: [Row; 16] = [
+pub const ROWS: [Row; 17] = [
     Row::Theme,
     Row::FontSize,
     Row::IndentStyle,
@@ -200,6 +205,7 @@ pub const ROWS: [Row; 16] = [
     Row::AutoPairs,
     Row::Syntax,
     Row::Autosave,
+    Row::ImagePreview,
     Row::SidebarWidth,
     Row::HiddenFiles,
     Row::IgnoredFiles,
@@ -221,6 +227,7 @@ impl Row {
             Row::AutoPairs => "Auto Pairs",
             Row::Syntax => "Syntax Highlight",
             Row::Autosave => "Autosave",
+            Row::ImagePreview => "Image Preview",
             Row::LanguageIntelligence => "Language Intelligence",
             Row::TrustLocalServers => "Trust Local Servers",
             Row::SidebarWidth => "Sidebar Width",
@@ -240,6 +247,8 @@ impl Row {
                 | Row::IndentGuides
                 | Row::AutoPairs
                 | Row::Syntax
+                | Row::Autosave
+                | Row::ImagePreview
                 | Row::LanguageIntelligence
                 | Row::TrustLocalServers
                 | Row::HiddenFiles
@@ -263,6 +272,9 @@ mod tests {
             crate::model::doc::IndentStyle::Spaces(4)
         );
         assert!(!settings.indent_tabs);
+        assert!(settings.image_preview);
+        assert!(ROWS.contains(&Row::ImagePreview));
+        assert!(Row::ImagePreview.is_toggle());
     }
 
     #[test]

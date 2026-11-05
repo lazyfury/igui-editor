@@ -51,6 +51,7 @@ mod files;
 mod find;
 mod format;
 mod git;
+mod images;
 mod keymap;
 mod lsp;
 mod modal;
@@ -71,6 +72,7 @@ mod watch;
 mod workspace;
 
 pub use dock::{DockId, Panel};
+pub use images::{ImageStatus, ImageStore};
 pub use references::ReferencesUi;
 
 pub const MAX_RECENT: usize = 8;
@@ -1275,6 +1277,8 @@ pub struct AppState {
     pub built_view: ViewMode,
     /// Whether the shell currently mounts the documentation view.
     pub built_docs: bool,
+    /// Whether the shell currently mounts the image preview tab.
+    pub built_image: bool,
     /// Split ratio the shell was last built for.
     pub built_split: f32,
     /// Set when the next frame should repaint (paint cache invalidation).
@@ -1295,6 +1299,8 @@ pub struct AppState {
     pub config_path: PathBuf,
     pub config_dirty: bool,
     pub preview: PreviewUi,
+    /// Decoded image assets for the read-only image tab.
+    pub images: ImageStore,
     /// Window title last pushed to the platform.
     pub title: String,
     // -- M3 --------------------------------------------------------------
@@ -1461,6 +1467,7 @@ impl AppState {
             needs_rebuild: false,
             built_view: ViewMode::Edit,
             built_docs: false,
+            built_image: false,
             built_split: 0.5,
             dirty: true,
             focus: Focus::Editor,
@@ -1475,6 +1482,7 @@ impl AppState {
             config_path,
             config_dirty: false,
             preview: PreviewUi::default(),
+            images: ImageStore::default(),
             title,
             settings,
             services,
@@ -1657,6 +1665,7 @@ fn settings_from_session(session: &Session) -> Settings {
         auto_pairs: session.auto_pairs,
         syntax: session.syntax,
         autosave: session.autosave,
+        image_preview: session.image_preview,
         lsp: session.lsp,
         trust_local_servers: session.trust_local_servers,
         sidebar_width: session.sidebar_width,

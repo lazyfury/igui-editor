@@ -105,6 +105,7 @@ Read the minimum set; do not preload the whole tree.
 | Editor painting / gutter / IME | `src/ui/editor.rs`, `src/kit.rs` | `src/fonts.rs` for family policy. |
 | Icons / header panel toggles / dock grouping | `src/ui/icon.rs`, `assets/icons/README.md`, `src/ui/menu.rs`, `src/state/dock.rs`, `src/ui/dock.rs` | Vendored Lucide SVGs; render through engine `igui_svg`, never fetch at build time. One dock header layout serves paint and hit-test. |
 | Explorer file-type icons | `src/model/fileicon.rs`, `src/ui/fileicon.rs`, `assets/icons/material/` | Vendored Material Icon Theme SVGs (MIT), fills rasterized to `FillRect` spans; `ui/tree.rs` `Marker::File` paints them in the marker slot. |
+| Image asset preview | `src/model/image.rs`, `src/state/images.rs`, `src/ui/image.rs` | Read-only image tab (PNG decoded through `igui_assets`, texture uploaded in `update`); **Image Preview** setting defaults on. |
 | Bottom dock tabs (Terminal / Problems) | `src/state/dock.rs`, `src/ui/dock.rs`, `src/ui/terminal.rs`, `src/ui/problems.rs` | Closing a dock hides it; shells keep running. |
 | External file changes / file watches | `src/state/watch.rs`, `src/model/watch.rs`, `src/model/fs_tree.rs`, `src/model/lsp.rs` | Poll only: no OS watcher dependency. Refresh the tree with `FsTree::refresh` (keeps expansions), never `reload`. Report changes via `FileEvent`. |
 | App shell / input precedence | `src/app.rs`, `src/input.rs` | `src/state/mod.rs` for `Action`; `src/wake.rs` for frame scheduling/wakeups. |

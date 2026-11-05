@@ -69,6 +69,15 @@ creates a real file and refuses to overwrite; `application:openURLs:` is verifie
 against cold and running `open -a` launches; Dock menu/quit methods are installed
 on the existing winit delegate.
 
+Image checks: opening a PNG fixture mounts a read-only image tab, the decoded
+2×2 asset paints a square `DrawImage` destination with its dimensions, and
+toggling **Settings → Image Preview** off removes the draw while keeping the
+explanatory tab text. A JPEG fixture opens the image tab with a neutral
+(non-red) explanation, and an SVG fixture opens as editable source text in the
+normal editor. Unit tests cover PNG decode/cache/invalidation, corrupt and
+unsupported formats, extension detection (including SVG staying text) and the
+session default.
+
 LSP checks: a scripted stdio language server is launched through the real
 client; diagnostics appear under the changed line and in the footer, the footer
 chip opens the bottom dock's PROBLEMS tab (workspace rows, click jumps and keeps

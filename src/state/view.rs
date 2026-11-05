@@ -44,6 +44,10 @@ impl AppState {
         let Some(doc) = self.ws.active_doc() else {
             return;
         };
+        if doc.is_image_view() {
+            self.status("image preview is display-only");
+            return;
+        }
         let id = doc.id();
         let default_ratio = self.session.split.clamp(0.2, 0.8);
         self.doc_views
@@ -79,8 +83,10 @@ impl AppState {
     pub fn sync_layout(&mut self) {
         let view = self.view_of_active();
         let docs = self.ws.active_doc().is_some_and(|doc| doc.is_docs_view());
+        let image = self.ws.active_doc().is_some_and(|doc| doc.is_image_view());
         let ratio = self.split_of_active();
-        let needs = docs != self.built_docs
+        let needs = image != self.built_image
+            || docs != self.built_docs
             || view != self.built_view
             || (view == ViewMode::Split && (ratio - self.built_split).abs() > 0.001);
         if needs {

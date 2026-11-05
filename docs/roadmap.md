@@ -43,6 +43,9 @@ shortcuts now have one source, saves are atomic with EOL preservation, find and
 Replace All are bounded/batched, terminal clipboard commands are focus-aware,
 sidebar rows are cached and external URLs are scheme-restricted.
 
+Delivered (M14): read-only image-asset preview tabs with a default-on **Image
+Preview** setting (PNG decoded and uploaded as a texture), session v17.
+
 Next candidates: cross-file undo and incremental preview layout for very large
 documents.
 
