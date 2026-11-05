@@ -250,6 +250,7 @@ impl AppState {
             Row::TabWidth => format!("{}", self.settings.tab_width),
             Row::LineNumbers => on_off(self.settings.line_numbers),
             Row::IndentGuides => on_off(self.settings.indent_guides),
+            Row::AutoPairs => on_off(self.settings.auto_pairs),
             Row::Syntax => on_off(self.settings.syntax),
             Row::Autosave => on_off(self.settings.autosave),
             Row::LanguageIntelligence => on_off(self.settings.lsp),
@@ -298,6 +299,18 @@ impl AppState {
             Row::IndentGuides => {
                 self.settings.indent_guides = !self.settings.indent_guides;
                 self.settings_changed();
+            }
+            Row::AutoPairs => {
+                self.settings.auto_pairs = !self.settings.auto_pairs;
+                self.settings_changed();
+                self.status(format!(
+                    "auto pairs: {}",
+                    if self.settings.auto_pairs {
+                        "ON"
+                    } else {
+                        "OFF"
+                    }
+                ));
             }
             Row::Syntax => {
                 self.settings.syntax = !self.settings.syntax;
@@ -415,6 +428,7 @@ impl AppState {
         self.session.indent_tabs = self.settings.indent_tabs;
         self.session.line_numbers = self.settings.line_numbers;
         self.session.indent_guides = self.settings.indent_guides;
+        self.session.auto_pairs = self.settings.auto_pairs;
         self.session.syntax = self.settings.syntax;
         self.session.autosave = self.settings.autosave;
         self.session.lsp = self.settings.lsp;
@@ -485,20 +499,54 @@ impl AppState {
         if key != self.bracket_key {
             self.bracket_key = key;
             self.bracket = self.ws.active_doc().and_then(|doc| {
-                match_bracket(doc.text(), doc.caret(), |byte| {
-                    let line = doc.line_of(byte);
-                    let offset = byte - doc.line_start(line);
-                    match self.highlight.tokens(line) {
-                        Some(tokens) => !tokens.iter().any(|token| {
-                            token.start <= offset
-                                && offset < token.end
-                                && matches!(token.kind, TokenKind::Comment | TokenKind::String)
-                        }),
-                        None => true,
-                    }
-                })
+                match_bracket(doc.text(), doc.caret(), |byte| self.code_at(doc, byte))
             });
         }
         behind
+    }
+
+    /// Whether `byte` in `doc` is code rather than comment or string content.
+    ///
+    /// Bracket matching and quote pairing both use this so a bracket inside a
+    /// literal never pairs and never matches. Lines the incremental highlight
+    /// cache has not reached yet count as code.
+    pub(crate) fn code_at(&self, doc: &Document, byte: usize) -> bool {
+        let line = doc.line_of(byte);
+        let offset = byte - doc.line_start(line);
+        match self.highlight.tokens(line) {
+            Some(tokens) => !tokens.iter().any(|token| {
+                token.start <= offset
+                    && offset < token.end
+                    && matches!(token.kind, TokenKind::Comment | TokenKind::String)
+            }),
+            None => true,
+        }
+    }
+
+    /// What typing `ch` should do in the active document.
+    ///
+    /// The code probe looks at the character *before* the caret: the highlight
+    /// cache has not seen the character being typed yet, so a quote typed at the
+    /// end of an open string literal must still count as string content.
+    pub(crate) fn typed_insert(&self, ch: char) -> typing::Insert {
+        let Some(doc) = self.ws.active_doc() else {
+            return typing::Insert::Plain;
+        };
+        let caret = doc.caret();
+        let line_start = doc.line_start(doc.line_of(caret));
+        let probe = doc.text()[line_start..caret]
+            .chars()
+            .next_back()
+            .map(|previous| caret - previous.len_utf8())
+            .unwrap_or(caret);
+        typing::decide(
+            doc.text(),
+            caret,
+            doc.anchor(),
+            ch,
+            typing::Context {
+                in_code: self.code_at(doc, probe),
+            },
+        )
     }
 }

@@ -29,6 +29,7 @@ use crate::model::recovery::{RecoveryEntry, RecoveryStore};
 use crate::model::replace::{self, PlannedFile};
 use crate::model::search::{SearchHit, SearchMessage, SearchWorker};
 use crate::model::session::{Session, WindowGeometry};
+use crate::model::typing;
 use crate::model::workspace_index::{display_path, FileIndex};
 use crate::model::Workspace;
 use crate::services::{ServiceRegistry, SidebarContribution};
@@ -1647,6 +1648,7 @@ fn settings_from_session(session: &Session) -> Settings {
         indent_tabs: session.indent_tabs,
         line_numbers: session.line_numbers,
         indent_guides: session.indent_guides,
+        auto_pairs: session.auto_pairs,
         syntax: session.syntax,
         autosave: session.autosave,
         lsp: session.lsp,

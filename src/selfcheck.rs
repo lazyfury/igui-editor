@@ -47,12 +47,13 @@ pub fn run() -> Result<(), String> {
     let result = check(&dir)
         .and_then(|()| check_workspace_and_recovery(&dir))
         .and_then(|()| check_explorer_filters(&dir))
+        .and_then(|()| check_typing(&dir))
         .and_then(|()| check_lsp(&dir))
         .and_then(|()| check_keymaps(&dir));
     let _ = fs::remove_dir_all(&dir);
     if result.is_ok() {
         println!(
-            "selfcheck ok: main flow + workspace/recovery + explorer filters + LSP + keymap checks"
+            "selfcheck ok: main flow + workspace/recovery + explorer filters + typing + LSP + keymap checks"
         );
     }
     result
@@ -2141,6 +2142,15 @@ fn check(dir: &Path) -> Result<(), String> {
             harness.app.state().settings.indent_guides
         ));
     }
+    harness.key(Key::ArrowDown); // Auto Pairs
+    harness.key(Key::Enter);
+    if harness.app.state().settings.auto_pairs || harness.app.state().session.auto_pairs {
+        return Err("the auto-pair toggle did not take effect".into());
+    }
+    harness.key(Key::Enter);
+    if !harness.app.state().settings.auto_pairs || !harness.app.state().session.auto_pairs {
+        return Err("turning auto pairs back on failed".into());
+    }
     harness.key(Key::ArrowDown); // Syntax
     harness.key(Key::Enter);
     harness.frame()?;
@@ -2176,7 +2186,7 @@ fn check(dir: &Path) -> Result<(), String> {
         }
     }
     // Persist an 8-space tab width for the session-restore assertion.
-    for _ in 0..5 {
+    for _ in 0..6 {
         harness.key(Key::ArrowUp); // -> Tab Width row
     }
     harness.key(Key::ArrowRight);
@@ -3283,6 +3293,114 @@ fn check(dir: &Path) -> Result<(), String> {
         frame.command_count(),
         harness.app.control_count()
     );
+    Ok(())
+}
+
+/// Auto-pairing and Markdown list continuation through the real input path.
+///
+/// The unit tests cover the rules in `model::typing`; this covers the wiring
+/// (input event -> editor -> document) and that IME text never grows a pair.
+fn check_typing(dir: &Path) -> Result<(), String> {
+    let config = dir.join("typing.conf");
+    let mut harness = Harness::new(None, config, ScriptedDialogs::new(vec![]));
+
+    fn expect_doc(harness: &Harness, text: &str, caret: usize) -> Result<(), String> {
+        let state = harness.app.state();
+        let doc = state.ws.active_doc().ok_or("no active document")?;
+        if doc.text() != text || doc.caret() != caret {
+            return Err(format!(
+                "typing: expected {text:?} with the caret at {caret}, got {:?} at {}",
+                doc.text(),
+                doc.caret()
+            ));
+        }
+        Ok(())
+    }
+
+    fn fresh(harness: &mut Harness) -> Result<(), String> {
+        {
+            let mut state = harness.app.state_mut();
+            state.ws.new_tab();
+            state.set_language(Some("markdown".into()));
+            state.focus = Focus::Editor;
+        }
+        harness.frame()?;
+        Ok(())
+    }
+
+    // A bracket pairs with the caret inside and its closer is stepped over.
+    fresh(&mut harness)?;
+    harness.type_text("(");
+    expect_doc(&harness, "()", 1)?;
+    harness.type_text("a");
+    harness.type_text(")");
+    expect_doc(&harness, "(a)", 3)?;
+
+    // Backspace between the halves removes the whole pair.
+    fresh(&mut harness)?;
+    harness.type_text("[");
+    harness.key(Key::Backspace);
+    expect_doc(&harness, "", 0)?;
+
+    // Enter inside an empty pair opens an indented block.
+    fresh(&mut harness)?;
+    harness.type_text("(");
+    harness.key(Key::Enter);
+    expect_doc(&harness, "(\n    \n)", 6)?;
+
+    // A selection is wrapped and stays selected.
+    fresh(&mut harness)?;
+    harness.type_text("word");
+    harness
+        .app
+        .state_mut()
+        .ws
+        .active_doc_mut()
+        .ok_or("no active document")?
+        .select_all();
+    harness.type_text("(");
+    expect_doc(&harness, "(word)", 5)?;
+    if harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .and_then(|doc| doc.selected_text())
+        != Some("word")
+    {
+        return Err("wrapping a selection lost the selection".into());
+    }
+
+    // Markdown list continuation, and an empty item ending the list.
+    fresh(&mut harness)?;
+    harness.type_text("- item");
+    harness.key(Key::Enter);
+    expect_doc(&harness, "- item\n- ", 9)?;
+    harness.key(Key::Enter);
+    expect_doc(&harness, "- item\n", 7)?;
+
+    // Committed IME text is content: it must never grow a pair.
+    fresh(&mut harness)?;
+    harness.event(InputEvent::Ime(igui_core::ImeEvent::Commit("你".into())));
+    expect_doc(&harness, "你", 3)?;
+
+    // The setting turns the pairing off again.
+    fresh(&mut harness)?;
+    {
+        let mut state = harness.app.state_mut();
+        state.settings.auto_pairs = false;
+        state.settings_changed();
+    }
+    harness.type_text("(");
+    harness.type_text(")");
+    expect_doc(&harness, "()", 2)?;
+    {
+        let mut state = harness.app.state_mut();
+        state.settings.auto_pairs = true;
+        state.settings_changed();
+    }
+
+    println!("selfcheck: typing ok (auto pairs, list continuation)");
     Ok(())
 }
 

@@ -485,6 +485,7 @@ setting is persisted in the session. Preview-only and Edit modes ignore it.
 | Indent Width | 2 / 4 / 8 (spaces per level and tab display width) |
 | Line Numbers | on / off |
 | Indent Guides | on / off |
+| Auto Pairs | on / off (see [Typing aids](#typing-aids-auto-pairs-and-markdown-lists)) |
 | Syntax Highlight | on / off |
 | Autosave | on / off |
 | Sidebar Width | 180–420 px |
@@ -568,6 +569,36 @@ match and steps with `⌘G` / `⇧⌘G`. The match list is capped at 10,000 and 
 counter shows a trailing `+` when the cap is reached. **Replace** changes the
 current match; **Replace All** applies every non-overlapping match as one
 undoable batch (one undo step, one line-index rebuild).
+
+## Typing aids (auto pairs and Markdown lists)
+
+**Auto Pairs** (Settings → Auto Pairs, on by default) only reacts to a single
+typed character; pasted and committed IME text is inserted verbatim, so a CJK
+commit never grows a pair.
+
+| Typed | Result |
+|---|---|
+| `(` `[` `{` | inserts the closer and keeps the caret inside |
+| a closer already under the caret | steps over it instead of doubling it |
+| a closer with a selection | replaces the selection |
+| an opener with a selection | wraps it (`word` → `(word)`), selection kept |
+| `"` or `` ` `` in code | pairs; inside a comment or string the quote is content |
+| `"` directly after a word | plain, so `don"t` stays as typed |
+| `'` | never pairs (Rust lifetimes, GDScript escapes, contractions) |
+| Backspace between an empty pair | deletes both halves |
+| Enter between `()` / `[]` / `{}` | opens an indented block, caret in the middle |
+
+The code/string decision reads the same syntax cache that bracket matching uses
+(`AppState::code_at`), so a bracket inside a comment never pairs and a quote
+closing an open literal is inserted rather than duplicated. `*` and `_` never
+pair in Markdown: emphasis, list bullets and horizontal rules all start with
+them.
+
+**Markdown list continuation** is always on for Markdown documents (it is not
+part of Auto Pairs): Enter on a list line repeats the marker — `- `, `* `, `+ `,
+`1. ` (incremented), `1) `, `> ` (quote depth kept) and task boxes `- [ ] `
+(always unchecked). Enter on an empty item removes the marker and ends the list;
+the item's own indentation stays.
 
 ## Indentation and formatting
 

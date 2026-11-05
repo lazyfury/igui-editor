@@ -48,6 +48,9 @@ pub struct Settings {
     pub ignored_files: IgnoreMode,
     /// Selectable keyboard profile.
     pub keymap: KeymapId,
+    /// Close brackets and quotes while typing, step over closers, and wrap the
+    /// selection instead of replacing it.
+    pub auto_pairs: bool,
 }
 
 impl Default for Settings {
@@ -66,6 +69,7 @@ impl Default for Settings {
             show_hidden: false,
             ignored_files: IgnoreMode::Dim,
             keymap: KeymapId::VsCode,
+            auto_pairs: true,
         }
     }
 }
@@ -87,6 +91,7 @@ impl Settings {
             show_hidden: self.show_hidden,
             ignored_files: self.ignored_files,
             keymap: self.keymap,
+            auto_pairs: self.auto_pairs,
         }
     }
 
@@ -173,6 +178,7 @@ pub enum Row {
     TabWidth,
     LineNumbers,
     IndentGuides,
+    AutoPairs,
     Syntax,
     Autosave,
     LanguageIntelligence,
@@ -184,13 +190,14 @@ pub enum Row {
     Reset,
 }
 
-pub const ROWS: [Row; 15] = [
+pub const ROWS: [Row; 16] = [
     Row::Theme,
     Row::FontSize,
     Row::IndentStyle,
     Row::TabWidth,
     Row::LineNumbers,
     Row::IndentGuides,
+    Row::AutoPairs,
     Row::Syntax,
     Row::Autosave,
     Row::SidebarWidth,
@@ -211,6 +218,7 @@ impl Row {
             Row::TabWidth => "Indent Width",
             Row::LineNumbers => "Line Numbers",
             Row::IndentGuides => "Indent Guides",
+            Row::AutoPairs => "Auto Pairs",
             Row::Syntax => "Syntax Highlight",
             Row::Autosave => "Autosave",
             Row::LanguageIntelligence => "Language Intelligence",
@@ -230,6 +238,7 @@ impl Row {
             Row::IndentStyle
                 | Row::LineNumbers
                 | Row::IndentGuides
+                | Row::AutoPairs
                 | Row::Syntax
                 | Row::LanguageIntelligence
                 | Row::TrustLocalServers

@@ -25,6 +25,7 @@ pub mod recovery;
 pub mod replace;
 pub mod search;
 pub mod session;
+pub mod typing;
 pub mod watch;
 pub mod workspace;
 pub mod workspace_index;

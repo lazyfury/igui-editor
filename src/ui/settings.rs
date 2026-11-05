@@ -165,6 +165,7 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
                 Row::IndentStyle => state.settings.indent_tabs,
                 Row::LineNumbers => state.settings.line_numbers,
                 Row::IndentGuides => state.settings.indent_guides,
+                Row::AutoPairs => state.settings.auto_pairs,
                 Row::Syntax => state.settings.syntax,
                 Row::LanguageIntelligence => state.settings.lsp,
                 Row::TrustLocalServers => state.settings.trust_local_servers,

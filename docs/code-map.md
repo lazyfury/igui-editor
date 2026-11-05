@@ -18,6 +18,7 @@ src/
   model/lsp.rs        stdio/TCP JSON-RPC client, per-root sessions, diagnostics,
                       hover/completion, monorepo root selection, native Godot symbols
   model/godot.rs      GDScript block rules (smart newline indent)
+  model/typing.rs     auto-pair decisions (brackets/quotes) + Markdown list continuation
   model/bbcode.rs     Godot BBCode -> text spans + clickable references
   model/docs.rs       native symbol -> docs view text + link ranges
   services/lsp.rs     built-in Rust language-server spec (rust-analyzer)

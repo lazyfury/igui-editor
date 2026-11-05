@@ -51,6 +51,8 @@ pub struct Session {
     pub indent_tabs: bool,
     pub line_numbers: bool,
     pub indent_guides: bool,
+    /// Close brackets and quotes while typing.
+    pub auto_pairs: bool,
     pub syntax: bool,
     /// Sidebar width.
     pub sidebar_width: f32,
@@ -111,6 +113,7 @@ impl Default for Session {
             indent_tabs: false,
             line_numbers: true,
             indent_guides: true,
+            auto_pairs: true,
             syntax: true,
             sidebar_width: 232.0,
             show_hidden: false,
@@ -177,6 +180,7 @@ impl Session {
                 "indent_tabs" => session.indent_tabs = value == "1",
                 "gutter" | "line_numbers" => session.line_numbers = value == "1",
                 "guides" | "indent_guides" => session.indent_guides = value == "1",
+                "auto_pairs" => session.auto_pairs = value == "1",
                 "highlight" | "syntax" => session.syntax = value == "1",
                 "sidebar_width" => {
                     session.sidebar_width = value.parse().unwrap_or(session.sidebar_width)
@@ -277,6 +281,7 @@ impl Session {
         out.push_str(&format!("indent_tabs={}\n", u8::from(self.indent_tabs)));
         out.push_str(&format!("gutter={}\n", u8::from(self.line_numbers)));
         out.push_str(&format!("guides={}\n", u8::from(self.indent_guides)));
+        out.push_str(&format!("auto_pairs={}\n", u8::from(self.auto_pairs)));
         out.push_str(&format!("syntax={}\n", u8::from(self.syntax)));
         out.push_str(&format!("sidebar_width={}\n", self.sidebar_width));
         out.push_str(&format!("show_hidden={}\n", u8::from(self.show_hidden)));

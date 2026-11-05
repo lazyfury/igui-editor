@@ -23,6 +23,7 @@ use igui_scene::SceneTree;
 use igui_ui::{Container, PaintEnv, PointerPhase, TextMeasurer};
 
 use crate::kit::{self, RectExt};
+use crate::model::typing::Insert;
 use crate::model::wrap::{self, WrapKey, WrapLayout};
 use crate::state::{Action, AppState, Drag, Focus};
 
@@ -161,6 +162,8 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
             }
             let indent = state.active_indent_style();
             let gdscript = state.language_name() == Some("gdscript");
+            let markdown = state.language_name() == Some("markdown");
+            let auto_pairs = state.settings.auto_pairs;
             let Some(doc) = state.ws.active_doc_mut() else {
                 return EventResult::Ignored;
             };
@@ -178,15 +181,22 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
                     true
                 }
                 Key::Enter => {
-                    let extra = gdscript
-                        && crate::model::godot::opens_block(doc.line_before_caret())
-                        // A docstring line ending in `:` is string content, not a
-                        // block opener; adding a level here corrupts the text.
-                        && !crate::model::godot::in_multiline_string(
-                            doc.text(),
-                            doc.caret(),
-                        );
-                    doc.insert_newline(extra, indent);
+                    if auto_pairs && doc.insert_pair_newline(indent) {
+                        // Enter between the halves of a bracket pair opened a
+                        // block; nothing else to do.
+                    } else if markdown && doc.insert_list_newline() {
+                        // Enter continued (or ended) a Markdown list item.
+                    } else {
+                        let extra = gdscript
+                            && crate::model::godot::opens_block(doc.line_before_caret())
+                            // A docstring line ending in `:` is string content, not a
+                            // block opener; adding a level here corrupts the text.
+                            && !crate::model::godot::in_multiline_string(
+                                doc.text(),
+                                doc.caret(),
+                            );
+                        doc.insert_newline(extra, indent);
+                    }
                     true
                 }
                 Key::Space => {
@@ -247,9 +257,28 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
                 return; // shortcuts, not text
             }
             let mut state = state.borrow_mut();
+            // Auto-pairing only applies to a single typed character; pasted and
+            // committed IME text is inserted verbatim, so a CJK commit can never
+            // grow a pair.
+            let mut chars = text.chars();
+            let decision = match (chars.next(), chars.next()) {
+                (Some(ch), None) => Some(ch),
+                _ => None,
+            }
+            .filter(|_| state.settings.auto_pairs)
+            .map(|ch| (ch, state.typed_insert(ch)));
             if let Some(doc) = state.ws.active_doc_mut() {
                 if !doc.is_read_only() {
-                    doc.insert_text(text);
+                    match decision {
+                        Some((_, Insert::Pair(open, close))) => doc.insert_pair(open, close),
+                        Some((_, Insert::Surround(open, close))) => {
+                            doc.surround(open, close);
+                        }
+                        Some((ch, Insert::Skip)) => {
+                            doc.skip_char(ch);
+                        }
+                        _ => doc.insert_text(text),
+                    }
                 }
             }
             state.editor.preedit = None;

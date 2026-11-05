@@ -16,7 +16,7 @@
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
-use super::{fsutil, grapheme};
+use super::{fsutil, grapheme, typing};
 
 /// How a document indents a new block level.
 ///
@@ -1056,6 +1056,56 @@ impl Document {
         }
     }
 
+    /// Inserts both halves of an auto-pair with the caret between them.
+    pub fn insert_pair(&mut self, open: char, close: char) {
+        if self.read_only {
+            return;
+        }
+        let (start, end) = self.selection().unwrap_or((self.caret, self.caret));
+        let mut insert = String::with_capacity(open.len_utf8() + close.len_utf8());
+        insert.push(open);
+        insert.push(close);
+        let inside = start + open.len_utf8();
+        self.replace_with(
+            start,
+            end,
+            &insert,
+            Kind::Type,
+            Cursor {
+                caret: inside,
+                anchor: inside,
+            },
+        );
+    }
+
+    /// Wraps the selection in `open`/`close`, keeping it selected.
+    pub fn surround(&mut self, open: char, close: char) -> bool {
+        if self.read_only {
+            return false;
+        }
+        let Some((start, end)) = self.selection() else {
+            return false;
+        };
+        let mut insert = String::with_capacity(end - start + 8);
+        insert.push(open);
+        insert.push_str(&self.text[start..end]);
+        insert.push(close);
+        let anchor = start + open.len_utf8();
+        let caret = anchor + (end - start);
+        self.replace_with(start, end, &insert, Kind::Other, Cursor { caret, anchor });
+        true
+    }
+
+    /// Steps the caret over `ch` when it already is the next character.
+    pub fn skip_char(&mut self, ch: char) -> bool {
+        if self.has_selection() || !self.text[self.caret..].starts_with(ch) {
+            return false;
+        }
+        self.caret += ch.len_utf8();
+        self.anchor = self.caret;
+        true
+    }
+
     /// Enter: insert a newline plus the current line's leading whitespace.
     ///
     /// `extra` adds one more level (a GDScript block opener such as a line
@@ -1083,6 +1133,67 @@ impl Document {
         }
     }
 
+    /// Enter between an empty bracket pair opens a three-line block:
+    /// `{|}` becomes `{\n<indent><unit>\n<indent>}` with the caret inside.
+    ///
+    /// Returns false when the caret is not between brackets.
+    pub fn insert_pair_newline(&mut self, style: IndentStyle) -> bool {
+        if self.read_only || self.has_selection() {
+            return false;
+        }
+        let Some((open, _)) = typing::pair_around(self.text(), self.caret) else {
+            return false;
+        };
+        if !typing::is_bracket_open(open) {
+            return false;
+        }
+        let line = self.line_of(self.caret);
+        let indent: String = self
+            .line(line)
+            .chars()
+            .take_while(|ch| *ch == ' ' || *ch == '\t')
+            .collect();
+        let unit = style.unit();
+        let insert = format!("\n{indent}{unit}\n{indent}");
+        let caret = self.caret + 1 + indent.len() + unit.len();
+        self.replace_with(
+            self.caret,
+            self.caret,
+            &insert,
+            Kind::Other,
+            Cursor {
+                caret,
+                anchor: caret,
+            },
+        );
+        if self.indent.is_none() {
+            self.indent = IndentStyle::detect(&self.text);
+        }
+        true
+    }
+
+    /// Enter on a Markdown list item continues its marker; an empty item loses
+    /// its marker instead, which ends the list.
+    ///
+    /// Returns false when the caret's line is not a list item.
+    pub fn insert_list_newline(&mut self) -> bool {
+        if self.read_only || self.has_selection() {
+            return false;
+        }
+        let line = self.line_of(self.caret);
+        let start = self.line_start(line);
+        let Some(item) = typing::list_item(&self.text[start..self.caret]) else {
+            return false;
+        };
+        if item.continue_list {
+            let insert = format!("\n{}{}", item.indent, item.marker);
+            self.replace(self.caret, self.caret, &insert, Kind::Other);
+        } else {
+            self.replace(start + item.indent.len(), self.caret, "", Kind::Backspace);
+        }
+        true
+    }
+
     pub fn backspace(&mut self) {
         if self.read_only {
             return;
@@ -1091,11 +1202,33 @@ impl Document {
             self.replace(start, end, "", Kind::Other);
             return;
         }
+        if self.backspace_pair() {
+            return;
+        }
         if self.caret == 0 {
             return;
         }
         let start = grapheme::prev_boundary(&self.text, self.caret);
         self.replace(start, self.caret, "", Kind::Backspace);
+    }
+
+    /// Backspace between the halves of an empty pair deletes both.
+    ///
+    /// Returns whether a pair was removed.
+    pub fn backspace_pair(&mut self) -> bool {
+        if self.read_only || self.has_selection() {
+            return false;
+        }
+        let Some((open, close)) = typing::pair_around(self.text(), self.caret) else {
+            return false;
+        };
+        self.replace(
+            self.caret - open.len_utf8(),
+            self.caret + close.len_utf8(),
+            "",
+            Kind::Backspace,
+        );
+        true
     }
 
     pub fn delete_forward(&mut self) {
@@ -1782,6 +1915,73 @@ mod tests {
         assert_eq!(doc.text(), "\tfunc _ready():\n\t\t");
         doc.insert_text("pass");
         assert_eq!(doc.line_before_caret(), "\t\tpass");
+    }
+
+    #[test]
+    fn auto_pairs_insert_both_halves_and_undo_as_one_step() {
+        let mut doc = Document::untitled(1, 0);
+        doc.insert_text("call");
+        doc.insert_pair('(', ')');
+        assert_eq!(doc.text(), "call()");
+        assert_eq!(doc.caret(), 5);
+        assert!(doc.undo());
+        assert_eq!(doc.text(), "call");
+    }
+
+    #[test]
+    fn surround_keeps_the_selection_inside_the_pair() {
+        let mut doc = doc("arg");
+        doc.select_all();
+        assert!(doc.surround('(', ')'));
+        assert_eq!(doc.text(), "(arg)");
+        assert_eq!(doc.selected_text(), Some("arg"));
+        // Typing over the wrapped text keeps the new pair.
+        doc.insert_text("x");
+        assert_eq!(doc.text(), "(x)");
+    }
+
+    #[test]
+    fn closer_is_stepped_over_and_empty_pairs_delete_together() {
+        let mut doc = doc("call()");
+        doc.set_caret(5);
+        assert!(doc.skip_char(')'));
+        assert_eq!(doc.caret(), 6);
+        assert!(!doc.skip_char('x'));
+        doc.set_caret(5);
+        doc.backspace();
+        assert_eq!(doc.text(), "call");
+        assert_eq!(doc.caret(), 4);
+        // Plain backspace still works when there is no pair.
+        doc.backspace();
+        assert_eq!(doc.text(), "cal");
+    }
+
+    #[test]
+    fn enter_inside_a_pair_opens_an_indented_block() {
+        let mut doc = doc("fn main() {}");
+        doc.set_caret(11);
+        assert!(doc.insert_pair_newline(IndentStyle::Spaces(4)));
+        assert_eq!(doc.text(), "fn main() {\n    \n}");
+        assert_eq!(doc.caret(), 16);
+        // Outside a pair Enter is a plain newline.
+        assert!(!doc.insert_pair_newline(IndentStyle::Spaces(4)));
+    }
+
+    #[test]
+    fn markdown_list_enter_continues_or_ends_the_list() {
+        let mut item = doc("  - one");
+        item.set_caret(item.text().len());
+        assert!(item.insert_list_newline());
+        assert_eq!(item.text(), "  - one\n  - ");
+        // An empty item ends the list instead of growing it; the item's own
+        // indentation stays (like every other editor).
+        assert!(item.insert_list_newline());
+        assert_eq!(item.text(), "  - one\n  ");
+        assert!(!item.insert_list_newline());
+        // A plain line is not a list item.
+        let mut plain = doc("text");
+        plain.set_caret(plain.text().len());
+        assert!(!plain.insert_list_newline());
     }
 
     #[test]
