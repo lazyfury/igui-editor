@@ -17,6 +17,11 @@ pub mod git;
 pub mod godot;
 pub(crate) mod grapheme;
 pub mod highlight;
+#[allow(
+    dead_code,
+    reason = "consumed by the Explorer icon store in the next commit"
+)]
+pub mod icon_theme;
 pub mod ignore;
 pub mod lsp;
 pub mod markdown;

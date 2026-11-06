@@ -176,7 +176,7 @@ is off, no per-frame file IO, `scripts/check.sh` green, release size within the
 | 0 Baseline | done | `d41f1ca`; 438 unit + 2 doc tests, selfcheck green. |
 | 1 Emoji model | done | `model/emoji.rs`; classification, mmap font discovery, sbix/CBDT PNG + premul BGRA decode, 7 tests. |
 | 2 Emoji editor paint | done | Sprite store + texture upload, editor split-at-emoji paint, selfcheck image assertion. |
-| 3 Emoji preview/terminal | todo | |
-| 4 Icon theme model | todo | |
+| 3 Emoji preview/terminal | done | Preview, terminal, Explorer/outline/tab labels, docs/emoji.md, selfcheck image assertions. |
+| 4 Icon theme model | done | `model/icon_theme.rs`; VS Code JSON parse, precedence (name > compound ext > default), light overrides, discovery + newest-version pick, 8 tests. |
 | 5 Explorer icons | todo | |
 | 6 Verification/delivery | todo | |
