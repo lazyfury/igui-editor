@@ -62,11 +62,19 @@ impl FileIcons {
     }
 
     /// Last load failure, for status/diagnostics.
+    #[cfg_attr(
+        not(feature = "selfcheck"),
+        allow(dead_code, reason = "reported by the headless self-check")
+    )]
     pub fn error(&self) -> Option<&str> {
         self.error.as_deref()
     }
 
     /// Path of the loaded theme JSON.
+    #[cfg_attr(
+        not(feature = "selfcheck"),
+        allow(dead_code, reason = "reported by the headless self-check")
+    )]
     pub fn source(&self) -> Option<&Path> {
         self.theme.as_ref().map(IconTheme::source)
     }

@@ -1,6 +1,6 @@
 # Plan — color emoji and a VS Code file-icon theme
 
-Status: **in progress**. Product priority ([`../AGENTS.md`](../AGENTS.md)):
+Status: **complete** (Session 6). Product priority ([`../AGENTS.md`](../AGENTS.md)):
 color emoji completes text/Markdown rendering (priority 1); file icons are
 Explorer polish requested explicitly by the user, and are re-introduced as a
 *runtime* VS Code icon theme instead of the vendored SVG table removed in the
@@ -179,4 +179,24 @@ is off, no per-frame file IO, `scripts/check.sh` green, release size within the
 | 3 Emoji preview/terminal | done | Preview, terminal, Explorer/outline/tab labels, docs/emoji.md, selfcheck image assertions. |
 | 4 Icon theme model | done | `model/icon_theme.rs`; VS Code JSON parse, precedence (name > compound ext > default), light overrides, discovery + newest-version pick, 8 tests. |
 | 5 Explorer icons | done | Runtime theme store, visible-row preload, scanline rasterizer (even-odd), tree markers, File Icons setting + session v20, selfcheck fixture. |
-| 6 Verification/delivery | in progress | full gate, release gate, bench numbers, push. |
+| 6 Verification/delivery | done | check + release gate green, bench recorded, manual window smoke, docs and push. |
+
+## Results
+
+- **Color emoji**: system face discovered via mmap (Apple Color Emoji on this
+  host), one image per base code point in the editor, split preview, terminal,
+  Explorer/outline labels and tab labels. 7 model tests + 3 paint tests.
+- **File icons**: runtime Material Icon Theme discovery and VS Code lookup
+  precedence, lazy visible-row SVG preload, scanline rasterizer with even-odd
+  support, chevron fallback, **Explorer → File Icons** setting, session v20.
+  8 model tests + 5 rasterizer tests.
+- **Gate**: `scripts/check.sh --release` green — 464 unit + 2 doc tests,
+  `--selfcheck` (now includes emoji paint and the file-icon fixture), release
+  binary **5.29 MB** (12 MB growth guard). Manual launch of the release binary
+  with `README.md` ran for several seconds without a panic.
+- **Bench** (`scripts/bench.sh`, same fixture): typing map off 0.046 → 0.056
+  ms/frame, map on 0.172 → 0.183, 16 ms frame 0.703 → 0.771; markdown parse
+  1.45 ms, layout 2.10 ms, minimap 0.418/0.062. All inside the documented
+  budgets; idle frames are still zero.
+- **Commits**: plan → emoji model → editor paint → preview/terminal/labels →
+  icon-theme model → Explorer icons → verification/docs.

@@ -77,11 +77,19 @@ impl EmojiStore {
     }
 
     /// Whether a color emoji face was found on this host.
+    #[cfg_attr(
+        not(feature = "selfcheck"),
+        allow(dead_code, reason = "reported by the headless self-check")
+    )]
     pub fn available(&self) -> bool {
         emoji::system_font().is_some()
     }
 
     /// The emoji face used (for status text and diagnostics).
+    #[cfg_attr(
+        not(feature = "selfcheck"),
+        allow(dead_code, reason = "reported by the headless self-check")
+    )]
     pub fn font_path(&self) -> Option<&'static Path> {
         emoji::system_font().map(emoji::EmojiFont::path)
     }

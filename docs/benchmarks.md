@@ -164,6 +164,26 @@ with this benchmark. Never use `"z"` on the frame path.
 The `release-fast` profile is an iteration build (thin LTO, 16 codegen units)
 and is reported but not gated. The Session 5 reduction took the binary from
 4.8 MB to 4.41 MB; the current value is 5.13 MB.
+### Color emoji and file icons (Session 6)
+
+Emoji-aware text paint classifies each character and only splits a run at emoji
+code points; file icons run in `update` for the visible Explorer rows only, and
+the benchmark app opens no project. Same fixture/tree as above:
+
+| row | before | after |
+|---|---|---|
+| typing, map off | 0.046 ms/frame | 0.056 ms/frame |
+| typing, map on | 0.172 ms/frame | 0.183 ms/frame |
+| typing (16 ms frame) | 0.703 ms/frame | 0.771 ms/frame |
+| markdown parse | 0.75–1.83 ms/iter | 1.45 ms/iter |
+| preview layout | 1.68–2.08 ms/iter | 2.10 ms/iter |
+| minimap build / incremental | 0.414 / 0.062 ms | 0.418 / 0.062 ms |
+
+The per-character emoji check costs ~0.01 ms/frame on this fixture; the idle
+path is unchanged (no frames, and no theme/SVG IO until the Explorer with **File
+Icons** on is visible). The shipped binary moved 5.13 → 5.29 MB with the PNG
+decoder and emoji/font loading, inside the 12 MB growth guard.
+
 ## Runtime profiler (local only)
 
 The editor can link the engine's `igui_profile`/`igui_debug_ui` tools behind the

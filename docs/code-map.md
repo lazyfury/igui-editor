@@ -3,6 +3,7 @@
 ```
 src/
   model/doc.rs        text buffer, caret/selection, movement, delta undo stack
+  model/emoji.rs      color emoji classification + sbix/CBDT bitmap decoding
   model/find.rs       plain-text matcher (case / whole-word)
   model/git.rs        git status/diff worker + porcelain parser
   model/pty.rs        portable-pty PTY session
@@ -25,6 +26,7 @@ src/
   model/recovery.rs   crash snapshots (txt + metadata)
   model/replace.rs    replace-in-files planning/apply (conflict + open skip)
   model/fs_tree.rs    lazy sidebar tree (dirs first, visibility filter per session)
+  model/icon_theme.rs VS Code file-icon theme JSON parse + name/folder lookup
   model/ignore.rs     Explorer ignore rules + OFF/DIM/HIDE mode for tool files
   model/fsutil.rs     atomic temp+fsync+rename writer shared by model IO
   model/markdown.rs   Markdown event stream -> flat block model
@@ -48,6 +50,8 @@ src/
   ui/outline.rs       right document-symbol outline
   ui/tree.rs          shared Explorer/outline tree row renderer
   ui/icon.rs          embedded Lucide icons, cached igui_svg documents + painter
+  ui/fileicon.rs      VS Code theme SVG -> coloured scanline spans, cached
+  ui/emoji.rs         color emoji sprites inside text runs and terminal cells
   ui/tree_menu.rs     file-tree context menu
   ui/settings.rs      grouped, searchable settings panel (switches/choices/numbers)
   ui/references.rs    Fn/Shift+F12 references overlay (geometry shared by paint/click)
@@ -60,6 +64,8 @@ src/
   state/{terminal,git,lsp,search}.rs  native services and workers
   state/tooling.rs    missing-tool prompt state, LSP on/off entry point
   state/overlay.rs    app-overlay pointer precedence (hover/cursor/wheel blocking)
+  state/emoji.rs      emoji sprite cache + backend texture upload
+  state/fileicons.rs  lazy icon-theme load, SVG source cache, visible-row preload
   state/dock.rs       dock/panel table, open state, tab commands, badges
   state/{settings,view,reliability,services,new_file,quick_open,references,rename_symbol}.rs
                       settings, layout, autosave/recovery and prompt state
