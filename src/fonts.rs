@@ -333,6 +333,14 @@ mod atlas_probe {
         use std::rc::Rc;
         let server = Rc::new(igui_font::FontServer::load_with(crate::host::font_config()));
         server.set_scale(2.0);
+        // A host without a CJK-capable face cannot exercise the atlas; skip.
+        let cjk = server.shape("中", 13.0, FontWeight::NORMAL);
+        if cjk
+            .iter()
+            .all(|slot| slot.size[0] == 0.0 || slot.size[1] == 0.0)
+        {
+            return;
+        }
         let before = server.atlas_size();
         // Chrome + editor Latin first, as a real session shapes them.
         for weight in [FontWeight::NORMAL, FontWeight::BOLD] {
