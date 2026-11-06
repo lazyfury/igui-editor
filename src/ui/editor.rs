@@ -67,7 +67,9 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
                 }
                 PointerPhase::Move => {
                     if state.editor.drag == Drag::None {
-                        if let Some((line, column)) = hit(&state, pos, measurer.as_ref()) {
+                        if crate::ui::minimap::contains(&state, pos) {
+                            state.clear_hover_target();
+                        } else if let Some((line, column)) = hit(&state, pos, measurer.as_ref()) {
                             if let Some(doc) = state.ws.active_doc() {
                                 let doc_id = doc.id();
                                 let byte = doc.byte_at(line, column);
@@ -82,6 +84,9 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
                 PointerPhase::Up => state.editor.drag = Drag::None,
                 PointerPhase::DoubleClick => {
                     state.clear_hover_target();
+                    if crate::ui::minimap::contains(&state, pos) {
+                        return;
+                    }
                     let Some((line, column)) = hit(&state, pos, measurer.as_ref()) else {
                         return;
                     };
@@ -459,6 +464,11 @@ fn pointer_down(state: &mut AppState, pos: Vec2, shift: bool, measurer: &dyn Tex
         drag_to(state, pos, measurer);
         return;
     }
+    // The minimap owns its strip: jump or start a slider drag, never move the
+    // caret.
+    if crate::ui::minimap::handle_press(state, pos) {
+        return;
+    }
     let Some((line, column)) = hit(state, pos, measurer) else {
         return;
     };
@@ -486,23 +496,36 @@ fn pointer_move(state: &mut AppState, pos: Vec2, measurer: &dyn TextMeasurer) {
             state.dirty = true;
         }
         Drag::VScroll { .. } | Drag::HScroll { .. } => drag_to(state, pos, measurer),
+        Drag::Minimap { .. } => crate::ui::minimap::handle_drag(state, pos),
     }
 }
 
 fn drag_to(state: &mut AppState, pos: Vec2, _measurer: &dyn TextMeasurer) {
-    let editor = state.editor.clone();
-    match editor.drag {
+    // Copy the recorded geometry instead of cloning `EditorUi`: the minimap
+    // cache lives there and must not be duplicated on every drag move.
+    let (drag, vbar, vthumb, hbar, hthumb, content_h, content_w, view_w, view_h) = {
+        let editor = &state.editor;
+        (
+            editor.drag,
+            editor.vbar,
+            editor.vthumb,
+            editor.hbar,
+            editor.hthumb,
+            editor.content_h,
+            editor.content_w,
+            editor.view_w,
+            editor.view_h,
+        )
+    };
+    match drag {
         Drag::VScroll { grab } => {
-            let track = editor.vbar.height() - editor.vthumb.height();
+            let track = vbar.height() - vthumb.height();
             if track <= 0.0 {
                 return;
             }
-            let thumb_top = (pos.y - grab).clamp(
-                editor.vbar.top(),
-                editor.vbar.bottom() - editor.vthumb.height(),
-            );
-            let ratio = (thumb_top - editor.vbar.top()) / track;
-            let max = (editor.content_h - editor.view_h).max(0.0);
+            let thumb_top = (pos.y - grab).clamp(vbar.top(), vbar.bottom() - vthumb.height());
+            let ratio = (thumb_top - vbar.top()) / track;
+            let max = (content_h - view_h).max(0.0);
             if let Some(doc) = state.ws.active_doc_mut() {
                 doc.scroll_y = ratio * max;
             }
@@ -510,23 +533,20 @@ fn drag_to(state: &mut AppState, pos: Vec2, _measurer: &dyn TextMeasurer) {
             state.dirty = true;
         }
         Drag::HScroll { grab } => {
-            let track = editor.hbar.width() - editor.hthumb.width();
+            let track = hbar.width() - hthumb.width();
             if track <= 0.0 {
                 return;
             }
-            let thumb_left = (pos.x - grab).clamp(
-                editor.hbar.left(),
-                editor.hbar.right() - editor.hthumb.width(),
-            );
-            let ratio = (thumb_left - editor.hbar.left()) / track;
-            let max = (editor.content_w - editor.view_w).max(0.0);
+            let thumb_left = (pos.x - grab).clamp(hbar.left(), hbar.right() - hthumb.width());
+            let ratio = (thumb_left - hbar.left()) / track;
+            let max = (content_w - view_w).max(0.0);
             if let Some(doc) = state.ws.active_doc_mut() {
                 doc.scroll_x = ratio * max;
             }
             state.editor.reveal = false;
             state.dirty = true;
         }
-        Drag::None | Drag::Select => {}
+        Drag::None | Drag::Select | Drag::Minimap { .. } => {}
     }
 }
 
@@ -649,26 +669,20 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     let sb = m.scrollbar;
     let show_gutter = state.settings.line_numbers;
 
-    let (
-        gutter_w,
-        line_count,
-        scroll_x,
-        scroll_y,
-        caret,
-        selection,
-        extra,
-        preedit,
-        doc_id,
-        rev,
-        len,
-    ) = {
+    let gutter_w = state.ws.active_doc().map_or(0.0, |doc| {
+        if show_gutter {
+            gutter_width(doc.line_count(), measurer, font, m.gutter_pad, family)
+        } else {
+            0.0
+        }
+    });
+    // Reserve the minimap strip (0 when disabled, too narrow, or too large a
+    // file) before computing the text area it takes the space from.
+    let map_w = crate::ui::minimap::reserved_width(state, rect, gutter_w);
+
+    let (line_count, scroll_x, scroll_y, caret, selection, extra, preedit, doc_id, rev, len) = {
         let doc = state.ws.active_doc().expect("checked above");
         (
-            if show_gutter {
-                gutter_width(doc.line_count(), measurer, font, m.gutter_pad, family)
-            } else {
-                0.0
-            },
             doc.line_count(),
             doc.scroll_x,
             doc.scroll_y,
@@ -684,7 +698,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     let text_rect = Rect::from_min_size(
         Vec2::new(rect.left() + gutter_w, rect.top()),
         Size::new(
-            (rect.width() - gutter_w - sb).max(16.0),
+            (rect.width() - gutter_w - sb - map_w).max(16.0),
             (rect.height() - sb).max(16.0),
         ),
     );
@@ -871,7 +885,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         env.ctx.fill_rect(
             Rect::from_min_size(
                 Vec2::new(rect.left(), y),
-                Size::new(rect.width() - sb, line_h),
+                Size::new((rect.width() - sb - map_w).max(0.0), line_h),
             ),
             if state.focus == Focus::Editor {
                 p.current_line
@@ -1569,6 +1583,34 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     editor.vthumb = vthumb;
     editor.hbar = hbar;
     editor.hthumb = hthumb;
+
+    // Minimap strip: content plus the recorded viewport slider. It is painted
+    // last so its opaque background also masks the current-line tint in that
+    // column.
+    if map_w > 0.0 {
+        let map = Rect::from_min_size(
+            Vec2::new(text_rect.right(), text_rect.top()),
+            Size::new(map_w, text_rect.height()),
+        );
+        let theme = state.theme;
+        let doc = state.ws.active_doc().expect("checked above");
+        crate::ui::minimap::paint(
+            &mut state.editor.minimap,
+            doc,
+            &state.editor.wrap,
+            wrap_on,
+            map,
+            first_row,
+            last_row,
+            max_scroll_y,
+            tab,
+            &theme,
+            env.ctx,
+        );
+    } else {
+        state.editor.minimap.rect = Rect::ZERO;
+        state.editor.minimap.slider = Rect::ZERO;
+    }
 }
 
 fn paint_welcome(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
@@ -1578,6 +1620,8 @@ fn paint_welcome(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     let measurer = env.measurer;
     state.editor.welcome_actions.clear();
     state.editor.caret_rect = Rect::ZERO;
+    state.editor.minimap.rect = Rect::ZERO;
+    state.editor.minimap.slider = Rect::ZERO;
 
     let mut actions = vec![Action::Open, Action::OpenFolder, Action::New];
     if state.ws.folder_open {

@@ -124,6 +124,7 @@ Read the minimum set; do not preload the whole tree.
 | Dialogs / macOS integration | `src/dialogs.rs`, `src/host.rs`, `src/macos/`, `src/native.rs` | Async sheets only; native menu/window chrome route through `NativeRequest`. |
 | Session / recovery / window state | `src/model/session.rs`, `src/model/recovery.rs`, `src/state/reliability.rs` | Atomic writes. |
 | Headless verification | `src/selfcheck.rs` | [`docs/verification.md`](docs/verification.md). |
+| Minimap | `src/model/minimap.rs`, `src/ui/minimap.rs`, `src/ui/editor.rs` | [`docs/minimap.md`](docs/minimap.md); one layout function serves paint and hit-test. |
 | Packaging / release profile | `packaging/`, `Cargo.toml` | [`docs/packaging.md`](docs/packaging.md). |
 | Docs-only change | `docs/README.md` | Keep README short; update links. |
 | Reduction work (scope cuts, reliability) | `docs/reduction-plan.md` | Session 5 plan and progress log. |

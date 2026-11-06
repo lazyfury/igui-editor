@@ -28,6 +28,7 @@ src/
   model/ignore.rs     Explorer ignore rules + OFF/DIM/HIDE mode for tool files
   model/fsutil.rs     atomic temp+fsync+rename writer shared by model IO
   model/markdown.rs   Markdown event stream -> flat block model
+  model/minimap.rs    per-line ink marks, incremental cache, bucket geometry
   model/session.rs    key=value session file (atomic write, escaping, v17)
   model/watch.rs      directory snapshots, change diffs, watcher globs
   model/workspace.rs  tabs + file IO (open/save/move/close folder)
@@ -69,6 +70,7 @@ src/
   ui/tabs.rs          tab strip (drag reorder, close targets)
   ui/tab_menu.rs      right-click tab menu (close variants / path / reveal)
   ui/editor.rs        gutter, text, selection, caret, scrollbars, IME preedit
+  ui/minimap.rs       minimap strip paint, slider, click/drag mapping
   ui/find_bar.rs      find / replace strip
   ui/quick_open.rs    Quick Open palette
   ui/new_file.rs      quick-create-file prompt

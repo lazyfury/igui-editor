@@ -35,6 +35,7 @@
 | `⇧⌘M` | cycle Editor → Split Preview → Preview Only |
 | `⇧⌘Y` | toggle editor/preview scroll sync |
 | `⌥Z` | toggle soft wrap |
+| `⌘⌥M` | toggle the minimap strip |
 | `Tab` / `⇧Tab` | indent / outdent with the file's detected unit (tabs or spaces) |
 | `Enter` | newline with the current indentation; GDScript adds a level after a block opener (`:`) |
 | `⌥⇧F` | Format Document: convert indentation to the configured style/width |
@@ -111,5 +112,5 @@ tab (unsaved tabs open a Save / Discard / Cancel modal), `+` for a new buffer,
 drag a tab to reorder it, right-click it for Close / Close Others / Close to the
 Right / Copy Path / Reveal in Sidebar (closing several dirty tabs asks once),
 right-click a file-tree row for Open / New File / Copy Path / Reveal in Finder,
-drag the editor scrollbars, drag in the text to select, wheel-scroll the
+click or drag the minimap, drag the editor scrollbars, drag in the text to select, wheel-scroll the
 preview.

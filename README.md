@@ -7,7 +7,7 @@ A compact, square-cornered **text / Markdown editor** built on the
 Tabs · undo/redo · find & replace · syntax highlighting · native LSP · outline ·
 Markdown split preview (tables included) · Quick Open · project search +
 replace · Git status/diff · built-in terminal · scroll sync ·
-soft wrap · external-change detection · macOS Finder/Dock integration ·
+soft wrap · minimap · external-change detection · macOS Finder/Dock integration ·
 drag & drop · settings · native dialogs · session/window restore · autosave and
 crash recovery · large-file guards.
 
@@ -138,7 +138,8 @@ reproduce them.
 ## Features at a glance
 
 - **Editing** — tabs, multi-line undo/redo, selection/mouse selection, block
-  indent, line duplicate/move/delete/comment, smart home/end, soft wrap, IME.
+  indent, line duplicate/move/delete/comment, smart home/end, soft wrap,
+  minimap, IME.
   Caret movement, Backspace/Delete and double-click word selection keep
   grapheme clusters (combining marks, emoji ZWJ/skin-tone sequences) intact.
 - **Find** — find/replace with case/whole-word, match highlighting; project
@@ -177,11 +178,11 @@ Module ownership and the full file map: [docs/code-map.md](docs/code-map.md).
 
 ## Scope and known gaps
 
-Delivered through M15: shell/editing/tabs, native dialogs, find/replace,
+Delivered through M16: shell/editing/tabs, native dialogs, find/replace,
 Markdown preview, syntax/packs, Quick Open/project search, split/scroll sync,
-tab drag/context menu, soft wrap, external changes, read-only Git status/diff,
-PTY terminal, LSP (Rust/Godot), macOS integration, settings and recovery. The
-Session 5 reduction removed image preview, Git writes/history, file-type icons
-and four extra language servers.
+tab drag/context menu, soft wrap, minimap, external changes, read-only Git
+status/diff, PTY terminal, LSP (Rust/Godot), macOS integration, settings and
+recovery. The Session 5 reduction removed image preview, Git writes/history,
+file-type icons and four extra language servers.
 
 Known gaps and next candidates are tracked in [docs/roadmap.md](docs/roadmap.md).

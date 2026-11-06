@@ -817,6 +817,14 @@ fn build_main_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
         command_item(
             mtm,
             &target,
+            "Minimap",
+            NativeCommand::ToggleMinimap,
+            "m",
+            NSEventModifierFlags::Command | NSEventModifierFlags::Option,
+        ),
+        command_item(
+            mtm,
+            &target,
             "Terminal",
             NativeCommand::ToggleTerminal,
             "`",

@@ -29,6 +29,9 @@ intentionally larger than the 48 KB preview-debounce threshold.
 | `markdown parse` | `pulldown-cmark` + block folding only |
 | `preview layout` | parse once, then block → draw-primitive layout with a deterministic measurer |
 | `preview paint` | real `EditorApp` update/layout/paint for steady-state frames (cache hit), counting draw commands |
+| `minimap build` | full per-line mark scan + bucket aggregation (open / tab switch / revision gap) |
+| `minimap incremental` | one line rescan + bucket aggregation after an insertion (model-side typing cost) |
+| `typing, map off` / `typing (map on)` | real app typing into a plain-text file (Edit view) with the strip disabled/enabled; commands from the last frame |
 | `typing (16 ms frame)` | one text insertion per frame at ~60 fps, real app pipeline; sleep is excluded from the reported work time |
 | `idle (windowed)` | not a benchmark: manual `ps`/`vmmap` sampling of the real window; the frame loop must present **zero** frames while nothing happens |
 
@@ -38,11 +41,22 @@ macOS arm64, release/bench profile, 0.1.0:
 
 ```text
 fixture: 128885 bytes, 4800 lines
-markdown parse            1.3 ms/iter
-preview layout            1.8 ms/iter      ~19k primitives
-preview paint             0.01 ms/iter      ~410 visible commands   (DrawList reused)
-typing (16 ms frame)      1.1 ms/frame work
+markdown parse            1.75 ms/iter
+preview layout            2.07 ms/iter      ~19k primitives
+minimap build             0.104 ms/iter
+minimap incremental       0.015 ms/iter
+typing, map off           0.333 ms/frame work    763 commands
+typing, map on            0.418 ms/frame work   1120 commands
+preview paint             0.048 ms/iter         1075 visible commands   (DrawList reused)
+typing (16 ms frame)      1.64 ms/frame work
 ```
+
+The two Edit-view typing rows use the same fixture opened as plain text, so the
+difference is exactly the minimap: **+0.085 ms/frame and +357 draw commands**.
+Markdown files open in Split view, where the strip is usually auto-hidden, so
+those older rows do not exercise it. The non-minimap numbers above are from the
+current tree; the previous table (parse 1.3 / layout 1.8 / typing 1.1 ms)
+predates later app growth and is not a minimap regression.
 
 Windowed idle (macOS arm64, 1193×656, terminal panel open, maximized session):
 
@@ -71,6 +85,9 @@ The current path:
 ## Budgets
 
 - Typing benchmark work must stay **< 2 ms/frame** on the fixture above.
+- Minimap: full build **≤ 0.5 ms** per 4,800 lines, incremental sync **≤ 0.05
+  ms/frame**, and Edit-view typing within **+0.1 ms/frame / +512 commands** of
+  the strip being off. The measured run is +0.085 ms and +357 commands.
 - Idle must stay at **0 frames** (0% CPU); only deadlines from
   `AppState::next_wake` and real input may request a frame. If a change makes an
   idle window repaint, treat it as a regression.

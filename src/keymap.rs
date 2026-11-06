@@ -365,6 +365,7 @@ impl Keymap {
             ("shift+f12", Action::LspReferences),
             ("f2", Action::LspRename),
             ("alt+z", Action::ToggleSoftWrap),
+            ("primary+alt+m", Action::ToggleMinimap),
             ("ctrl+`", Action::ToggleTerminal),
             ("primary+alt+p", Action::ShowPanel(Panel::Problems)),
         ];

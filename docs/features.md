@@ -496,7 +496,7 @@ clickable.
 
 | Limit | Behavior |
 |---|---|
-| > 2 MB or > 20k lines | syntax highlighting and soft wrap off |
+| > 2 MB or > 20k lines | syntax highlighting, soft wrap and the minimap off |
 | > 8 MB | preview disabled (banner); editing continues |
 | > 32 MB | opening refused with a status-bar error |
 | preview > 512 KB | first 512 KB rendered + "truncated" banner |
@@ -680,6 +680,31 @@ appear on a line's first row. Horizontal scrolling is suppressed while wrapped.
 Soft wrap is disabled above 2 MB / 20k lines (the toggle reports why). The last
 horizontal scroll offset is restored when wrap is turned off.
 
+## Minimap (`⌘⌥M`, View menu)
+
+A low-contrast structural thumbnail of the whole document sits between the text
+area and the vertical scrollbar. Each line contributes its leading indentation
+and its ink extent (trailing whitespace ignored); lines are grouped into 2 px
+rows, so the strip shows the document's shape rather than readable glyphs, and
+its draw cost is bounded by the window height, not the file size. The visible
+viewport is drawn as a bordered translucent slider.
+
+- click anywhere on the strip to scroll that line to the top; the caret and
+  selection do not move. Drag to scroll continuously.
+- the wheel/trackpad over the strip scrolls the editor as usual.
+- soft wrap keeps the strip on logical lines; a click scrolls to the wrapped
+  visual row that owns the clicked line.
+- the strip hides automatically when the text area would become narrower than
+  360 px (narrow window, split view) without changing the toggle.
+- files above 2 MB / 20k lines show no strip (the same limits as highlighting
+  and soft wrap).
+- the toggle is in **View → Minimap**, persists in the session, and the map is
+  on by default.
+
+Implementation: `src/model/minimap.rs` caches one mark per line, updates it
+incrementally from the document's edit span, and aggregates marks into at most
+512 rows; `src/ui/minimap.rs` owns the geometry, paint and pointer mapping.
+
 ## External file changes
 
 Every second the app polls two things:
@@ -727,8 +752,8 @@ remembered per document and the last ratio is persisted.
   are marked dirty so the first save writes them back.
 - **Window state**: size, position and the maximized flag are persisted and
   restored (fullscreen is not persisted).
-- Session format is version 18 (v18 removed the image-preview key; v17 added
-  `image_preview`; v16 added `show_hidden` and `ignored_files`;
+- Session format is version 19 (v19 added `minimap`; v18 removed the
+  image-preview key; v17 added `image_preview`; v16 added `show_hidden` and `ignored_files`;
   v15 added `bottom_tab` and
   `indent_tabs`; v14 split
   `recent_project.*` / `recent_file.*`; v13 added `trust_local_servers`, v12

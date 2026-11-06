@@ -219,6 +219,7 @@ pub enum Action {
     SetView(ViewMode),
     ToggleScrollSync,
     ToggleSoftWrap,
+    ToggleMinimap,
     SetLanguage(Option<String>),
     OpenRecentProject(PathBuf),
     OpenRecentFile(PathBuf),
@@ -282,6 +283,7 @@ impl Action {
             Action::SetView(mode) => mode.label().into(),
             Action::ToggleScrollSync => "Sync Scroll".into(),
             Action::ToggleSoftWrap => "Soft Wrap".into(),
+            Action::ToggleMinimap => "Minimap".into(),
             Action::SetLanguage(None) => "Auto (by extension)".into(),
             Action::SetLanguage(Some(name)) => name.clone(),
             Action::ClearRecent => "Clear Recent".into(),
@@ -360,6 +362,7 @@ impl Action {
                 .is_some_and(|path| state.lsp.supports(path)),
             Action::SetView(_) => doc.is_some(),
             Action::ToggleSoftWrap => doc.is_some(),
+            Action::ToggleMinimap => doc.is_some(),
             Action::SetLanguage(_) => doc.is_some(),
             Action::OpenRecentProject(path) => path.is_dir(),
             Action::OpenRecentFile(path) => path.is_file(),
@@ -382,6 +385,7 @@ impl Action {
             Action::ToggleOutline => state.show_outline,
             Action::ShowPanel(panel) => panel.is_open(state),
             Action::ToggleSoftWrap => state.session.soft_wrap,
+            Action::ToggleMinimap => state.session.minimap,
             Action::ToggleTerminal => Panel::Terminal.is_open(state),
             Action::SetLanguage(None) => state.language_override_of_active().is_none(),
             Action::SetLanguage(Some(name)) => {
@@ -460,6 +464,7 @@ pub fn items(menu: Menu, state: &AppState) -> Vec<Option<Action>> {
             None,
             Some(Action::ToggleScrollSync),
             Some(Action::ToggleSoftWrap),
+            Some(Action::ToggleMinimap),
             Some(Action::ToggleTerminal),
             Some(Action::ShowPanel(Panel::Problems)),
             None,
@@ -493,6 +498,9 @@ pub enum Drag {
     VScroll { grab: f32 },
     /// Dragging the horizontal scrollbar.
     HScroll { grab: f32 },
+    /// Dragging the minimap; `grab` is the line offset from the viewport top
+    /// when the press started inside the slider (0 for a jump).
+    Minimap { grab: f32 },
 }
 
 /// Widgets of the find/replace bar (hit targets).
@@ -645,6 +653,21 @@ pub struct EditorUi {
     pub font: Option<String>,
     /// Whether [`EditorUi::font`] has been probed (needs the backend measurer).
     pub font_checked: bool,
+    /// Minimap strip: recorded geometry and the content cache.
+    pub minimap: MinimapUi,
+}
+
+/// Minimap strip captured by the last paint. `rect` is `Rect::ZERO` when the
+/// map is disabled, too narrow, or the file is above the caps, so pointer
+/// handling falls through to the text area.
+#[derive(Clone, Debug, Default)]
+pub struct MinimapUi {
+    pub rect: Rect,
+    /// Viewport slider inside `rect` (zero when the document fits).
+    pub slider: Rect,
+    /// First visible line of the last paint, used for drag grab offsets.
+    pub first_line: usize,
+    pub cache: crate::model::minimap::MinimapCache,
 }
 
 /// Sidebar geometry captured by the last paint.

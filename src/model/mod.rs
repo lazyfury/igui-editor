@@ -18,6 +18,7 @@ pub mod highlight;
 pub mod ignore;
 pub mod lsp;
 pub mod markdown;
+pub mod minimap;
 pub mod processes;
 pub mod pty;
 pub mod recovery;

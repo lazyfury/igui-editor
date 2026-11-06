@@ -11,6 +11,7 @@ pub mod handle;
 pub mod icon;
 pub mod lsp;
 pub mod menu;
+pub mod minimap;
 pub mod modal;
 pub mod new_file;
 pub mod outline;

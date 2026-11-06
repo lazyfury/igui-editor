@@ -200,6 +200,17 @@ impl AppState {
         }
     }
 
+    /// Shows/hides the minimap strip; persisted in the session.
+    pub fn toggle_minimap(&mut self) {
+        self.session.minimap = !self.session.minimap;
+        self.config_dirty = true;
+        self.status(format!(
+            "minimap: {}",
+            if self.session.minimap { "ON" } else { "OFF" }
+        ));
+        self.dirty = true;
+    }
+
     pub fn toggle_sync_scroll(&mut self) {
         self.sync_scroll = !self.sync_scroll;
         self.session.sync_scroll = self.sync_scroll;

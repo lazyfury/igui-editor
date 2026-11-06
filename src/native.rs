@@ -41,6 +41,7 @@ pub enum NativeCommand {
     Minimize,
     Zoom,
     GotoLine,
+    ToggleMinimap,
 }
 
 impl NativeCommand {
@@ -85,6 +86,7 @@ impl NativeCommand {
             31 => Self::Minimize,
             32 => Self::Zoom,
             33 => Self::GotoLine,
+            34 => Self::ToggleMinimap,
             _ => return None,
         })
     }
@@ -128,6 +130,7 @@ mod tests {
             NativeCommand::Settings,
             NativeCommand::Quit,
             NativeCommand::Zoom,
+            NativeCommand::ToggleMinimap,
         ] {
             assert_eq!(NativeCommand::from_tag(command.tag()), Some(command));
         }

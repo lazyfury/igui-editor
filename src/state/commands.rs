@@ -262,6 +262,11 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         action: Action::ToggleSoftWrap,
     },
     CommandSpec {
+        id: "view.minimap",
+        aliases: &["minimap"],
+        action: Action::ToggleMinimap,
+    },
+    CommandSpec {
         id: "view.terminal",
         aliases: &[],
         action: Action::ToggleTerminal,
@@ -504,6 +509,7 @@ mod tests {
             ("view.theme", Action::ToggleTheme),
             ("view.scrollSync", Action::ToggleScrollSync),
             ("view.softWrap", Action::ToggleSoftWrap),
+            ("view.minimap", Action::ToggleMinimap),
             ("view.terminal", Action::ToggleTerminal),
             ("view.problems", Action::ShowPanel(Panel::Problems)),
             ("settings", Action::Settings),

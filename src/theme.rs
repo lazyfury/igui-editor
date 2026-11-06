@@ -164,6 +164,8 @@ pub struct Metrics {
     pub status_h: f32,
     pub sidebar_w: f32,
     pub scrollbar: f32,
+    /// Minimap strip width (0 disables the reserved space).
+    pub minimap: f32,
     /// Horizontal text padding inside the editor's text area.
     pub text_pad: f32,
     /// Gutter padding on both sides of the line numbers.
@@ -188,6 +190,7 @@ impl Metrics {
         status_h: 24.0,
         sidebar_w: 232.0,
         scrollbar: 10.0,
+        minimap: 84.0,
         text_pad: 10.0,
         gutter_pad: 10.0,
         tab: 4.0,

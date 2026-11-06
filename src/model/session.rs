@@ -19,7 +19,7 @@ use super::fsutil;
 
 /// Current session format. Bump this together with a `Session::migrate` block
 /// and the `docs/features.md` version history.
-pub const SESSION_VERSION: u32 = 18;
+pub const SESSION_VERSION: u32 = 19;
 
 /// Cap for the two recent lists (`recent_projects`, `recent_files`).
 ///
@@ -82,6 +82,8 @@ pub struct Session {
     pub sync_scroll: bool,
     /// Soft-wrap long editor lines.
     pub soft_wrap: bool,
+    /// Show the minimap strip in the editor.
+    pub minimap: bool,
     /// Active sidebar tab id (`explorer`, `git`, …).
     pub sidebar_tab: String,
     pub terminal_open: bool,
@@ -133,6 +135,7 @@ impl Default for Session {
             languages: Vec::new(),
             sync_scroll: true,
             soft_wrap: false,
+            minimap: true,
             sidebar_tab: "explorer".into(),
             terminal_open: false,
             terminal_height: 220.0,
@@ -201,6 +204,7 @@ impl Session {
                 "trust_local_servers" => session.trust_local_servers = value == "1",
                 "sync_scroll" => session.sync_scroll = value == "1",
                 "soft_wrap" => session.soft_wrap = value == "1",
+                "minimap" => session.minimap = value == "1",
                 "sidebar_tab" => session.sidebar_tab = value,
                 "terminal_open" => session.terminal_open = value == "1",
                 "terminal_height" => {
@@ -320,6 +324,7 @@ impl Session {
         ));
         out.push_str(&format!("sync_scroll={}\n", u8::from(self.sync_scroll)));
         out.push_str(&format!("soft_wrap={}\n", u8::from(self.soft_wrap)));
+        out.push_str(&format!("minimap={}\n", u8::from(self.minimap)));
         out.push_str(&format!("sidebar_tab={}\n", escape(&self.sidebar_tab)));
         out.push_str(&format!("terminal_open={}\n", u8::from(self.terminal_open)));
         out.push_str(&format!("terminal_height={}\n", self.terminal_height));
@@ -505,6 +510,7 @@ mod tests {
             languages: vec![(PathBuf::from("/tmp/x.lua"), "lua".into())],
             sync_scroll: false,
             soft_wrap: true,
+            minimap: false,
             keymap: "vim".into(),
             outline_width: 260.0,
             window: Some(WindowGeometry {

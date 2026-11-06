@@ -297,6 +297,7 @@ impl AppState {
                 let on = !self.session.soft_wrap;
                 self.set_soft_wrap(on);
             }
+            Action::ToggleMinimap => self.toggle_minimap(),
             Action::ToggleTerminal => self.toggle_terminal(),
             Action::SetLanguage(name) => self.set_language(name),
             Action::OpenRecentProject(path) => self.open_project(path),

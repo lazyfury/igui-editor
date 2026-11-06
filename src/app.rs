@@ -1436,6 +1436,7 @@ impl EditorApp {
                 .run(Action::SetView(ViewMode::Preview)),
             C::ToggleScrollSync => self.state.borrow_mut().run(Action::ToggleScrollSync),
             C::ToggleSoftWrap => self.state.borrow_mut().run(Action::ToggleSoftWrap),
+            C::ToggleMinimap => self.state.borrow_mut().run(Action::ToggleMinimap),
             C::ToggleTerminal => self.state.borrow_mut().run(Action::ToggleTerminal),
             C::Settings => self.state.borrow_mut().run(Action::Settings),
         }

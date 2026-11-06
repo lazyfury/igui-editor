@@ -16,7 +16,9 @@ use igui_ui::TextMeasurer;
 
 use crate::app::EditorApp;
 use crate::dialogs::ScriptedDialogs;
+use crate::model::doc::{Document, LineEnding};
 use crate::model::markdown;
+use crate::model::minimap::MinimapCache;
 use crate::theme::{Mode, Theme};
 use crate::ui::preview;
 
@@ -108,6 +110,122 @@ pub fn markdown_layout(text: &str, width: f32, iterations: usize) -> Report {
     let mut report = Report::new(iterations, start.elapsed());
     report.primitives = primitives;
     report
+}
+
+/// Builds the minimap mark cache for a whole document `iterations` times.
+///
+/// This is the cost paid on open / tab switch / a revision gap: one pass over
+/// the text, no font measurement. Aggregation is included because the paint
+/// path always requests buckets.
+pub fn minimap_build(text: &str, iterations: usize) -> Report {
+    let iterations = iterations.max(1);
+    let doc = Document::from_snapshot(
+        1,
+        "bench.md".into(),
+        None,
+        text.into(),
+        0,
+        0,
+        LineEnding::Lf,
+    );
+    let start = Instant::now();
+    let mut buckets = 0;
+    for _ in 0..iterations {
+        let mut cache = MinimapCache::default();
+        cache.sync(&doc, 4);
+        buckets = cache.buckets(256).len();
+    }
+    let mut report = Report::new(iterations, start.elapsed());
+    report.primitives = buckets;
+    report
+}
+
+/// One insertion followed by an incremental minimap sync, `iterations` times.
+///
+/// This is the model-side cost per typing frame (marks for one line, then the
+/// bucket aggregation the paint requests).
+pub fn minimap_incremental(text: &str, iterations: usize) -> Report {
+    let iterations = iterations.max(1);
+    let mut doc = Document::from_snapshot(
+        1,
+        "bench.md".into(),
+        None,
+        text.into(),
+        0,
+        0,
+        LineEnding::Lf,
+    );
+    let mut cache = MinimapCache::default();
+    cache.sync(&doc, 4);
+    let start = Instant::now();
+    for _ in 0..iterations {
+        doc.insert_text("x");
+        cache.sync(&doc, 4);
+        let _ = cache.buckets(256);
+    }
+    let mut report = Report::new(iterations, start.elapsed());
+    report.primitives = doc.line_count();
+    report
+}
+
+/// Drives the real app typing into a plain-text file (Edit view, no preview)
+/// with the minimap on or off, and reports the CPU work per frame.
+///
+/// The same fixture and frame count are used for both flags, so the difference
+/// is exactly the minimap cost (mark sync + bucket paint commands). The reported
+/// command count is from the last frame, after the map is populated.
+pub fn editor_typing(
+    text: &str,
+    frames: usize,
+    frame_ms: u64,
+    minimap: bool,
+) -> Result<Report, String> {
+    let frames = frames.max(1);
+    let tag = if minimap { "on" } else { "off" };
+    let dir = std::env::temp_dir().join(format!(
+        "igui-editor-bench-map-{tag}-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).map_err(|error| format!("fixture dir: {error}"))?;
+    let file = dir.join("bench.txt");
+    std::fs::write(&file, text).map_err(|error| format!("fixture: {error}"))?;
+    let config = dir.join("session.conf");
+    let mut app = EditorApp::with_config(
+        Some(file),
+        Some(Mode::Dark),
+        config,
+        Box::new(ScriptedDialogs::default()),
+    );
+    app.state_mut().session.minimap = minimap;
+    let viewport = ViewportSize::new(Size::new(1200.0, 800.0));
+    app.update(0.0);
+    app.layout(viewport);
+    let mut warmup = PaintContext::new();
+    app.paint(&mut warmup);
+    let _ = warmup.into_draw_list();
+
+    let mut work = Duration::ZERO;
+    for _ in 0..frames {
+        if let Some(doc) = app.state_mut().ws.active_doc_mut() {
+            doc.insert_text("x");
+        }
+        let start = Instant::now();
+        app.update(0.0);
+        app.layout(viewport);
+        let mut ctx = PaintContext::new();
+        app.paint(&mut ctx);
+        let _ = ctx.into_draw_list();
+        work += start.elapsed();
+        std::thread::sleep(Duration::from_millis(frame_ms));
+    }
+    let mut final_ctx = PaintContext::new();
+    app.paint(&mut final_ctx);
+    let commands = final_ctx.into_draw_list().len();
+
+    let mut report = Report::new(frames, work);
+    report.commands = commands;
+    let _ = std::fs::remove_dir_all(dir);
+    Ok(report)
 }
 
 /// Simulates typing in a Markdown document at `frame_ms` intervals.

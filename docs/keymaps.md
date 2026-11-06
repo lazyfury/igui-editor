@@ -22,7 +22,7 @@ remaining scope.
 | Tabs | `primary+1…8` select by index, `primary+9` last, `Ctrl+Tab` / `Ctrl+Shift+Tab` cycle |
 | Menus | macOS: native `NSMenu`; other platforms: mouse-driven in-app menus with keymap-derived hints |
 | Search | Find/replace, project search + replace, next/previous |
-| Views | Edit/split/preview, soft wrap, scroll sync |
+| Views | Edit/split/preview, soft wrap, scroll sync, minimap |
 | Language | Syntax highlighting, language packs, LSP diagnostics/hover/completion/definition, semantic tokens |
 | Terminal | Native PTY, key encoding, focus/caret, resize |
 | Git | Status markers and read-only diff views |
@@ -97,9 +97,9 @@ edit.toggleComment, edit.gotoLine, editor.format
 motion.lineStart, motion.lineEnd, motion.docStart, motion.docEnd
 find.find, find.replace, find.next, find.previous
 quickOpen, projectSearch, settings
-view.edit, view.split, view.preview, view.cycle, view.softWrap, view.sidebar,
-view.scrollSync, view.theme, view.explorer, view.git, view.outline, view.terminal,
-view.problems
+view.edit, view.split, view.preview, view.cycle, view.softWrap, view.minimap,
+view.sidebar, view.scrollSync, view.theme, view.explorer, view.git, view.outline,
+view.terminal, view.problems
 panel.terminal, panel.outline
 language.auto
 lsp.hover, lsp.completion, lsp.definition, lsp.references, lsp.rename, lsp.restart

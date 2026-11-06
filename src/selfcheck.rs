@@ -51,11 +51,12 @@ pub fn run() -> Result<(), String> {
         .and_then(|()| check_lsp(&dir))
         .and_then(|()| check_keymaps(&dir))
         .and_then(|()| check_goto_line(&dir))
-        .and_then(|()| check_markdown_outline(&dir));
+        .and_then(|()| check_markdown_outline(&dir))
+        .and_then(|()| check_minimap(&dir));
     let _ = fs::remove_dir_all(&dir);
     if result.is_ok() {
         println!(
-            "selfcheck ok: main flow + workspace/recovery + explorer filters + typing + LSP + keymap + go-to-line + Markdown outline checks"
+            "selfcheck ok: main flow + workspace/recovery + explorer filters + typing + LSP + keymap + go-to-line + Markdown outline + minimap checks"
         );
     }
     result
@@ -5064,6 +5065,298 @@ fn check_markdown_outline(dir: &Path) -> Result<(), String> {
         .is_none_or(|doc| doc.line_col().0 != 2)
     {
         return Err("clicking a Markdown outline row did not jump to its heading".into());
+    }
+    Ok(())
+}
+
+/// Minimap: recorded geometry, painted ink, click/drag mapping, soft wrap,
+/// auto-hide and the persisted toggle.
+fn check_minimap(dir: &Path) -> Result<(), String> {
+    use crate::model::minimap as map_model;
+
+    let map_dir = dir.join("minimap");
+    fs::create_dir_all(&map_dir).map_err(|error| format!("minimap fixture: {error}"))?;
+    let mut text = String::new();
+    for index in 0..400 {
+        let indent = " ".repeat((index % 4) * 4);
+        text.push_str(&format!(
+            "{indent}line {index} {}\n",
+            "x".repeat(index % 30)
+        ));
+    }
+    let path = map_dir.join("minimap.txt");
+    fs::write(&path, &text).map_err(|error| format!("minimap fixture: {error}"))?;
+    let config = map_dir.join("session.conf");
+    let mut harness = Harness::new(Some(path), config.clone(), ScriptedDialogs::new(vec![]));
+    let frame = harness.frame()?;
+
+    let (map, text_rect, slider, line_h, line_count, content_h, view_h) = {
+        let state = harness.app.state();
+        let doc = state
+            .ws
+            .active_doc()
+            .ok_or("no document for the minimap check")?;
+        (
+            state.editor.minimap.rect,
+            state.editor.text_rect,
+            state.editor.minimap.slider,
+            state.editor_metrics().line_h,
+            doc.line_count(),
+            state.editor.content_h,
+            state.editor.view_h,
+        )
+    };
+    if map.is_empty() {
+        return Err("the minimap was not painted for a normal window".into());
+    }
+    if (map.left() - text_rect.right()).abs() > 0.5 {
+        return Err(format!(
+            "the minimap does not start at the text area edge ({:.1} vs {:.1})",
+            map.left(),
+            text_rect.right()
+        ));
+    }
+    {
+        let state = harness.app.state();
+        if (map.right() - state.editor.vbar.left()).abs() > 0.5 {
+            return Err("the minimap does not end at the vertical scrollbar".into());
+        }
+    }
+    let mut inked = 0usize;
+    let mut ink_left = f32::MAX;
+    let mut ink_top = f32::MAX;
+    let mut ink_bottom = f32::MIN;
+    for command in frame.commands() {
+        let DrawCommand::FillRect { rect, .. } = command else {
+            continue;
+        };
+        if rect.width() <= 1.0 || !map.contains_rect(*rect) {
+            continue;
+        }
+        inked += 1;
+        ink_left = ink_left.min(rect.left());
+        ink_top = ink_top.min(rect.top());
+        ink_bottom = ink_bottom.max(rect.bottom());
+    }
+    if inked < 20 {
+        return Err(format!("the minimap painted only {inked} content rects"));
+    }
+    if inked > 520 {
+        return Err(format!(
+            "the minimap painted {inked} rects, over the draw-command cap"
+        ));
+    }
+    // The fixture starts at column 0 and fills the document, so the ink must
+    // reach the strip's left edge and both ends of its content box.
+    if ink_left > map.left() + 2.0 {
+        return Err(format!(
+            "minimap ink starts at {:.1}, expected the strip edge {:.1}",
+            ink_left,
+            map.left()
+        ));
+    }
+    if ink_top > map.top() + 3.0 || ink_bottom < map.bottom() - 3.0 {
+        return Err(format!(
+            "minimap ink does not span the strip (top {ink_top:.1}, bottom {ink_bottom:.1}, map {:.1}..={:.1})",
+            map.top(),
+            map.bottom()
+        ));
+    }
+    if slider.is_empty() || !map.contains_rect(slider) {
+        return Err("the minimap viewport slider is missing or outside the strip".into());
+    }
+
+    // Clicking the strip scrolls the clicked line to the top and keeps the
+    // caret where it was.
+    let caret_before = harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .map_or(0, |doc| doc.caret());
+    let click_at = Vec2::new(map.center().x, map.top() + map.height() * 0.5);
+    let expected_line = map_model::line_at(
+        click_at.y - map.top(),
+        line_count,
+        map_model::content_height(line_count, map.height()),
+    );
+    harness.click(click_at);
+    harness.frame()?;
+    let max_scroll = (content_h - view_h).max(0.0);
+    let expected_scroll = (expected_line as f32 * line_h).min(max_scroll);
+    {
+        let state = harness.app.state();
+        let doc = state
+            .ws
+            .active_doc()
+            .ok_or("no document after the minimap click")?;
+        if (doc.scroll_y - expected_scroll).abs() > 1.0 {
+            return Err(format!(
+                "minimap click scrolled to {:.1}, expected {:.1} (line {expected_line})",
+                doc.scroll_y, expected_scroll
+            ));
+        }
+        if doc.caret() != caret_before {
+            return Err("clicking the minimap moved the caret".into());
+        }
+        if state.editor.minimap.first_line != expected_line {
+            return Err(format!(
+                "minimap first_line is {}, expected {expected_line}",
+                state.editor.minimap.first_line
+            ));
+        }
+    }
+
+    // Dragging from the strip scrolls to the end and clamps.
+    let from = harness.app.state().editor.minimap.slider.center();
+    let to = Vec2::new(map.center().x, map.bottom() - 1.0);
+    harness.drag(from, to);
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        let doc = state
+            .ws
+            .active_doc()
+            .ok_or("no document after the minimap drag")?;
+        let max_scroll = (state.editor.content_h - state.editor.view_h).max(0.0);
+        if (doc.scroll_y - max_scroll).abs() > 1.0 {
+            return Err(format!(
+                "minimap drag ended at {:.1}, expected the clamp {:.1}",
+                doc.scroll_y, max_scroll
+            ));
+        }
+        if doc.caret() != caret_before {
+            return Err("dragging the minimap moved the caret".into());
+        }
+    }
+
+    // The toggle removes the strip, widens the text area, persists, and the
+    // shortcut is the same command.
+    let shortcut = Modifiers {
+        meta: cfg!(target_os = "macos"),
+        ctrl: !cfg!(target_os = "macos"),
+        alt: true,
+        ..Modifiers::NONE
+    };
+    harness.shortcut(Key::Character('m'), shortcut);
+    harness.frame()?;
+    let widened = {
+        let state = harness.app.state();
+        if !state.editor.minimap.rect.is_empty() {
+            return Err("the minimap toggle did not remove the strip".into());
+        }
+        if state.session.minimap {
+            return Err("the minimap toggle was not persisted in the session".into());
+        }
+        state.editor.text_rect.width()
+    };
+    if widened <= text_rect.width() + map.width() * 0.5 {
+        return Err("hiding the minimap did not widen the text area".into());
+    }
+    let restored = EditorApp::with_config(
+        None,
+        None,
+        config.clone(),
+        Box::new(ScriptedDialogs::new(vec![])),
+    );
+    if restored.state().session.minimap {
+        return Err("the hidden minimap was not restored from the session".into());
+    }
+
+    // Auto-hide: a narrow window drops the strip without changing the toggle.
+    let mut close = Harness::new(
+        Some(map_dir.join("minimap.txt")),
+        map_dir.join("auto-hide.conf"),
+        ScriptedDialogs::new(vec![]),
+    );
+    close.frame()?;
+    close.viewport = ViewportSize::new(Size::new(640.0, 800.0));
+    close.frame()?;
+    {
+        let state = close.app.state();
+        if !state.editor.minimap.rect.is_empty() {
+            return Err("the minimap stayed visible in a narrow window".into());
+        }
+        if !state.session.minimap {
+            return Err("auto-hiding the minimap changed the persisted toggle".into());
+        }
+    }
+    close.viewport = ViewportSize::new(Size::new(WIDTH, HEIGHT));
+    close.frame()?;
+    if close.app.state().editor.minimap.rect.is_empty() {
+        return Err("the minimap did not return after widening the window".into());
+    }
+
+    // Soft wrap: the map scrolls by visual rows for the clicked line.
+    let wrap_path = map_dir.join("minimap-wrap.txt");
+    let mut wrapped = String::new();
+    for index in 0..120 {
+        wrapped.push_str(&format!("{index} {}\n", "word ".repeat(40)));
+    }
+    fs::write(&wrap_path, &wrapped).map_err(|error| format!("wrap fixture: {error}"))?;
+    let mut harness = Harness::new(
+        Some(wrap_path),
+        map_dir.join("wrap-session.conf"),
+        ScriptedDialogs::new(vec![]),
+    );
+    {
+        let mut state = harness.app.state_mut();
+        state.set_soft_wrap(true);
+    }
+    harness.frame()?;
+    let (map, line_h, line_count, wrapped_rows) = {
+        let state = harness.app.state();
+        let doc = state
+            .ws
+            .active_doc()
+            .ok_or("no wrapped document for the minimap")?;
+        (
+            state.editor.minimap.rect,
+            state.editor_metrics().line_h,
+            doc.line_count(),
+            state.editor.wrap.len(),
+        )
+    };
+    if wrapped_rows <= line_count {
+        return Err("soft wrap did not create visual rows for the minimap check".into());
+    }
+    if map.is_empty() {
+        return Err("the minimap disappeared under soft wrap".into());
+    }
+    let click_at = Vec2::new(map.center().x, map.top() + map.height() * 0.4);
+    let expected_line = map_model::line_at(
+        click_at.y - map.top(),
+        line_count,
+        map_model::content_height(line_count, map.height()),
+    );
+    harness.click(click_at);
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        let doc = state
+            .ws
+            .active_doc()
+            .ok_or("no wrapped document after the minimap click")?;
+        let max_scroll = (state.editor.content_h - state.editor.view_h).max(0.0);
+        let expected =
+            (state.editor.wrap.first_row_of_line(expected_line) as f32 * line_h).min(max_scroll);
+        if (doc.scroll_y - expected).abs() > 1.0 {
+            return Err(format!(
+                "wrapped minimap click scrolled to {:.1}, expected {:.1}",
+                doc.scroll_y, expected
+            ));
+        }
+    }
+
+    // No document: no strip.
+    let mut empty = Harness::new(
+        None,
+        dir.join("minimap-empty.conf"),
+        ScriptedDialogs::new(vec![]),
+    );
+    empty.frame()?;
+    if !empty.app.state().editor.minimap.rect.is_empty() {
+        return Err("the minimap was painted without a document".into());
     }
     Ok(())
 }

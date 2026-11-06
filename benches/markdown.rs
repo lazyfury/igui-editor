@@ -56,6 +56,19 @@ fn main() {
     print_report("markdown parse", parse);
     let layout = igui_editor::bench::markdown_layout(&text, 760.0, 20);
     print_report("preview layout", layout);
+    let map_build = igui_editor::bench::minimap_build(&text, 20);
+    print_report("minimap build", map_build);
+    let map_typing = igui_editor::bench::minimap_incremental(&text, 200);
+    print_report("minimap incremental", map_typing);
+    for (label, enabled) in [("typing, map off", false), ("typing, map on", true)] {
+        match igui_editor::bench::editor_typing(&text, 60, 16, enabled) {
+            Ok(report) => print_report(label, report),
+            Err(error) => {
+                eprintln!("editor typing benchmark failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
     match igui_editor::bench::markdown_paint(&text, 120) {
         Ok(paint) => print_report("preview paint", paint),
         Err(error) => {
