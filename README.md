@@ -121,8 +121,8 @@ Measured on macOS arm64 for 0.1.0:
 | Artifact | Before | After |
 |---|---|---|
 | `target/release/igui-editor` | 9.1 MB | **4.0 MB** |
-| `dist/igui-editor.app` | 10 MB | **5.0 MB** |
-| `dist/*.zip` | 4.1 MB | **2.9 MB** |
+| `dist/igui-editor.app` | 10 MB | **4.8 MB** |
+| `dist/*.zip` | 4.1 MB | **2.5 MB** |
 
 Frames are event-driven: an idle window presents **zero** frames, and an open
 terminal no longer keeps a 60 fps loop alive (PTY output wakes the window, timed
