@@ -17,6 +17,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 threshold="${PERF_THRESHOLD:-15}"
+repeats="${PERF_REPEATS:-3}"
 perf_dir="${PERF_DIR:-target/perf}"
 update=0
 for arg in "$@"; do
@@ -53,17 +54,17 @@ else
         -- --baseline "$upstream_base" --threshold "$threshold"
 fi
 
-step "editor Markdown/typography bench"
-app_out="$perf_dir/markdown.txt"
-app_base="$perf_dir/markdown.baseline.txt"
-scripts/bench.sh >"$app_out"
-cat "$app_out"
-
-if (( update )) || [[ ! -f "$app_base" ]]; then
-    cp "$app_out" "$app_base"
-    echo "saved baseline: $app_base"
-    exit 0
-fi
+step "editor Markdown/typography bench (best of $repeats)"
+labels=(
+    "markdown parse"
+    "preview layout"
+    "minimap build"
+    "minimap incremental"
+    "typing, map off"
+    "typing, map on"
+    "preview paint"
+    "typing (16 ms frame)"
+)
 
 metric() {
     # Time value immediately before the first `ms/iter` or `ms/frame` token.
@@ -76,17 +77,39 @@ metric() {
     ' "$2"
 }
 
+# One 20-iteration sample is sensitive to scheduling/frequency noise. Run the
+# app bench a few times and keep the best value per label (standard for a
+# machine-local microbench); the upstream suite does its own warmup/sampling.
+for ((run = 1; run <= repeats; run++)); do
+    scripts/bench.sh >"$perf_dir/markdown-$run.txt"
+done
+cat "$perf_dir/markdown-1.txt"
+
+app_out="$perf_dir/markdown.txt"
+app_base="$perf_dir/markdown.baseline.txt"
+: >"$app_out"
+for label in "${labels[@]}"; do
+    best=""
+    for ((run = 1; run <= repeats; run++)); do
+        value=$(metric "$label" "$perf_dir/markdown-$run.txt")
+        [[ -z "$value" ]] && continue
+        if [[ -z "$best" ]] || awk -v a="$value" -v b="$best" 'BEGIN { exit !(a < b) }'; then
+            best="$value"
+        fi
+    done
+    if [[ -n "$best" ]]; then
+        printf '%s %s ms/iter\n' "$label" "$best" >>"$app_out"
+    fi
+done
+
+if (( update )) || [[ ! -f "$app_base" ]]; then
+    cp "$app_out" "$app_base"
+    echo "saved baseline: $app_base"
+    exit 0
+fi
+
 status=0
-for label in \
-    "markdown parse" \
-    "preview layout" \
-    "minimap build" \
-    "minimap incremental" \
-    "typing, map off" \
-    "typing, map on" \
-    "preview paint" \
-    "typing (16 ms frame)"
-do
+for label in "${labels[@]}"; do
     base=$(metric "$label" "$app_base")
     current=$(metric "$label" "$app_out")
     if [[ -z "$base" || -z "$current" ]]; then

@@ -160,6 +160,7 @@ wired into GitHub Actions:
 scripts/perf.sh --update    # record baselines on THIS machine
 scripts/perf.sh             # compare (default 15% threshold)
 PERF_THRESHOLD=10 scripts/perf.sh
+PERF_REPEATS=5 scripts/perf.sh   # best-of-N for the app microbench (default 3)
 ```
 
 It checks that the profiler feature still compiles, runs the upstream
