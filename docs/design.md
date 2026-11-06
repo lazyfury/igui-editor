@@ -664,3 +664,12 @@ very large documents.
 - An OS filesystem watcher: the visible directories are polled once a second and
   the Explorer refreshes from those snapshots; project search still scans on
   demand.
+
+46. **Color emoji are app-level sprites, not an engine font mode.** `igui_font`
+   is outline-only by design (`ab_glyph`), and the platform emoji faces are
+   bitmap fonts. `model::emoji` memory-maps the face and decodes `sbix`/`CBDT`
+   payloads; `state::emoji` caches RGBA8 bitmaps as backend textures; `ui::emoji`
+   splits a text run at emoji code points and paints one image per base at the
+   advance the layout reserved. That keeps every caret/wrap/hit-test invariant
+   intact and needs no engine change. Chrome text stays on the glyph path (no
+   outline, no ink), and joined sequences are painted per code point on purpose.

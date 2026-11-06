@@ -382,6 +382,7 @@ fn draw_text_mixed(
             run,
             Vec2::new(x, pos.y),
             font,
+            FontWeight::NORMAL,
             run_family,
             color,
         );

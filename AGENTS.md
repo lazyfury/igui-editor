@@ -105,6 +105,7 @@ Read the minimum set; do not preload the whole tree.
 | Text buffer, caret, selection, undo | `src/model/doc.rs` | Tests at the bottom of the file. |
 | Tabs, files, save/open, folder | `src/model/workspace.rs`, `src/state/files.rs` | `src/state/tabs.rs` for lifecycle. |
 | Editor painting / gutter / IME | `src/ui/editor.rs`, `src/kit.rs`, `src/state/caret.rs` | IME placement comes from `AppState::ime_caret()` (painters record field carets), not the scene tree. `src/fonts.rs` for family policy. |
+| Color emoji | `src/model/emoji.rs`, `src/state/emoji.rs`, `src/ui/emoji.rs` | Engine fonts are outline-only; the app mmaps the system emoji face, decodes its bitmaps and paints one image per base code point at the reserved advance. [`docs/emoji.md`](docs/emoji.md). |
 | Icons / header panel toggles / dock grouping | `src/ui/icon.rs`, `assets/icons/README.md`, `src/ui/menu.rs`, `src/state/dock.rs`, `src/ui/dock.rs` | Vendored Lucide SVGs; render through engine `igui_svg`, never fetch at build time. One dock header layout serves paint and hit-test. |
 | Bottom dock tabs (Terminal / Problems) | `src/state/dock.rs`, `src/ui/dock.rs`, `src/ui/terminal.rs`, `src/ui/problems.rs` | Closing a dock hides it; shells keep running. |
 | External file changes / file watches | `src/state/watch.rs`, `src/model/watch.rs`, `src/model/fs_tree.rs`, `src/model/lsp.rs` | Poll only: no OS watcher dependency. Refresh the tree with `FsTree::refresh` (keeps expansions), never `reload`. Report changes via `FileEvent`. |

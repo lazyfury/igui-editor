@@ -775,6 +775,22 @@ about them without waiting for the next poll.
 
 No filesystem-watcher dependency; everything is metadata polling.
 
+## Color emoji
+
+Emoji in document text, Markdown preview and terminal output paint as color
+images. The app reads the system emoji face (Apple Color Emoji, Noto Color
+Emoji, Segoe UI Emoji; `IGUI_EMOJI_FONT` overrides) and draws the bitmap at the
+advance the text layout already reserved, so the caret, selection, soft wrap and
+column math are unchanged. Explorer/outline rows and tab labels also paint
+emoji in file names.
+
+Text-default symbols (`❤`, `☀`) need the emoji variation selector (`❤️`, `☀️`) to
+turn colorful; skin-tone modifiers and joiners do not paint their own image.
+Joined sequences therefore show their components side by side (`👨‍👩‍👧` = three
+faces) rather than one shaped glyph, because layout measures per code point.
+Emoji in menus, prompts and the status bar stay text on purpose: a color face
+has no outline. Details and limits: [`docs/emoji.md`](emoji.md).
+
 ## Split view
 
 `⇧⌘M` cycles Editor → Split Preview → Preview Only. In split mode the divider is

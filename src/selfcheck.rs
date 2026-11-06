@@ -4444,6 +4444,40 @@ fn check_workspace_and_recovery(dir: &Path) -> Result<(), String> {
     if !seen.contains("terminal-selfcheck") || !seen.contains("中文") {
         return Err(format!("terminal output was not parsed: {seen:?}"));
     }
+    // Emoji output: a wide cell paints a sprite instead of a glyph.
+    harness
+        .app
+        .state_mut()
+        .terminal_write("printf '😀\\n'\n".as_bytes());
+    let mut seen_emoji = false;
+    for _ in 0..100 {
+        harness.frame()?;
+        if let Some(parser) = harness.app.state().terminal.active_parser() {
+            if parser.screen().contents().contains('😀') {
+                seen_emoji = true;
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    if !seen_emoji {
+        return Err("terminal emoji output was not parsed".into());
+    }
+    if harness.app.state().emoji.available() {
+        let frame = harness.frame()?;
+        let body = harness.app.state().terminal.rect;
+        let images = frame
+            .commands()
+            .iter()
+            .filter(|command| match command {
+                DrawCommand::DrawImage { destination, .. } => destination.intersects(body),
+                _ => false,
+            })
+            .count();
+        if images == 0 {
+            return Err("the terminal painted no emoji sprite".into());
+        }
+    }
     let frame = harness.frame()?;
     let accent = crate::theme::Theme::new(Mode::Dark).p.accent.to_rgba8();
     let faint = crate::theme::Theme::new(Mode::Dark).p.faint.to_rgba8();
@@ -5355,8 +5389,9 @@ fn check_markdown_code_wrap(dir: &Path) -> Result<(), String> {
 }
 
 fn check_emoji(dir: &Path) -> Result<(), String> {
-    let path = dir.join("emoji.txt");
-    fs::write(&path, "hello 😀 world ❤️\n").map_err(|error| format!("emoji fixture: {error}"))?;
+    let path = dir.join("emoji.md");
+    fs::write(&path, "# Smile 😀\n\nParty 🎉 time ❤️\n")
+        .map_err(|error| format!("emoji fixture: {error}"))?;
     let mut harness = Harness::new(
         Some(path),
         dir.join("emoji-session.conf"),
@@ -5377,15 +5412,27 @@ fn check_emoji(dir: &Path) -> Result<(), String> {
         println!("selfcheck: no color emoji font installed; emoji paint skipped");
         return Ok(());
     }
-    let text_rect = harness.app.state().editor.text_rect;
-    let mut images = 0usize;
+    let (text_rect, preview_rect) = {
+        let state = harness.app.state();
+        (state.editor.text_rect, state.preview.rect)
+    };
+    if preview_rect.width() < 1.0 {
+        return Err("the Markdown fixture did not open in Split view".into());
+    }
+    let mut editor_images = 0usize;
+    let mut preview_images = 0usize;
     for command in frame.commands() {
         match command {
-            DrawCommand::DrawImage { destination, .. } if destination.intersects(text_rect) => {
-                images += 1;
+            DrawCommand::DrawImage { destination, .. } => {
+                if destination.intersects(text_rect) {
+                    editor_images += 1;
+                }
+                if destination.intersects(preview_rect) {
+                    preview_images += 1;
+                }
             }
             DrawCommand::DrawText { text, position, .. }
-                if text_rect.contains(*position)
+                if (text_rect.contains(*position) || preview_rect.contains(*position))
                     && text
                         .chars()
                         .any(|ch| crate::model::emoji::is_emoji(ch, None)) =>
@@ -5397,9 +5444,15 @@ fn check_emoji(dir: &Path) -> Result<(), String> {
             _ => {}
         }
     }
-    if images < 2 {
+    if editor_images < 2 {
         return Err(format!(
-            "emoji in the editor painted {images} images (face: {})",
+            "emoji in the editor painted {editor_images} images (face: {})",
+            font.unwrap_or_else(|| "unknown".into())
+        ));
+    }
+    if preview_images < 2 {
+        return Err(format!(
+            "emoji in the preview painted {preview_images} images (face: {})",
             font.unwrap_or_else(|| "unknown".into())
         ));
     }

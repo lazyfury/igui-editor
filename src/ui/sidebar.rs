@@ -278,6 +278,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         };
         crate::ui::tree::paint_row(
             env.ctx,
+            &state.emoji,
             measurer,
             row_rect,
             &m,

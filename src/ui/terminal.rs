@@ -392,15 +392,17 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                 } else {
                     (family, rect.left())
                 };
-                env.ctx.draw_text_in(
-                    text,
-                    Vec2::new(draw_x, baseline),
-                    font,
-                    igui_core::FontWeight::NORMAL,
-                    igui_render::TextAlign::Left,
-                    draw_family,
-                    fg,
-                );
+                if !super::emoji::paint_cell(env.ctx, &state.emoji, text, rect, font) {
+                    env.ctx.draw_text_in(
+                        text,
+                        Vec2::new(draw_x, baseline),
+                        font,
+                        igui_core::FontWeight::NORMAL,
+                        igui_render::TextAlign::Left,
+                        draw_family,
+                        fg,
+                    );
+                }
             }
         }
     }

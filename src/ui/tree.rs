@@ -47,6 +47,7 @@ pub struct Row<'a> {
 /// Paints one tree row inside `rect` (the row's full-width hit box).
 pub fn paint_row(
     ctx: &mut PaintContext,
+    store: &crate::state::EmojiStore,
     measurer: &dyn TextMeasurer,
     rect: Rect,
     m: &Metrics,
@@ -109,7 +110,17 @@ pub fn paint_row(
     });
     let name_w = (rect.right() - 8.0 - name_x - trailing_w).max(12.0);
     let name = kit::truncate(measurer, row.label, m.font_ui, name_w);
-    kit::text(ctx, &name, name_x, baseline, m.font_ui, row.color);
+    crate::ui::emoji::paint_text(
+        ctx,
+        store,
+        measurer,
+        &name,
+        Vec2::new(name_x, baseline),
+        m.font_ui,
+        igui_core::FontWeight::NORMAL,
+        None,
+        row.color,
+    );
 
     if let Some((text, color)) = row.trailing {
         kit::text_right(

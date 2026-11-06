@@ -314,12 +314,15 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                     env.ctx.fill_rect(bg.translate(offset), p.raised);
                 }
                 let baseline = *baseline + offset.y;
-                env.ctx.draw_text_weighted(
+                super::emoji::paint_text(
+                    env.ctx,
+                    &state.emoji,
+                    measurer,
                     text.as_str(),
                     Vec2::new(*x + offset.x, baseline),
                     *size,
                     *weight,
-                    igui_render::TextAlign::Left,
+                    None,
                     *color,
                 );
                 if *underline {

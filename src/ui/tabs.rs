@@ -129,12 +129,15 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
                 .fill_circle(Vec2::new(text_x - 3.0, tab.center().y), 1.8, p.accent);
             text_x += 6.0;
         }
-        kit::text(
+        crate::ui::emoji::paint_text(
             env.ctx,
+            &state.emoji,
+            measurer,
             &name,
-            text_x,
-            baseline,
+            Vec2::new(text_x, baseline),
             m.font_ui,
+            igui_core::FontWeight::NORMAL,
+            None,
             if active { p.text } else { p.dim },
         );
 

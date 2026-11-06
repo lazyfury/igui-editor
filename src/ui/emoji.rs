@@ -32,6 +32,7 @@ pub fn paint_text(
     text: &str,
     origin: Vec2,
     font_size: f32,
+    weight: igui_core::FontWeight,
     family: Option<&str>,
     color: Color,
 ) -> f32 {
@@ -48,17 +49,12 @@ pub fn paint_text(
                 run,
                 Vec2::new(x, origin.y),
                 font_size,
-                igui_core::FontWeight::NORMAL,
+                weight,
                 igui_render::TextAlign::Left,
                 family,
                 color,
             );
-            x += measurer.measure_run_weighted_in(
-                run,
-                font_size,
-                igui_core::FontWeight::NORMAL,
-                family,
-            );
+            x += measurer.measure_run_weighted_in(run, font_size, weight, family);
         }
         let advance = fonts::advance(measurer, ch, font_size, family);
         if let Some(sprite) = store.sprite(ch, font_size) {
@@ -162,6 +158,7 @@ mod tests {
             "hello",
             Vec2::new(10.0, 20.0),
             10.0,
+            igui_core::FontWeight::NORMAL,
             None,
             Color::WHITE,
         );
@@ -185,6 +182,7 @@ mod tests {
             "a😀b",
             Vec2::new(0.0, 20.0),
             10.0,
+            igui_core::FontWeight::NORMAL,
             None,
             Color::WHITE,
         );
@@ -213,6 +211,7 @@ mod tests {
             "👍🏽",
             Vec2::new(0.0, 20.0),
             10.0,
+            igui_core::FontWeight::NORMAL,
             None,
             Color::WHITE,
         );
