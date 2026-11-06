@@ -134,7 +134,7 @@ pub fn minimap_build(text: &str, iterations: usize) -> Report {
     for _ in 0..iterations {
         let mut cache = MinimapCache::default();
         cache.sync(&doc, 4, &HighlightCache::new());
-        buckets = cache.buckets(256).len();
+        buckets = cache.raster(256, 100).len();
     }
     let mut report = Report::new(iterations, start.elapsed());
     report.primitives = buckets;
@@ -162,7 +162,7 @@ pub fn minimap_incremental(text: &str, iterations: usize) -> Report {
     for _ in 0..iterations {
         doc.insert_text("x");
         cache.sync(&doc, 4, &HighlightCache::new());
-        let _ = cache.buckets(256);
+        let _ = cache.raster(256, 100);
     }
     let mut report = Report::new(iterations, start.elapsed());
     report.primitives = doc.line_count();

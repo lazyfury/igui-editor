@@ -32,9 +32,11 @@ const INK_MAX: f32 = 0.32;
 /// Viewport slider fill and border alpha.
 const SLIDER_FILL: f32 = 0.08;
 const SLIDER_BORDER: f32 = 0.60;
-/// Styled (syntax-colored) bucket alpha range.
-const STYLED_MIN: f32 = 0.45;
+/// Styled (syntax-colored) run alpha range.
+const STYLED_MIN: f32 = 0.55;
 const STYLED_MAX: f32 = 0.75;
+/// Runs painted per raster row before a single dominant bar is used instead.
+const MAX_RUNS_PER_ROW: usize = 8;
 
 /// Width the editor must reserve for the map, or 0 when it is disabled, above
 /// the file caps, or would leave too little room for text.
@@ -95,34 +97,70 @@ pub fn paint(
 
     let content_h = minimap::content_height(line_count, inner.height());
     let bucket_count = minimap::bucket_count(line_count, inner.height());
-    let scale = ui.cache.max_columns().max(1) as f32;
+    let cells = inner.width().ceil().max(1.0) as usize;
     let row_h = content_h / bucket_count as f32;
     {
-        let rows = ui.cache.buckets(bucket_count);
-        for (index, bucket) in rows.iter().enumerate() {
-            if bucket.x1 <= bucket.x0 {
+        let raster = ui.cache.raster(bucket_count, cells);
+        for row in 0..bucket_count {
+            let slice = &raster[row * cells..(row + 1) * cells];
+            let occupied = slice.iter().filter(|&&code| code != 0).count();
+            if occupied == 0 {
                 continue;
             }
-            let x0 =
-                inner.left() + (bucket.x0.min(minimap::MAX_COLUMNS) as f32 / scale) * inner.width();
-            let x1 =
-                inner.left() + (bucket.x1.min(minimap::MAX_COLUMNS) as f32 / scale) * inner.width();
-            let y = inner.top() + index as f32 * row_h;
-            let density = bucket.density();
-            // Styled buckets carry the syntax color; plain ones stay neutral.
-            let kind = bucket.kind();
-            let (color, alpha) = if kind == TokenKind::Plain {
-                (theme.p.text, INK_MIN + (INK_MAX - INK_MIN) * density)
-            } else {
-                (
-                    theme.token_color(kind),
-                    STYLED_MIN + (STYLED_MAX - STYLED_MIN) * density,
-                )
-            };
-            ctx.fill_rect(
-                Rect::from_min_size(Vec2::new(x0, y), Size::new((x1 - x0).max(1.0), row_h)),
-                color.alpha_mul(alpha),
-            );
+            let density = occupied as f32 / cells as f32;
+            let y = inner.top() + row as f32 * row_h;
+            // Count runs first: an unusually busy row falls back to one
+            // dominant bar instead of blowing up the draw list.
+            let mut runs = 0usize;
+            let mut previous = 0u8;
+            for &code in slice {
+                if code != 0 && code != previous {
+                    runs += 1;
+                }
+                previous = code;
+            }
+            if runs > MAX_RUNS_PER_ROW {
+                let mut counts = [0u16; 11];
+                for &code in slice {
+                    counts[code as usize] = counts[code as usize].saturating_add(1);
+                }
+                let mut best = 1u8;
+                for code in 2..=10 {
+                    if counts[code as usize] > counts[best as usize] {
+                        best = code as u8;
+                    }
+                }
+                let first = slice.iter().position(|&code| code != 0).unwrap_or(0);
+                let last = slice.iter().rposition(|&code| code != 0).unwrap_or(first);
+                paint_cell_run(
+                    ctx,
+                    theme,
+                    inner,
+                    cells,
+                    y,
+                    row_h,
+                    first,
+                    last + 1,
+                    best,
+                    density,
+                );
+                continue;
+            }
+            let mut index = 0usize;
+            while index < cells {
+                let code = slice[index];
+                if code == 0 {
+                    index += 1;
+                    continue;
+                }
+                let begin = index;
+                while index < cells && slice[index] == code {
+                    index += 1;
+                }
+                paint_cell_run(
+                    ctx, theme, inner, cells, y, row_h, begin, index, code, density,
+                );
+            }
         }
     }
 
@@ -141,6 +179,37 @@ pub fn paint(
         ctx.stroke_rect(slider, 1.0, theme.p.dim.alpha_mul(SLIDER_BORDER));
         ui.slider = slider;
     }
+}
+
+/// Paints one run of raster cells (`begin..end`) at the row's baseline.
+#[allow(clippy::too_many_arguments)]
+fn paint_cell_run(
+    ctx: &mut PaintContext,
+    theme: &Theme,
+    inner: Rect,
+    cells: usize,
+    y: f32,
+    row_h: f32,
+    begin: usize,
+    end: usize,
+    code: u8,
+    density: f32,
+) {
+    let kind = minimap::kind_of(code);
+    let (color, alpha) = if kind == TokenKind::Plain {
+        (theme.p.text, INK_MIN + (INK_MAX - INK_MIN) * density)
+    } else {
+        (
+            theme.token_color(kind),
+            STYLED_MIN + (STYLED_MAX - STYLED_MIN) * density,
+        )
+    };
+    let x0 = inner.left() + (begin as f32 / cells as f32) * inner.width();
+    let x1 = inner.left() + (end as f32 / cells as f32) * inner.width();
+    ctx.fill_rect(
+        Rect::from_min_size(Vec2::new(x0, y), Size::new((x1 - x0).max(1.0), row_h)),
+        color.alpha_mul(alpha),
+    );
 }
 
 /// Inclusive `(first, last)` visible line span for the visible row range.

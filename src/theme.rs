@@ -190,7 +190,7 @@ impl Metrics {
         status_h: 24.0,
         sidebar_w: 232.0,
         scrollbar: 10.0,
-        minimap: 84.0,
+        minimap: 100.0,
         text_pad: 10.0,
         gutter_pad: 10.0,
         tab: 4.0,

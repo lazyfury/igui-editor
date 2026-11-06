@@ -48,33 +48,43 @@ Facts the design depends on, verified in the tree:
 
 | Option | How | Verdict |
 |---|---|---|
-| A. Structural blocks (chosen) | Cache one `(indent, end)` mark per line; aggregate lines into ~2 px buckets and paint one low-alpha rect per bucket | Chosen: font-independent, no glyph measuring, deterministic, ~1 draw command per bucket, unit-testable |
-| B. Syntax-tinted buckets | Same as A, but the bucket's dominant token class selects its color | Delivered on top of A: no extra draw commands, one color per bucket |
+| A. Structural runs (chosen) | Cache each line's non-blank runs (start/end column + token class), then rasterize them into map cells | Chosen: font-independent, no glyph measuring, gaps and separate code blocks stay visible, unit-testable |
+| B. Syntax-tinted raster | Each run carries its token class; the raster keeps the dominant class per cell | Delivered: colors follow keywords, strings, comments and numbers instead of one color per line |
 | C. Tiny-font text thumbnail | Draw each line at 2–3 px | Rejected: tiny runs are illegible, force text measurement and font fallback for every line, and blow up the `DrawList` |
 | D. Render the editor into a scaled sub-viewport | Engine `SubViewport` render target | Rejected: the minimap shows *off-screen* content, so it would have to render the whole document (up to 20k lines) to a texture every edit; cost is proportional to the document, not to the map |
 
 A is the smallest surface that answers "where am I and what shape is this
 file"; B adds the syntax-colored reading without changing geometry, state or
-input.
+input. Grouping a whole line into one bar was tried and rejected: it hid
+indentation-spaced tokens and made different code blocks look identical.
 
 ## Content model (`src/model/minimap.rs`, pure Rust)
 
 ```text
-LineMark { start: u32, end: u32, kind: TokenKind }
+LineMark { start: u16, end: u16, runs: [Run; 6], count: u8 }
+Run      { start: u16, end: u16, kind: TokenKind }
 ```
 
 One mark per logical line, independent of viewport width, font and theme:
 
-- scan the line's chars; `start` = column of the first non-blank char,
-  `end` = one past the column of the last non-blank char (trailing whitespace
-  ignored, tabs count as `tab_width` columns);
-- `kind` = the styled token class covering the most line bytes (keywords,
-  strings, comments, numbers, …); punctuation is structural and folds into
-  `Plain`, so a line of braces never wins a color;
-- a blank line is `start == end == 0` and contributes no ink;
+- scan the line's chars; `start`/`end` are the first/last non-blank columns
+  (trailing whitespace ignored, tabs count as `tab_width` columns);
+- whitespace breaks a run, so indentation and spaces inside code stay as
+  visible gaps; whitespace *inside* a string/comment token stays in that run;
+- each run carries its token class (keyword, string, comment, number,
+  punctuation, …), so different blocks inside a line keep different colors;
+- busy lines merge the closest neighbouring runs until at most
+  `MAX_LINE_RUNS = 6` remain; a minified line folds its tail into the last run;
+- a blank line has no runs and contributes no ink;
 - `scale_col = max(end).clamp(1, MAX_COLUMNS)` normalizes x; ink beyond
-  `MAX_COLUMNS` is clipped to the right edge, so one minified line cannot
-  squash every other line into a 1 px sliver.
+  `MAX_COLUMNS = 100` is clipped to the right edge.
+
+The **raster** is the paint-facing cache: `rows` stacked buckets × `cells`
+(one logical pixel each) storing the dominant class for that cell (`0` =
+empty). A run maps to cells `start * cells / scale` up to `end * cells /
+scale`; styled classes outrank plain ink from another line sharing the same
+row. Paint scans each row and emits one rect per same-class run, so a code
+line becomes several small blocks with gaps instead of one solid bar.
 
 Buckets and geometry are separate pure helpers so they can be tested without a
 window:
@@ -86,20 +96,17 @@ bucket_count = min(MAX_BUCKETS, line_count,
 bucket(line) = line * bucket_count / line_count
 line_at(y)   = floor((y - map_top) / content_h * line_count)  // clamped
 slider(line_count, first_visible, last_visible, content_h) -> (top, height)
+raster(rows, cells) -> class per cell
 ```
 
-Each bucket is `{ x0: min(start), x1: max(end), inked, lines, kinds }`, where
-`kinds` accumulates the column coverage of each class and `kind()` returns the
-dominant styled class. `x0/x1` are painted with alpha
-`INK_MIN + (INK_MAX - INK_MIN) * inked / lines` for plain buckets and
-`STYLED_MIN + (STYLED_MAX - STYLED_MIN) * density` for colored ones, which
-makes dense code read darker than sparse code. Buckets with `x1 <= x0` (blank
-or entirely clipped) are skipped. One rect per bucket: at a 700 px editor that
-is at most ~350 commands, capped at `MAX_BUCKETS` on very tall windows.
+At a 700 px editor the raster is ~350 × 100 cells. A row is normally painted
+with 1–4 runs; rows above `MAX_RUNS_PER_ROW = 8` fall back to one dominant bar
+so a pathological document cannot grow the draw list without bound.
 
-Aggregation is `O(line_count)` arithmetic over cached marks (no char scanning,
-no text measurement) and runs only when the document revision or the bucket
-count changed — i.e. on edits and on resize, never on scroll or hover.
+Rasterizing is `O(line_count × runs)` arithmetic over cached marks (no char
+scanning, no text measurement) and runs only when the document revision, the
+row count or the cell count changes — i.e. on edits and on resize, never on
+scroll or hover.
 
 ### Cache and invalidation
 
@@ -107,8 +114,9 @@ count changed — i.e. on edits and on resize, never on scroll or hover.
 
 ```text
 { doc: u64, rev: u64, tab: usize, line_count: usize,
-  marks: Vec<LineMark>, max_end: u32,
-  buckets: Vec<Bucket>, bucket_count: usize }
+  marks: Vec<LineMark>, max_end: u16,
+  raster: Vec<u8>, raster_rows: usize, raster_cells: usize,
+  available: bool, colored: bool }
 ```
 
 `sync(&doc, tab, highlight)` cases:
@@ -134,8 +142,8 @@ assumption.
 
 Caps mirror the existing large-file policy: **2 MB / 20 000 lines**. Above a
 cap the minimap is not drawn (the persisted toggle is untouched). Memory is at
-most ~160 KB (20k marks) for the active document only, and the cache is reset
-on tab switch.
+most ~0.9 MB (20k marks with six runs each, plus the raster) for the active
+document only, and the cache is reset on tab switch.
 
 ## Layout and paint (`src/ui/minimap.rs`)
 
@@ -145,10 +153,11 @@ in `MinimapUi` during paint, matching the scrollbar/tab pattern.
 ```text
 + gutter | text area                    | map | vbar |
 |        |                              |     |      |
-|        |   editor text (text_rect)    | 84  |  10  |
+|        |   editor text (text_rect)    | 100 |  10  |
 ```
 
-- `Metrics::minimap = 84.0` (logical px) is reserved from the editor width;
+- `Metrics::minimap = 100.0` (logical px, about one pixel per source column)
+  is reserved from the editor width;
   `text_rect` shrinks by that amount, everything else (caret, selection,
   hit-test, horizontal scroll, wrap width) follows automatically.
 - Auto-hide without changing the toggle when the remaining text area would fall
@@ -160,13 +169,14 @@ in `MinimapUi` during paint, matching the scrollbar/tab pattern.
 - Paint order: background fill, current-line tint, guides, selection, find,
   text, tokens, diagnostics, preedit, caret — then the minimap. The map fills
   its own rect with `p.bg` (opaque, so the current-line tint cannot bleed
-  through), draws a 1 px `p.border` rule on its left edge, the bucket rects, and
+  through), draws a 1 px `p.border` rule on its left edge, the raster runs, and
   finally the viewport slider.
-- Ink: plain buckets use `p.text.alpha_mul(0.10 + 0.22 * density)`; styled
-  buckets use `theme.token_color(kind)` at `0.45 + 0.30 * density`, matching the
-  editor's syntax palette. Slider: fill `p.text.alpha_mul(0.08)` plus a 1 px
-  `p.dim.alpha_mul(0.60)` border, painted only while the document can scroll.
-  Square corners, no radius, no shadow — consistent with the theme spec.
+- Ink: plain runs use `p.text.alpha_mul(0.10 + 0.22 * density)`; styled runs
+  use `theme.token_color(kind)` at `0.55 + 0.20 * density`, matching the
+  editor's syntax palette. `density` is the share of filled cells in the row.
+  Slider: fill `p.text.alpha_mul(0.08)` plus a 1 px `p.dim.alpha_mul(0.60)`
+  border, painted only while the document can scroll. Square corners, no
+  radius, no shadow — consistent with the theme spec.
 - The current-line fill and any other full-width editor chrome must stop at the
   map's left edge; the map repaints its own background over the strip.
 
@@ -223,15 +233,17 @@ paint.
 
 | Constant | Value | Owner |
 |---|---|---|
-| `Metrics::minimap` (width) | 84 px | `theme.rs` |
+| `Metrics::minimap` (width) | 100 px | `theme.rs` |
 | `MAP_ROW_H` (minimum map row) | 2.0 px | `model/minimap.rs` |
-| `MAX_COLUMNS` (x normalization cap) | 120 | `model/minimap.rs` |
-| Styled bucket alpha | 0.45 + 0.30 × density | `ui/minimap.rs` |
-| `MAX_BUCKETS` (draw-command cap) | 512 | `model/minimap.rs` |
+| `MAX_COLUMNS` (x normalization cap) | 100 | `model/minimap.rs` |
+| `MAX_LINE_RUNS` (runs cached per line) | 6 | `model/minimap.rs` |
+| `MAX_BUCKETS` (raster row cap) | 512 | `model/minimap.rs` |
+| `MAX_RUNS_PER_ROW` (paint fallback) | 8 | `ui/minimap.rs` |
 | `MAX_MINIMAP_BYTES` / `MAX_MINIMAP_LINES` | 2 MB / 20 000 | `model/minimap.rs` |
 | `MIN_TEXT_W` (auto-hide) | 360 px | `ui/minimap.rs` |
-| Ink alpha | 0.10 + 0.22 × density | `ui/minimap.rs` |
-| Slider fill / border alpha | 0.05 / 0.45 | `ui/minimap.rs` |
+| Plain ink alpha | 0.10 + 0.22 × density | `ui/minimap.rs` |
+| Styled run alpha | 0.55 + 0.20 × density | `ui/minimap.rs` |
+| Slider fill / border alpha | 0.08 / 0.60 | `ui/minimap.rs` |
 
 ## Performance plan
 
@@ -240,9 +252,9 @@ the only new cost is on dirty frames.
 
 | Path | Expected cost | Guard |
 |---|---|---|
-| Typing | scan one changed line + `O(line_count)` aggregation (~20k simple ops) + ≤512 rect commands | typing bench must stay **< 2 ms/frame**; flag any >20% regression against the current 1.1 ms |
-| Tab switch / open | full mark build over ≤2 MB | measure; if it shows up, budget the build across frames (highlight-style) as a follow-up |
-| Resize | re-aggregation only (marks are width-independent) | report command count |
+| Typing | rescan the changed line + `O(line_count × runs)` raster (~20k lines) + ~1–4 rects per map row | typing bench stays **< 2 ms/frame**; measured map delta +0.09 ms on the 4,760-line fixture |
+| Tab switch / open | full run build over ≤2 MB | measured 0.42 ms per 4,800 lines; if it grows, budget the build across frames (highlight-style) |
+| Resize | raster rebuild only (runs are width-independent) | report command count |
 | Idle | 0 new frames | `idle` must stay 0 frames/0% CPU |
 
 Bench additions: a `minimap build` row (full + incremental) in `src/bench.rs`
@@ -254,15 +266,14 @@ its command count is reported. Budgets are recorded in
 
 Unit tests (`src/model/minimap.rs`):
 
-1. mark extraction: leading indentation, trailing whitespace, tabs, blank
-   lines, CJK (char columns), column clipping at `MAX_COLUMNS`;
-2. bucket aggregation: min/max extents, density, empty/short/long documents,
-   short-file top alignment vs compressed fill, bucket cap;
+1. run extraction: indentation, trailing whitespace, tabs, blank lines, CJK,
+   token-class boundaries, spaces inside strings/comments, the six-run cap;
+2. raster: gaps between runs survive, styled cells outrank plain ink,
+   empty/short/long documents, short-file top alignment vs compressed fill;
 3. incremental parity: for typing, newline insert/delete, multi-line indent,
    undo and replace-all, incremental marks equal a fresh build;
-4. color: dominant-style selection (punctuation never wins), bucket color
-   aggregation, enabling syntax recolors the map, colored incremental edits
-   match a rebuild;
+4. color: enabling syntax recolors the raster, colored incremental edits match
+   a rebuild;
 5. geometry helpers: `line_at` top/bottom/blank-area clamping, slider top and
    height for wrap and non-wrap spans, minimum slider height;
 6. caps: `is_active` is false above 2 MB / 20k lines and for no document.
@@ -299,9 +310,9 @@ response (host/paint change).
 
 Decided:
 
-- structural blocks (A) plus dominant-style bucket colors (B);
+- structural runs (A) plus token-class colors (B); no one-block-per-line;
 - logical lines as content space, visual rows only for slider/scroll mapping;
-- default on, fixed 84 px, auto-hide under 360 px of text area, caps at
+- default on, fixed 100 px, auto-hide under 360 px of text area, caps at
   2 MB / 20k lines;
 - no settings row; View menu command + persisted session key;
 - map lives inside the editor control: one layout function, rects recorded
@@ -316,11 +327,11 @@ Open (not blocking):
 
 Implemented in slices S1–S5:
 
-- `src/model/minimap.rs` — line marks, incremental cache, bucket and geometry
-  helpers; 16 unit tests covering marks, dominant token color, bucket
-  aggregation, caps, short/long geometry, the slider, incremental parity
-  (typing, newline, line delete, indent, undo, colored edits and a 400-step
-  random edit sequence), a revision gap and tab-width changes.
+- `src/model/minimap.rs` — per-line runs, the raster, incremental cache and
+  geometry helpers; 16 unit tests covering runs, gaps, the run cap, raster
+  classes, caps, short/long geometry, the slider, incremental parity (typing,
+  newline, line delete, indent, undo, colored edits and a 400-step random edit
+  sequence), a revision gap and tab-width changes.
 - `src/ui/minimap.rs` — reserved width, paint, viewport slider, click/drag
   mapping.
 - `src/ui/editor.rs` — strip reservation, paint hook, hover/double-click guards,
@@ -333,18 +344,18 @@ Implemented in slices S1–S5:
 - `src/selfcheck.rs` — `check_minimap`: geometry, draw-command cap, click/drag
   (caret untouched), toggle + persistence, auto-hide, soft wrap, no document.
 
-Measured (macOS arm64, bench profile): full build **0.116 ms** on the 4,800-line
-Markdown fixture, incremental **0.014 ms**, and Edit-view typing on a 4,760-line
-JavaScript fixture (syntax colors active) **0.361 → 0.369 ms/frame** and
-**953 → 1310 commands**; idle frames are unchanged (the map lives in the cached
+Measured (macOS arm64, bench profile): full build **0.42 ms** on the 4,800-line
+Markdown fixture, incremental **0.064 ms**, and Edit-view typing on a 4,760-line
+JavaScript fixture (syntax colors active) **0.36 → 0.45 ms/frame** and
+**953 → 2026 commands**; idle frames are unchanged (the map lives in the cached
 `DrawList`).
 
 Deviations from the plan:
 
 - short documents keep 2 px rows and stay top-aligned; only documents taller
   than the box are compressed to fill it;
-- bucket colors are the bucket's dominant styled class (one color per row, no
-  per-glyph spans), which keeps the draw-command budget flat;
+- rows above eight runs fall back to one dominant bar, which bounds the draw
+  list on pathological files while normal code gets per-run fidelity;
 - the Markdown typing benchmark opens Split view, where the strip auto-hides,
   so a dedicated Edit-view `editor_typing(..., minimap)` benchmark was added;
   it uses a JavaScript fixture so highlighting (and therefore colors) is active

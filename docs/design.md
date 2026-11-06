@@ -444,16 +444,17 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    file, at the cost of asking the user to retry after a concurrent edit.
 
 44. **The minimap is a cached structural thumbnail, not a second text view.**
-    `model::minimap` reduces each logical line to its first/last non-blank
-    column and its most prominent styled token class, caches the marks per
+    `model::minimap` reduces each logical line to its non-blank runs (start/end
+    column plus token class; whitespace stays as gaps), caches the marks per
     document revision, updates them from `edit_span` (full rebuild on a load, a
-    revision gap or a tab-width change) and aggregates them into at most 512
-    buckets. `ui::minimap` paints one rect per bucket between the text area and
-    the vertical scrollbar, using the bucket's dominant syntax color (plain
-    text stays neutral), records the strip and slider rectangles during paint,
-    and maps clicks/drags to lines (top-aligned, caret untouched) using logical
-    lines even under soft wrap. It is part of the editor's cached `DrawList`, so
-    idle frames stay empty; the map hides below 360 px of text area and above
+    revision gap or a tab-width change) and rasterizes them into at most 512
+    rows of ~100 cells. `ui::minimap` paints one rect per same-class cell run
+    between the text area and the vertical scrollbar, so indentation and
+    separate code blocks stay visible and the colors come from the syntax
+    palette; records the strip and slider rectangles during paint; and maps
+    clicks/drags to lines (top-aligned, caret untouched) using logical lines
+    even under soft wrap. It is part of the editor's cached `DrawList`, so idle
+    frames stay empty; the map hides below 360 px of text area and above
     2 MB/20k lines. `session.minimap` persists the View toggle instead of
     adding a settings row. Colors are filled once the highlight cache is
     complete, so the budgeted catch-up never leaves permanently gray rows.
@@ -490,7 +491,7 @@ Metrics (`theme::Metrics::COMPACT`):
 | menu bar / tab strip / status | 32 / 28 / 24 px |
 | sidebar width | 232 px (settings) |
 | scrollbar | 10 px |
-| minimap | 84 px |
+| minimap | 100 px |
 | text padding / gutter padding | 10 / 10 px |
 | tab width (displayed) | 4 spaces |
 

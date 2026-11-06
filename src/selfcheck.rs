@@ -5139,22 +5139,26 @@ fn check_minimap(dir: &Path) -> Result<(), String> {
     let mut ink_left = f32::MAX;
     let mut ink_top = f32::MAX;
     let mut ink_bottom = f32::MIN;
+    let mut ink_rows: Vec<u32> = Vec::new();
     for command in frame.commands() {
         let DrawCommand::FillRect { rect, .. } = command else {
             continue;
         };
-        if rect.width() <= 1.0 || !map.contains_rect(*rect) {
+        // Skip the map background (full strip) and the 1 px left rule; count
+        // the actual ink runs.
+        if rect.width() <= 1.0 || rect.width() > map.width() - 0.5 || !map.contains_rect(*rect) {
             continue;
         }
         inked += 1;
         ink_left = ink_left.min(rect.left());
         ink_top = ink_top.min(rect.top());
         ink_bottom = ink_bottom.max(rect.bottom());
+        ink_rows.push((rect.top() * 4.0) as u32);
     }
     if inked < 20 {
         return Err(format!("the minimap painted only {inked} content rects"));
     }
-    if inked > 520 {
+    if inked > 4200 {
         return Err(format!(
             "the minimap painted {inked} rects, over the draw-command cap"
         ));
@@ -5175,23 +5179,34 @@ fn check_minimap(dir: &Path) -> Result<(), String> {
             map.bottom()
         ));
     }
+    // Several runs on one row: a line must not collapse into one solid bar.
+    ink_rows.sort_unstable();
+    if !ink_rows.windows(2).any(|window| window[0] == window[1]) {
+        return Err("the minimap paints one solid block per row".into());
+    }
     if slider.is_empty() || !map.contains_rect(slider) {
         return Err("the minimap viewport slider is missing or outside the strip".into());
     }
     {
-        // The JS fixture has keywords and strings on every line, so the cache
-        // that paint reads must contain styled buckets (syntax colors).
+        // The JS fixture has keywords and strings on every line, so the raster
+        // that paint reads must contain styled cells and internal gaps.
         let mut state = harness.app.state_mut();
-        let buckets = crate::model::minimap::bucket_count(line_count, map.height());
-        let colored = state
-            .editor
-            .minimap
-            .cache
-            .buckets(buckets)
+        let rows = crate::model::minimap::bucket_count(line_count, map.height());
+        let cells = (map.width() - 1.0).ceil().max(1.0) as usize;
+        let raster = state.editor.minimap.cache.raster(rows, cells);
+        if !raster
             .iter()
-            .any(|bucket| bucket.kind() != crate::syntax::TokenKind::Plain);
-        if !colored {
-            return Err("the minimap buckets carry no syntax color".into());
+            .any(|&code| code != 0 && crate::model::minimap::kind_of(code).is_styled())
+        {
+            return Err("the minimap raster carries no syntax color".into());
+        }
+        let first = raster.iter().position(|&code| code != 0);
+        let last = raster.iter().rposition(|&code| code != 0);
+        if !first
+            .zip(last)
+            .is_some_and(|(first, last)| raster[first..=last].contains(&0))
+        {
+            return Err("the minimap raster lost its horizontal gaps".into());
         }
     }
 

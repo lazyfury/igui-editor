@@ -687,14 +687,14 @@ horizontal scroll offset is restored when wrap is turned off.
 ## Minimap (`⌘⌥M`, View menu)
 
 A low-contrast structural thumbnail of the whole document sits between the text
-area and the vertical scrollbar. Each line contributes its leading indentation
-and its ink extent (trailing whitespace ignored); lines are grouped into 2 px
-rows, so the strip shows the document's shape rather than readable glyphs, and
-its draw cost is bounded by the window height, not the file size. Buckets carry
-the dominant syntax class of the lines they cover (keyword, string, comment,
-number, …), so the map is syntax-colored; files without a provider stay
-neutral, and colors land once highlighting has finished. The visible viewport is
-drawn as a bordered translucent slider.
+area and the vertical scrollbar. Each line is reduced to its separate non-blank
+runs (leading indentation and spaces between tokens stay as gaps), so a line
+shows its real code blocks instead of one solid bar. Runs carry their syntax
+class (keyword, string, comment, number, punctuation, …), the strip is about
+one pixel per source column (100 px wide), and its draw cost is bounded by the
+window height, not the file size. Files without a provider stay neutral, and
+colors land once highlighting has finished. The visible viewport is drawn as a
+bordered translucent slider.
 
 - click anywhere on the strip to scroll that line to the top; the caret and
   selection do not move. Drag to scroll continuously.

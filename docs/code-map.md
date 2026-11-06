@@ -28,7 +28,7 @@ src/
   model/ignore.rs     Explorer ignore rules + OFF/DIM/HIDE mode for tool files
   model/fsutil.rs     atomic temp+fsync+rename writer shared by model IO
   model/markdown.rs   Markdown event stream -> flat block model
-  model/minimap.rs    per-line ink/color marks, incremental cache, bucket geometry
+  model/minimap.rs    per-line ink/color runs, incremental cache, raster geometry
   model/session.rs    key=value session file (atomic write, escaping, v17)
   model/watch.rs      directory snapshots, change diffs, watcher globs
   model/workspace.rs  tabs + file IO (open/save/move/close folder)
