@@ -691,8 +691,9 @@ area and the vertical scrollbar. Each line is reduced to its separate non-blank
 runs (leading indentation and spaces between tokens stay as gaps), so a line
 shows its real code blocks instead of one solid bar. Runs carry their syntax
 class (keyword, string, comment, number, punctuation, …), the strip is about
-one pixel per source column (100 px wide), and its draw cost is bounded by the
-window height, not the file size. Files without a provider stay neutral, and
+one pixel per source column (100 px wide), adjacent runs keep a 1 px seam and
+every scanline leaves a 1 px gap before the next one, and its draw cost is
+bounded by the window height, not the file size. Files without a provider stay neutral, and
 colors land once highlighting has finished. The visible viewport is drawn as a
 bordered translucent slider.
 

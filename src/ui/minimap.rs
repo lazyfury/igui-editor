@@ -37,6 +37,9 @@ const STYLED_MIN: f32 = 0.55;
 const STYLED_MAX: f32 = 0.75;
 /// Runs painted per raster row before a single dominant bar is used instead.
 const MAX_RUNS_PER_ROW: usize = 8;
+/// Gap left after a run and under a row, in logical pixels.
+const RUN_GAP_X: f32 = 1.0;
+const ROW_GAP_Y: f32 = 1.0;
 
 /// Width the editor must reserve for the map, or 0 when it is disabled, above
 /// the file caps, or would leave too little room for text.
@@ -109,6 +112,9 @@ pub fn paint(
             }
             let density = occupied as f32 / cells as f32;
             let y = inner.top() + row as f32 * row_h;
+            // One pixel of air under every row keeps the scanlines readable
+            // instead of merging into a vertical block.
+            let paint_h = (row_h - ROW_GAP_Y).max(1.0);
             // Count runs first: an unusually busy row falls back to one
             // dominant bar instead of blowing up the draw list.
             let mut runs = 0usize;
@@ -132,17 +138,19 @@ pub fn paint(
                 }
                 let first = slice.iter().position(|&code| code != 0).unwrap_or(0);
                 let last = slice.iter().rposition(|&code| code != 0).unwrap_or(first);
+                let gap_after = last + 1 < cells && slice[last + 1] != 0;
                 paint_cell_run(
                     ctx,
                     theme,
                     inner,
                     cells,
                     y,
-                    row_h,
+                    paint_h,
                     first,
                     last + 1,
                     best,
                     density,
+                    gap_after,
                 );
                 continue;
             }
@@ -157,8 +165,11 @@ pub fn paint(
                 while index < cells && slice[index] == code {
                     index += 1;
                 }
+                // Adjacent runs would touch; leave one pixel of seam. A run
+                // followed by whitespace already has its own gap.
+                let gap_after = index < cells && slice[index] != 0;
                 paint_cell_run(
-                    ctx, theme, inner, cells, y, row_h, begin, index, code, density,
+                    ctx, theme, inner, cells, y, paint_h, begin, index, code, density, gap_after,
                 );
             }
         }
@@ -194,6 +205,7 @@ fn paint_cell_run(
     end: usize,
     code: u8,
     density: f32,
+    gap_after: bool,
 ) {
     let kind = minimap::kind_of(code);
     let (color, alpha) = if kind == TokenKind::Plain {
@@ -206,8 +218,15 @@ fn paint_cell_run(
     };
     let x0 = inner.left() + (begin as f32 / cells as f32) * inner.width();
     let x1 = inner.left() + (end as f32 / cells as f32) * inner.width();
+    // Leave one pixel only when the next cell is occupied: whitespace already
+    // separates runs, and the right edge needs no artificial seam.
+    let width = if gap_after {
+        (x1 - x0 - RUN_GAP_X).max(1.0)
+    } else {
+        (x1 - x0).max(1.0)
+    };
     ctx.fill_rect(
-        Rect::from_min_size(Vec2::new(x0, y), Size::new((x1 - x0).max(1.0), row_h)),
+        Rect::from_min_size(Vec2::new(x0, y), Size::new(width, row_h)),
         color.alpha_mul(alpha),
     );
 }

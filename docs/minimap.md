@@ -83,8 +83,10 @@ The **raster** is the paint-facing cache: `rows` stacked buckets × `cells`
 (one logical pixel each) storing the dominant class for that cell (`0` =
 empty). A run maps to cells `start * cells / scale` up to `end * cells /
 scale`; styled classes outrank plain ink from another line sharing the same
-row. Paint scans each row and emits one rect per same-class run, so a code
-line becomes several small blocks with gaps instead of one solid bar.
+row. Paint scans each row and emits one rect per same-class run, so a code line
+becomes several small blocks instead of one solid bar. Adjacent runs (no
+whitespace between them) keep a 1 px seam; every scanline is painted 1 px
+shorter than its row, leaving a 1 px gap before the next line.
 
 Buckets and geometry are separate pure helpers so they can be tested without a
 window:
@@ -239,6 +241,7 @@ paint.
 | `MAX_LINE_RUNS` (runs cached per line) | 6 | `model/minimap.rs` |
 | `MAX_BUCKETS` (raster row cap) | 512 | `model/minimap.rs` |
 | `MAX_RUNS_PER_ROW` (paint fallback) | 8 | `ui/minimap.rs` |
+| `RUN_GAP_X` / `ROW_GAP_Y` | 1 px / 1 px | `ui/minimap.rs` |
 | `MAX_MINIMAP_BYTES` / `MAX_MINIMAP_LINES` | 2 MB / 20 000 | `model/minimap.rs` |
 | `MIN_TEXT_W` (auto-hide) | 360 px | `ui/minimap.rs` |
 | Plain ink alpha | 0.10 + 0.22 × density | `ui/minimap.rs` |
@@ -332,8 +335,8 @@ Implemented in slices S1–S5:
   classes, caps, short/long geometry, the slider, incremental parity (typing,
   newline, line delete, indent, undo, colored edits and a 400-step random edit
   sequence), a revision gap and tab-width changes.
-- `src/ui/minimap.rs` — reserved width, paint, viewport slider, click/drag
-  mapping.
+- `src/ui/minimap.rs` — reserved width, per-run paint (1 px seams), 1 px row
+  gaps, viewport slider, click/drag mapping.
 - `src/ui/editor.rs` — strip reservation, paint hook, hover/double-click guards,
   `Drag::Minimap`; full-width current-line chrome stops at the strip.
 - `src/state/*`, `src/keymap.rs`, `src/native.rs`, `src/macos/imp.rs` — the

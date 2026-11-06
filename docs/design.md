@@ -449,9 +449,10 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
     document revision, updates them from `edit_span` (full rebuild on a load, a
     revision gap or a tab-width change) and rasterizes them into at most 512
     rows of ~100 cells. `ui::minimap` paints one rect per same-class cell run
-    between the text area and the vertical scrollbar, so indentation and
-    separate code blocks stay visible and the colors come from the syntax
-    palette; records the strip and slider rectangles during paint; and maps
+    between the text area and the vertical scrollbar, with a 1 px seam between
+    adjacent runs and a 1 px gap under every row, so indentation and separate
+    code blocks stay visible and the colors come from the syntax palette;
+    records the strip and slider rectangles during paint; and maps
     clicks/drags to lines (top-aligned, caret untouched) using logical lines
     even under soft wrap. It is part of the editor's cached `DrawList`, so idle
     frames stay empty; the map hides below 360 px of text area and above

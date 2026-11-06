@@ -5139,6 +5139,7 @@ fn check_minimap(dir: &Path) -> Result<(), String> {
     let mut ink_left = f32::MAX;
     let mut ink_top = f32::MAX;
     let mut ink_bottom = f32::MIN;
+    let mut ink_height = 0.0_f32;
     let mut ink_rows: Vec<u32> = Vec::new();
     for command in frame.commands() {
         let DrawCommand::FillRect { rect, .. } = command else {
@@ -5146,13 +5147,18 @@ fn check_minimap(dir: &Path) -> Result<(), String> {
         };
         // Skip the map background (full strip) and the 1 px left rule; count
         // the actual ink runs.
-        if rect.width() <= 1.0 || rect.width() > map.width() - 0.5 || !map.contains_rect(*rect) {
+        if rect.width() <= 1.0
+            || rect.width() > map.width() - 0.5
+            || !map.contains_rect(*rect)
+            || (!slider.is_empty() && *rect == slider)
+        {
             continue;
         }
         inked += 1;
         ink_left = ink_left.min(rect.left());
         ink_top = ink_top.min(rect.top());
         ink_bottom = ink_bottom.max(rect.bottom());
+        ink_height = ink_height.max(rect.height());
         ink_rows.push((rect.top() * 4.0) as u32);
     }
     if inked < 20 {
@@ -5177,6 +5183,15 @@ fn check_minimap(dir: &Path) -> Result<(), String> {
             "minimap ink does not span the strip (top {ink_top:.1}, bottom {ink_bottom:.1}, map {:.1}..={:.1})",
             map.top(),
             map.bottom()
+        ));
+    }
+    // Every row leaves a 1 px gap before the next one.
+    let map_content_h = map_model::content_height(line_count, map.height());
+    let map_row_h =
+        map_content_h / crate::model::minimap::bucket_count(line_count, map.height()) as f32;
+    if ink_height > map_row_h - 0.5 {
+        return Err(format!(
+            "minimap rows are not separated (ink {ink_height:.1} px, row {map_row_h:.1} px)"
         ));
     }
     // Several runs on one row: a line must not collapse into one solid bar.
