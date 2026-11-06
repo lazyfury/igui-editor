@@ -168,3 +168,15 @@ is off, no per-frame file IO, `scripts/check.sh` green, release size within the
   installed theme parses for the common file kinds.
 - **Memory**: the emoji font is mmap'd and glyph PNGs are cached as GPU
   textures with an LRU-ish cap; no 183 MB read is ever copied into the heap.
+
+## Progress log
+
+| Phase | Status | Notes |
+|---|---|---|
+| 0 Baseline | done | `d41f1ca`; 438 unit + 2 doc tests, selfcheck green. |
+| 1 Emoji model | done | `model/emoji.rs`; classification, mmap font discovery, sbix/CBDT PNG + premul BGRA decode, 7 tests. |
+| 2 Emoji editor paint | todo | |
+| 3 Emoji preview/terminal | todo | |
+| 4 Icon theme model | todo | |
+| 5 Explorer icons | todo | |
+| 6 Verification/delivery | todo | |

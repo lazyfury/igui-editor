@@ -57,6 +57,13 @@ pulldown-cmark = { version = "0.13", default-features = false }
 # Grapheme boundaries for caret movement and deletion (already in the lock via
 # the engine's text stack; direct use keeps emoji/combining marks intact).
 unicode-segmentation = "1"
+# Color emoji: the engine's font stack is outline-only, so the app memory-maps
+# the system emoji face, reads its sbix/CBDT bitmaps and decodes the PNG payload.
+# `ttf-parser`/`memmap2` are already in the lock via igui_font; `png` is a small
+# pure-Rust decoder (no C, no image-editing surface).
+ttf-parser = "0.25"
+memmap2 = "0.9"
+png = "0.17"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 winit = "0.30"

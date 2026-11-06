@@ -7,6 +7,8 @@ pub mod bbcode;
 pub mod brackets;
 pub mod doc;
 pub mod docs;
+#[allow(dead_code, reason = "consumed by the emoji painter in the next commit")]
+pub mod emoji;
 pub mod find;
 pub mod fs_tree;
 pub(crate) mod fsutil;
