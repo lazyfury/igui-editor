@@ -9,8 +9,8 @@ scripts/check.sh --fast                     # same, via the `release-fast` profi
 The local gate is `scripts/check.sh`; run it before every commit. `--fast`
 builds with [`release-fast`](#build-iteration), which keeps the shipped opt
 levels but links in ~1/3 of the time; packaging always uses `--release`.
-`--release` also asserts the shipped binary stays under the 6 MB budget in
-[`benchmarks.md`](benchmarks.md#bundle-budget).
+`--release` also asserts the shipped binary stays under the 12 MB growth guard
+in [`benchmarks.md`](benchmarks.md#bundle-budget).
 
 CI automation is **not currently checked in** — restoring the macOS gate is
 deferred and tracked in [improvement-plan.md §4.5](improvement-plan.md).
@@ -33,7 +33,9 @@ file**, then asserts:
 
 1. `igui_profile::inspect` finds no `Error`-level structural problems,
 2. the opened file's text, line numbers, status facts and (non-macOS) menu
-   labels are in   the recorded draw list, and the editor emits a clip,
+   labels are in the recorded draw list, the editor emits a clip, and no two
+   editor text runs overlap on one baseline (syntax and semantic colors are
+   composed into one pass, never overpainted),
 3. typing paints and mutates the model, `⌘S` round-trips through disk,
    `⌘Z` / `⇧⌘Z` undo/redo, the window title tracks the dirty flag,
 4. `File > Save` works through the in-app drop-down on non-macOS (macOS runs
@@ -43,13 +45,16 @@ file**, then asserts:
 6. `⇧⌘S` and `⌘O` go through the dialog layer and land on disk / in a tab,
    Markdown opens in Split with the rendered heading, list and code label,
 7. the Markdown table renders as cells (header baseline, column order,
-   right-aligned column, body below the header), the preview wheel scrolls in
-   the right direction, and `⇧⌘M` cycles the pane structure (preview-only has
-   no editor caret and no raw pipe text),
+   right-aligned column, body below the header), a long fenced-code line wraps
+   inside the preview without losing bytes, the preview wheel scrolls in the
+   right direction, and `⇧⌘M` cycles the pane structure (preview-only has no
+   editor caret and no raw pipe text),
 8. `⌘W` on a dirty tab shows the modal; `Esc` keeps the tab, `Discard` closes
    it, `Save` writes and closes it,
 9. a sidebar click opens a file **and returns keyboard focus**; drag selection
-   and wheel scrolling work,
+   and wheel scrolling work; while Quick Open or Settings owns the pointer no
+   tab/sidebar/footer/editor hover updates, the cursor is the default arrow, and
+   wheel/right-click do not reach the editor,
 10. the footer `DARK`/`LIGHT` chip and `⇧⌘L` both repaint with the other
     palette, `⇧⌘O` retargets the sidebar root, and a fresh app restores the
     theme, the open tabs and current tab, the recent projects/files lists and every editor
@@ -60,9 +65,14 @@ file**, then asserts:
 
 M3 checks: syntax token colors (keyword/function/string/comment), incremental
 re-highlight after an edit, indent guides on/off, caret bracket matching, the
-settings panel (font, tab width, gutter, guides, syntax, sidebar width), sidebar
-drag-resize, the large-preview truncation banner, the >32 MB open refusal, tab
-overflow scrolling, and settings restored from the session.
+settings panel (font, tab width, gutter, guides, syntax, sidebar width, search
+filtering, the left group navigation, the capped panel height, the Minimap row
+and the Reset button), sidebar drag-resize, the
+large-preview truncation banner, the >32 MB open refusal, tab overflow scrolling,
+and settings restored from the session. A separate check asserts that the host
+IME caret follows every text surface (editor, Quick Open, find bar, project
+search, Go to Line, new-file prompt, rename overlay, settings search and number
+edit) and returns to the editor when they close.
 
 M5 checks: a temporary JSON language pack highlights a `.lua` fixture; the
 footer language type (bottom-right) opens a popup above the status bar, and

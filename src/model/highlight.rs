@@ -5,9 +5,16 @@
 //! stops as soon as the outgoing state matches the cached one **and** the edit
 //! range is behind it — that is the classic "state converged, the rest is
 //! unchanged" shortcut, so typing in a large file does not rehighlight
-//! everything. The shortcut is only allowed when the cache was complete before
-//! the edit; while the initial budgeted pass is still behind, every remaining
-//! line must be tokenized because there is no cached suffix to reuse.
+//! everything.
+//!
+//! Convergence is only trusted up to the *frontier*: the number of lines whose
+//! entry states were produced by this revision before the edit. During the
+//! initial budgeted pass the frontier is behind the document, so an edit that
+//! converges early resumes the catch-up from the frontier instead of stopping —
+//! otherwise typing at the top of a large file would restart the same budgeted
+//! pass every frame and never finish. The same frontier keeps the tokenized
+//! prefix alive when an edit changes the line count (newline/join), instead of
+//! discarding the whole cache.
 //!
 //! Work is budgeted per frame; an unfinished pass resumes next frame
 //! (`AppState` reports `needs_frame` while the cache is behind).
@@ -126,11 +133,21 @@ impl HighlightCache {
         };
 
         let mut was_complete = self.complete;
+        // Lines `0..frontier` were tokenized with the entry states now in
+        // `entry`, so their tokens survive an edit that converges.
+        let mut frontier = if was_complete {
+            line_count
+        } else {
+            self.resume.min(line_count)
+        };
         if self.doc != doc.id()
             || self.provider_name != Some(provider.name())
-            || self.lines.len() != line_count
+            // `clear` keeps the name but drops the provider (syntax turned off
+            // or re-enabled), so the cached tokens are stale either way.
+            || self.provider.is_none()
         {
             was_complete = false;
+            frontier = 0;
             self.doc = doc.id();
             self.rev = doc.rev();
             self.provider_name = Some(provider.name());
@@ -138,6 +155,22 @@ impl HighlightCache {
             self.lines = vec![Vec::new(); line_count];
             self.entry = vec![0; line_count + 1];
             self.resume = 0;
+            self.complete = false;
+            self.disabled = false;
+        } else if self.lines.len() != line_count {
+            // An edit added or removed lines. The tokenized prefix is still
+            // valid: the vectors are resized in place and the pass resumes at
+            // the first touched line instead of retokenizing the document.
+            let first = doc
+                .edit_span()
+                .map_or(0, |(first, _)| first)
+                .min(line_count);
+            self.lines.resize(line_count, Vec::new());
+            self.entry.resize(line_count + 1, 0);
+            self.rev = doc.rev();
+            self.resume = first.min(frontier);
+            frontier = self.resume;
+            was_complete = false;
             self.complete = false;
             self.disabled = false;
         } else if self.rev != doc.rev() {
@@ -155,7 +188,7 @@ impl HighlightCache {
             self.resume = if was_complete {
                 first
             } else {
-                self.resume.min(first)
+                frontier.min(first)
             };
         } else if self.complete {
             return true;
@@ -181,17 +214,24 @@ impl HighlightCache {
             self.resume += 1;
             processed += 1;
 
-            // The convergence shortcut is only safe when every line was
-            // already tokenized before this edit. During the initial budgeted
-            // pass there are no cached tokens after `resume`, so stopping here
-            // would leave later lines empty (plain/white).
-            let converged = was_complete
-                && doc.edit_span().is_some_and(|(_, last)| index >= last)
-                && previous_next == Some(next);
-            if converged {
+            // Convergence is only trusted when the cached state after this
+            // line was produced with the same entry state, i.e. the line is
+            // inside the frontier. Beyond it there is no cached suffix, so a
+            // matching (stale) entry means nothing.
+            let converged = doc.edit_span().is_some_and(|(_, last)| index >= last)
+                && previous_next == Some(next)
+                && index < frontier;
+            if !converged {
+                continue;
+            }
+            if was_complete {
                 self.complete = true;
                 break;
             }
+            // The edit settled on a cached state: every line before the
+            // frontier keeps its tokens, so resume the catch-up from there
+            // instead of retokenizing the same lines on the next frame.
+            self.resume = frontier;
         }
         if self.resume >= line_count {
             self.complete = true;
@@ -298,6 +338,70 @@ mod tests {
             }
         }
         assert!(cache.tokens(9).is_some());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn typing_at_the_top_of_a_large_file_finishes_the_catch_up_pass() {
+        // The first pass is budgeted, so it spans several frames. An edit at
+        // line 0 converges immediately; the pass must still resume from the
+        // frontier and reach the end instead of restarting from the top.
+        let mut text = String::new();
+        for index in 0..3000 {
+            text.push_str(&format!("let x{index} = \"s\";\n"));
+        }
+        let (dir, mut doc) = fixture("top-typing", &text, "rs");
+        let mut cache = HighlightCache::new();
+        let registry = SyntaxRegistry::with_builtins();
+        let settings = Settings::default();
+        assert!(!cache.sync(&doc, &registry, &settings, 1000, None));
+        assert!(cache.tokens(2999).is_none());
+
+        doc.set_caret(0);
+        let mut rounds = 0;
+        loop {
+            doc.insert_text("x");
+            rounds += 1;
+            if cache.sync(&doc, &registry, &settings, 1000, None) {
+                break;
+            }
+            assert!(
+                rounds < 8,
+                "typing at line 0 restarted the catch-up pass forever ({rounds} rounds)"
+            );
+        }
+        assert!(
+            cache.tokens(2999).is_some_and(|tokens| !tokens.is_empty()),
+            "the last line was never tokenized"
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_newline_keeps_the_tokenized_prefix() {
+        let mut text = String::new();
+        for index in 0..100 {
+            text.push_str(&format!("let x{index} = \"s\";\n"));
+        }
+        let (dir, mut doc) = fixture("newline-prefix", &text, "rs");
+        let mut cache = HighlightCache::new();
+        let registry = SyntaxRegistry::with_builtins();
+        let settings = Settings::default();
+        assert!(cache.sync(&doc, &registry, &settings, 5000, None));
+
+        let start = doc.line_start(50);
+        doc.set_caret(start);
+        doc.insert_text("\n");
+        // One line of budget: only the edited line can be re-tokenized, so the
+        // lines before it must still come from the previous pass.
+        assert!(!cache.sync(&doc, &registry, &settings, 1, None));
+        assert!(
+            cache.tokens(10).is_some_and(|tokens| !tokens.is_empty()),
+            "a line count change discarded the tokenized prefix"
+        );
+        // The rest is caught up without touching the prefix again.
+        assert!(cache.sync(&doc, &registry, &settings, 5000, None));
+        assert!(cache.tokens(100).is_some());
         let _ = fs::remove_dir_all(dir);
     }
 

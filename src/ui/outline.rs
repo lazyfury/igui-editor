@@ -1,7 +1,9 @@
 //! Right-side document outline from LSP `textDocument/documentSymbol`.
 //!
 //! Symbols are stored as flat rows with a `depth`; clicking a row moves the
-//! editor caret to the symbol's selection start and reveals it.
+//! editor caret to the symbol's selection start and reveals it. In preview-only
+//! mode there is no editor pane, so the click scrolls the rendered Markdown
+//! pane to the symbol's line instead.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -11,7 +13,7 @@ use igui_scene::SceneTree;
 use igui_ui::{Container, PaintEnv, PointerPhase};
 
 use crate::kit::{self, RectExt};
-use crate::state::{AppState, Focus};
+use crate::state::{AppState, Focus, ViewMode};
 
 pub const DEFAULT_WIDTH: f32 = 224.0;
 pub const MIN_WIDTH: f32 = 160.0;
@@ -313,6 +315,11 @@ pub fn click(state: &mut AppState, pos: Vec2) -> bool {
             .map(|doc| crate::model::lsp::byte_for_position(doc, symbol.line, symbol.character));
         if let (Some(doc), Some(byte)) = (state.ws.active_doc_mut(), byte) {
             doc.set_caret(byte);
+        }
+        // Preview-only: jump the rendered pane. The editor has no painter in
+        // that mode, so `editor.reveal` alone would do nothing visible.
+        if state.view_of_active() == ViewMode::Preview {
+            state.preview.reveal_line = Some(symbol.line as usize);
         }
         state.editor.reveal = true;
         state.focus = Focus::Editor;

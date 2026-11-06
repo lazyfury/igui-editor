@@ -10,6 +10,7 @@ use igui_render::PaintContext;
 use igui_ui::TextMeasurer;
 
 use crate::kit::{self, RectExt};
+use crate::model::wrap;
 use crate::state::AppState;
 use crate::syntax::{Highlight, SyntaxProvider, SyntaxRegistry};
 
@@ -25,6 +26,7 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
     state.lsp.hover_rect = Rect::ZERO;
     state.lsp.hover_doc_hit = Rect::ZERO;
     state.lsp.completion_doc_hit = Rect::ZERO;
+    state.lsp.signature_help_rect = Rect::ZERO;
     if state.lsp.completion.is_some() {
         paint_completion(state, measurer, ctx);
     } else if state.lsp.hover.is_some() {
@@ -157,19 +159,33 @@ fn build_hover_lines(
             continue;
         }
         if let Some((provider, state)) = fence.as_mut() {
-            let expanded = crate::model::wrap::expand_tabs(trimmed, 4);
+            let expanded = wrap::expand_tabs(trimmed, 4);
             let (tokens, next) = provider
                 .as_ref()
                 .filter(|provider| expanded.len() <= provider.max_line_len())
                 .map(|provider| provider.highlight_line(&expanded, *state))
                 .unwrap_or_default();
             *state = next;
-            lines.push(HoverLine {
-                text: expanded,
-                code: true,
-                code_ranges: Vec::new(),
-                tokens,
-            });
+            // A hover card has no horizontal scroll: wrap code to the card
+            // width so the clip never hides the tail of a long line.
+            let chunks = wrap::code_line_chunks(&expanded, max_width - 28.0, font, measurer);
+            if chunks.is_empty() {
+                lines.push(HoverLine {
+                    text: String::new(),
+                    code: true,
+                    code_ranges: Vec::new(),
+                    tokens: Vec::new(),
+                });
+            } else {
+                for (start, end) in chunks {
+                    lines.push(HoverLine {
+                        text: expanded[start..end].to_string(),
+                        code: true,
+                        code_ranges: Vec::new(),
+                        tokens: clip_tokens(&tokens, start, end),
+                    });
+                }
+            }
             first_content = false;
             continue;
         }
@@ -210,12 +226,14 @@ fn build_hover_lines(
             // first declaration line as code too.
             let provider = active.as_ref().expect("checked above");
             let (tokens, _) = provider.highlight_line(&cleaned, provider.neutral_state());
-            lines.push(HoverLine {
-                text: cleaned,
-                code: true,
-                code_ranges: Vec::new(),
-                tokens,
-            });
+            for (start, end) in wrap::code_line_chunks(&cleaned, max_width - 28.0, font, measurer) {
+                lines.push(HoverLine {
+                    text: cleaned[start..end].to_string(),
+                    code: true,
+                    code_ranges: Vec::new(),
+                    tokens: clip_tokens(&tokens, start, end),
+                });
+            }
         } else {
             let mut wrapped = Vec::new();
             wrap_line(&cleaned, max_width - 20.0, measurer, font, &mut wrapped);
@@ -677,6 +695,7 @@ fn paint_signature_help(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: 
         origin.y = (caret.top() - height - 4.0).max(viewport.top() + 8.0);
     }
     let panel = Rect::from_min_size(origin, Size::new(width, height));
+    state.lsp.signature_help_rect = panel;
     kit::fill(ctx, panel, p.raised);
     ctx.stroke_rect(panel, 1.0, p.border);
     kit::hline(ctx, panel.left(), panel.right(), panel.top(), p.accent);
@@ -754,9 +773,21 @@ fn paint_completion_preview(
     let line_h = font + 5.0;
     let width = COMPLETION_PREVIEW_W.min(viewport.width() - 24.0);
     let mut lines = Vec::new();
+    let mut fence = false;
     for raw in text.lines() {
         let trimmed = raw.trim_end();
         if trimmed.trim_start().starts_with("```") {
+            fence = !fence;
+            continue;
+        }
+        if fence {
+            if trimmed.is_empty() {
+                lines.push(String::new());
+            } else {
+                for (start, end) in wrap::code_line_chunks(trimmed, width - 20.0, font, measurer) {
+                    lines.push(trimmed[start..end].to_string());
+                }
+            }
             continue;
         }
         let cleaned = trimmed

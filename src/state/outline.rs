@@ -3,9 +3,11 @@
 //! LSP `textDocument/documentSymbol` results always win. Markdown headings and
 //! GDScript declarations are derived by line scanners for files that usually
 //! have no running language server, and cached by `(document id, revision)`:
-//! a repaint reuses the rows instead of re-scanning the buffer.
+//! a repaint reuses the rows instead of re-scanning the buffer. Rows are shared
+//! through `Rc` so a repaint does not clone every row's name.
 
 use std::path::Path;
+use std::rc::Rc;
 
 use super::*;
 use crate::model::godot::{self, OutlineKind};
@@ -19,15 +21,15 @@ pub const MARKDOWN_HEADING_KIND: u32 = 100;
 #[derive(Clone, Debug, Default)]
 pub struct NativeOutline {
     key: Option<(u64, u64)>,
-    rows: Vec<OutlineSymbol>,
+    rows: Rc<Vec<OutlineSymbol>>,
 }
 
 impl NativeOutline {
-    fn cached(&self, key: (u64, u64)) -> Option<&[OutlineSymbol]> {
-        (self.key == Some(key)).then_some(self.rows.as_slice())
+    fn cached(&self, key: (u64, u64)) -> Option<Rc<Vec<OutlineSymbol>>> {
+        (self.key == Some(key)).then(|| self.rows.clone())
     }
 
-    fn store(&mut self, key: (u64, u64), rows: Vec<OutlineSymbol>) {
+    fn store(&mut self, key: (u64, u64), rows: Rc<Vec<OutlineSymbol>>) {
         self.key = Some(key);
         self.rows = rows;
     }
@@ -35,7 +37,7 @@ impl NativeOutline {
     fn clear(&mut self) {
         if self.key.is_some() || !self.rows.is_empty() {
             self.key = None;
-            self.rows.clear();
+            self.rows = Rc::new(Vec::new());
         }
     }
 }
@@ -46,24 +48,24 @@ impl AppState {
     ///
     /// The native rows are cached for the active document revision and only
     /// derived when that document revision has changed.
-    pub fn outline_symbols_for(&mut self, path: &Path) -> Vec<OutlineSymbol> {
+    pub fn outline_symbols_for(&mut self, path: &Path) -> Rc<Vec<OutlineSymbol>> {
         let lsp = self.lsp.symbols_for(path);
         if !lsp.is_empty() {
-            let rows = lsp.to_vec();
+            let rows = Rc::new(lsp.to_vec());
             self.outline.native.clear();
             return rows;
         }
         let Some(doc) = self.ws.active_doc() else {
             self.outline.native.clear();
-            return Vec::new();
+            return Rc::new(Vec::new());
         };
         if doc.path() != Some(path) {
             self.outline.native.clear();
-            return Vec::new();
+            return Rc::new(Vec::new());
         }
         let key = (doc.id(), doc.rev());
         if let Some(rows) = self.outline.native.cached(key) {
-            return rows.to_vec();
+            return rows;
         }
         let rows: Vec<OutlineSymbol> = if markdown::is_markdown_path(path) {
             markdown::headings(doc.text())
@@ -89,8 +91,9 @@ impl AppState {
                 .collect()
         } else {
             self.outline.native.clear();
-            return Vec::new();
+            return Rc::new(Vec::new());
         };
+        let rows = Rc::new(rows);
         self.outline.native.store(key, rows.clone());
         rows
     }

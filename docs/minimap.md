@@ -40,7 +40,7 @@ Facts the design depends on, verified in the tree:
 | `Document::edit_span()` reports the inclusive line range of the last mutation and is `None` after load/reload | `src/model/doc.rs` |
 | Soft wrap is a cached visual-row layout keyed by `(doc, rev, width, font, tab)`; `line_of_row` / `first_row_of_line` map both ways | `src/model/wrap.rs` |
 | The tree `DrawList` is cached across unchanged frames; a painter that mutates state sets `dirty` | `src/app.rs`, `igui_ui::paint_cached` |
-| A View toggle can persist in the session without a settings-panel row (`sync_scroll`, `soft_wrap` are the precedents) | `src/state/mod.rs`, `src/model/session.rs` |
+| View toggles keep one state + one command and are also reachable from the settings panel (`minimap`, `soft_wrap`, `sync_scroll`) | `src/state/settings.rs`, `src/model/session.rs` |
 | Commands have one source of truth: `Action`, `commands.rs`, keymap, menu item, native macOS command | `src/state/`, `src/keymap.rs`, `src/native.rs`, `src/macos/imp.rs` |
 | The engine can render a subtree into a `SubViewport`, but that renders what is on screen | `../igui` (viewport model) |
 
@@ -226,10 +226,10 @@ Follows the `sync_scroll`/`soft_wrap` precedent:
 | `session.minimap` (default **on**), `SESSION_VERSION` 19, feature doc version note | `src/model/session.rs`, `docs/features.md` |
 | UI state: `MinimapUi { rect, slider, first_line, cache }` nested in `EditorUi` | `src/state/mod.rs` |
 
-No settings-panel row: the toggle is a view command, and adding a row would
-repeat the 10-site settings tax for one boolean. Toggling marks the frame dirty;
-the width change rebuilds the wrap key and re-clamps scrolling on the next
-paint.
+The toggle is a view command with one settings-panel row (View → Minimap).
+Both paths call `toggle_minimap`, so there is no second state. Toggling marks the
+frame dirty; the width change rebuilds the wrap key and re-clamps scrolling on
+the next paint.
 
 ### Constants
 
@@ -317,7 +317,8 @@ Decided:
 - logical lines as content space, visual rows only for slider/scroll mapping;
 - default on, fixed 100 px, auto-hide under 360 px of text area, caps at
   2 MB / 20k lines;
-- no settings row; View menu command + persisted session key;
+- one persisted session key, reachable from the View menu and the settings
+  panel's View group (both call `toggle_minimap`);
 - map lives inside the editor control: one layout function, rects recorded
   during paint, no new node and no shell rebuild.
 

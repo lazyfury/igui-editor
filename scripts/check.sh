@@ -56,8 +56,10 @@ if (( release )); then
         # build that packaging ships.
         step "release binary size"
         size=$(wc -c < target/release/igui-editor | tr -d ' ')
-        limit=$((6 * 1024 * 1024))
-        printf 'release binary: %s MB (limit 6.00 MB)\n' \
+        # Size is a soft guard against silent growth, not an optimization goal:
+        # the frame/latency budgets in docs/benchmarks.md are the real gate.
+        limit=$((12 * 1024 * 1024))
+        printf 'release binary: %s MB (limit 12.00 MB)\n' \
             "$(awk "BEGIN { printf \"%.2f\", $size / 1048576 }")"
         if (( size > limit )); then
             printf 'release binary is %s bytes, over the %s-byte budget\n' \

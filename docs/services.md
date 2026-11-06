@@ -227,8 +227,9 @@ its own language-server binary.
   globals and properties before falling back to definition. Completion is prefix-filtered before the UI
   cap so global methods such as `print` are not lost in Godot's ~2000-item
   result. Semantic tokens
-  are requested on open/change and painted over the syntax pass with
-  server-aware variable/parameter/field/type colors. Document symbols feed the
+  are requested on open/change and composed with the syntax colors before the
+  text pass, so each glyph is painted once with its final
+  variable/parameter/field/type color. Document symbols feed the
   right outline panel. Hover and completion are transient overlays. Nothing is
   persisted.
 

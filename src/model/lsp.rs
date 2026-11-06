@@ -1456,12 +1456,19 @@ impl Session {
 struct RootCache {
     entries: HashMap<(String, PathBuf), Option<PathBuf>>,
     bound: Option<PathBuf>,
+    /// The workspace folder `bound` was derived from. `canonicalize` is a
+    /// syscall, so the bound is only recomputed when this path changes.
+    bound_source: Option<PathBuf>,
 }
 
 impl RootCache {
     fn sync_bound(&mut self, ws: &Workspace) {
-        let bound = ws
-            .folder()
+        let folder = ws.folder();
+        if self.bound_source.as_deref() == folder {
+            return;
+        }
+        self.bound_source = folder.map(Path::to_path_buf);
+        let bound = folder
             .map(|folder| std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf()));
         if self.bound != bound {
             self.bound = bound;
@@ -1527,6 +1534,8 @@ pub struct LspController {
     pub completion: Option<CompletionUi>,
     completion_prefix: String,
     pub signature_help: Option<SignatureHelpUi>,
+    /// Last painted signature-help card, used to own the pointer over it.
+    pub signature_help_rect: igui_core::Rect,
     /// Pending result of `textDocument/references`: symbol name + locations.
     references: Option<(String, Vec<Location>)>,
     /// Context captured for prepareRename/rename, and their results.
@@ -1569,6 +1578,7 @@ impl Default for LspController {
             completion: None,
             completion_prefix: String::new(),
             signature_help: None,
+            signature_help_rect: igui_core::Rect::ZERO,
             references: None,
             rename_context: None,
             prepare_result: None,
@@ -1710,6 +1720,7 @@ impl LspController {
         self.completion = None;
         self.completion_prefix.clear();
         self.signature_help = None;
+        self.signature_help_rect = igui_core::Rect::ZERO;
         self.references = None;
         self.rename_context = None;
         self.prepare_result = None;
@@ -2658,6 +2669,7 @@ impl LspController {
         self.hover_doc_hit = igui_core::Rect::ZERO;
         self.completion_doc_hit = igui_core::Rect::ZERO;
         self.completion = None;
+        self.signature_help_rect = igui_core::Rect::ZERO;
         if let Some(session) = self.active_session_mut() {
             session.cancel_popup_requests();
         }
@@ -3714,6 +3726,34 @@ mod tests {
             loose_files: loose,
             ..LanguageServerSpec::default()
         }
+    }
+
+    #[test]
+    fn the_bound_root_tracks_the_workspace_folder() {
+        let dir = fixture_dir("root-cache");
+        let ws = Workspace::new(&dir);
+        let mut cache = RootCache::default();
+        cache.sync_bound(&ws);
+        let canonical = std::fs::canonicalize(&dir).unwrap();
+        assert_eq!(cache.bound.as_deref(), Some(canonical.as_path()));
+        assert_eq!(cache.bound_source.as_deref(), ws.folder());
+
+        // A second frame with the same folder keeps the bound entry (this is
+        // the guard that skips the `canonicalize` syscall).
+        cache.sync_bound(&ws);
+        assert_eq!(cache.bound.as_deref(), Some(canonical.as_path()));
+
+        // Switching projects rebinds and drops the cached roots.
+        let other = fixture_dir("root-cache-other");
+        let other_ws = Workspace::new(&other);
+        cache
+            .entries
+            .insert(("x".into(), dir.join("a.rs")), Some(canonical.clone()));
+        cache.sync_bound(&other_ws);
+        assert_eq!(cache.bound_source.as_deref(), other_ws.folder());
+        assert!(cache.entries.is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(other);
     }
 
     #[test]

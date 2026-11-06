@@ -30,9 +30,10 @@ src/
   model/markdown.rs   Markdown event stream -> flat block model
   model/minimap.rs    per-line ink/color runs, incremental cache, raster geometry
   model/session.rs    key=value session file (atomic write, escaping, v17)
+  model/spans.rs      ordered styled byte spans used to paint each glyph once
   model/watch.rs      directory snapshots, change diffs, watcher globs
   model/workspace.rs  tabs + file IO (open/save/move/close folder)
-  model/wrap.rs       soft-wrap display rows + visual row/column mapping
+  model/wrap.rs       soft-wrap display rows, visual row/column mapping, code-line chunks
   dialogs.rs          `Dialogs` trait + scripted test double
   drop.rs             shared file-drop target (winit observer -> update)
   native.rs           Finder/Dock/quit request queue (main-thread)
@@ -48,7 +49,7 @@ src/
   ui/tree.rs          shared Explorer/outline tree row renderer
   ui/icon.rs          embedded Lucide icons, cached igui_svg documents + painter
   ui/tree_menu.rs     file-tree context menu
-  ui/settings.rs      settings + Keymap row
+  ui/settings.rs      grouped, searchable settings panel (switches/choices/numbers)
   ui/references.rs    Fn/Shift+F12 references overlay (geometry shared by paint/click)
   ui/rename_symbol.rs  F2 symbol-rename prompt
   ui/terminal.rs      vt100 cell renderer, shell tabs and terminal key encoding
@@ -58,6 +59,7 @@ src/
   state/{tabs,files,find,modal,workspace}.rs  document lifecycle and dialogs
   state/{terminal,git,lsp,search}.rs  native services and workers
   state/tooling.rs    missing-tool prompt state, LSP on/off entry point
+  state/overlay.rs    app-overlay pointer precedence (hover/cursor/wheel blocking)
   state/dock.rs       dock/panel table, open state, tab commands, badges
   state/{settings,view,reliability,services,new_file,quick_open,references,rename_symbol}.rs
                       settings, layout, autosave/recovery and prompt state

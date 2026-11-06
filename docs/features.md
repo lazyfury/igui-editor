@@ -110,8 +110,9 @@ diagnostics/semantic tokens/outline. The same switch is the
 - Hover cards keep fenced code blocks as code: the fence language (or the
   active document language when the fence is unlabeled) drives the same syntax
   provider as the editor, so keywords, types, functions, strings and comments
-  stay colored. A leading plain-text declaration such as `func Node._ready()`
-  or `fn main()` is highlighted the same way. Inline code (Markdown backticks,
+  stay colored. Long code lines and declarations wrap to the card width instead
+  of being clipped at its right edge. A leading plain-text declaration such as
+  `func Node._ready()` or `fn main()` is highlighted the same way. Inline code (Markdown backticks,
   or raw BBCode `[code]…[/code]` from an older server) gets a code background
   and is tokenized with the active language, which covers Godot's `[code]`
   comment snippets as well as `[method …]`/`[member …]` references converted
@@ -282,7 +283,10 @@ indentation depth), signals, constants, variables and enums, skipping function
 locals, comments and multiline strings. Markdown documents list their headings
 instead:
 ATX (`#`…`######`) and setext (`===` / `---`) headings appear with an `H`
-marker at their level, and clicking one jumps to its source line. Headings in
+marker at their level, and clicking one jumps to its source line. In **Preview
+Only** there is no editor pane to reveal, so the same click scrolls the rendered
+Markdown to that heading (the offset comes from the preview's own line anchors).
+Headings in
 fenced or indented code are skipped, and blockquote (`>`) prefixes are
 recognized. The scanner is line-based, not a CommonMark parse: heading text is
 shown without parsing inline emphasis, and headings inside HTML blocks or
@@ -473,28 +477,53 @@ setting is persisted in the session. Preview-only and Edit modes ignore it.
 
 ## Settings (`⌘,` or View → Settings…)
 
-| Row | Values |
-|---|---|
-| Theme | Dark / Light |
-| Font Size | 11–18 px |
-| Indent Style | Spaces / Tabs (default Spaces) |
-| Indent Width | 2 / 4 / 8 (spaces per level and tab display width) |
-| Line Numbers | on / off |
-| Indent Guides | on / off |
-| Auto Pairs | on / off (see [Typing aids](#typing-aids-auto-pairs-and-markdown-lists)) |
-| Syntax Highlight | on / off |
-| Autosave | on / off |
-| Sidebar Width | 180–420 px |
-| Hidden Files | on / off (dot entries in the Explorer; default off) |
-| Ignored Files | OFF / DIM / HIDE (generated + temp files; default DIM) |
-| Keymap | VS Code / JetBrains / Vim |
-| Language Intelligence | on / off (start/stop all language servers) |
-| Trust Local Servers | on / off (allow repository `node_modules/.bin` shims) |
-| Reset to Defaults | — |
+A left column of groups (Appearance / Editor / View / Explorer / Language) and
+one scrolling pane of rows on the right. The pane shows the selected group, or
+every search match (with group headers). The title and the search field share
+one row; the body is height-capped, so the panel stays compact on tall windows
+and never grows past the window (the app window itself has a 640×500 minimum).
+Every row applies immediately and is stored in the session file.
 
-Changes apply immediately and are stored in the session file. `↑↓` select,
-`←→` change, `Enter` toggles, `Esc` closes; the `−`/`+` boxes and rows are
-clickable.
+| Group | Row | Widget | Values |
+|---|---|---|---|
+| Appearance | Theme | choice (buttons) | Dark / Light |
+| Appearance | Font Size | number | 11–18 px |
+| Editor | Indent Style | choice (buttons) | Spaces / Tabs (default Spaces) |
+| Editor | Indent Width | choice (arrows) | 2 / 4 / 8 (spaces per level and tab display width) |
+| Editor | Line Numbers | switch | on / off |
+| Editor | Indent Guides | switch | on / off |
+| Editor | Auto Pairs | switch | on / off (see [Typing aids](#typing-aids-auto-pairs-and-markdown-lists)) |
+| Editor | Syntax Highlight | switch | on / off |
+| Editor | Autosave | switch | on / off |
+| Editor | Keymap | choice (arrows) | VS Code / JetBrains / Vim |
+| View | Minimap | switch | on / off (same state as the View menu command) |
+| View | Soft Wrap | switch | on / off (same state as the View menu command) |
+| View | Scroll Sync | switch | on / off (same state as the View menu command) |
+| View | Sidebar Width | number | 180–420 px |
+| Explorer | Hidden Files | switch | on / off (dot entries; default off) |
+| Explorer | Ignored Files | choice (arrows) | OFF / DIM / HIDE (generated + temp files; default DIM) |
+| Language | Language Intelligence | switch | on / off (start/stop all language servers) |
+| Language | Trust Local Servers | switch | on / off (allow repository `node_modules/.bin` shims) |
+
+`RESET TO DEFAULTS` sits in the footer and restores every row above (including
+the theme and the View toggles).
+
+Widgets are distinct by kind:
+
+- **switch** — a square track and knob; click or `Enter` flips it.
+- **choice** — two options paint as a `[ A | B ]` button group; three or more
+  paint as `< value >` with a small arrow on each side. `←`/`→` rotate.
+- **number** — `− value +`; the `−`/`+` boxes step (8 px for the sidebar, 1 px
+  for the font) and clicking the value (or `Enter`) starts typing a number.
+  `Enter` commits and clamps, `Esc` cancels, moving to another row commits.
+
+A search field sits above the list: typing filters rows by label or group name
+(the left navigation dims groups without a match) and `↑↓` walk rows across
+groups, switching the pane at a boundary. `Tab`/`Shift+Tab` jump between groups;
+clicking a group clears the query and shows that group. Space types into the
+query (labels contain spaces). The right pane scrolls with the wheel. With an
+empty query, `←`/`→` adjust the selected row; with a query they move the search
+caret. `Esc` (or `⌘,`) closes.
 
 ## Large files
 
@@ -552,6 +581,13 @@ change drops it and the next open starts a fresh build. Indexing skips `.git`,
 files. `↑↓` select, `Enter` opens, `Esc` closes, typing filters live (while the
 worker runs the result list stays empty); the panel shows the file count and
 match preview.
+
+Prompts, menus, Settings, the Git diff and the LSP hover/completion cards are
+app overlays above the editor. While one is open it owns the pointer: moving
+over or under it does not hover tabs, the sidebar, the footer or code, does not
+schedule a delayed LSP card on top of it, and wheel/right-click cannot reach
+the surface behind it. Transient LSP cards dismiss themselves when a wheel
+gesture arrives and then let the editor scroll.
 
 ## Search in Project (`⇧⌘F`)
 
@@ -766,7 +802,8 @@ fixed-atlas limit and asserts that none rasterize to empty slots.
   All** or **Discard All**; restored buffers keep their original name/path and
   are marked dirty so the first save writes them back.
 - **Window state**: size, position and the maximized flag are persisted and
-  restored (fullscreen is not persisted).
+  restored (fullscreen is not persisted). The window has a 640×500 logical
+  minimum size so the shell and its overlays keep a usable layout.
 - Session format is version 19 (v19 added `minimap`; v18 removed the
   image-preview key; v17 added `image_preview`; v16 added `show_hidden` and `ignored_files`;
   v15 added `bottom_tab` and
@@ -799,6 +836,10 @@ Not `igui_theme::DefaultTheme`. The app owns its palette and metrics
   Menlo and the terminal's mono face alike. That matches VS Code's
   `"editor.fontSize": 14`; without the flag ab_glyph measured ascent+descent and
   the same number produced a 10 px em on PingFang and a 12 px em on Menlo.
+- **One paint per glyph** — syntax and LSP semantic colors are resolved into
+  non-overlapping byte spans before painting, so a token is not overpainted on
+  its base glyph (overpainting composites antialiasing and makes code look
+  bolder and less sharp).
 - **Palette** — dark: `#0B0E13` canvas, `#0E1218` panels, `#39E0AE` phosphor
   accent, `#16362F` selection; light: `#F7F9FC` canvas, `#0A8F6F` teal accent.
 - Dark and light are separate hand-tuned palettes, not an inversion; switching

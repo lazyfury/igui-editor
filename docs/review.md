@@ -74,7 +74,7 @@ Findings and fixes:
 |---|---|---|
 | P1 | Release used the default profile: no LTO, symbols retained, and the headless recorder/profiler were linked into every shipped binary. | Fat LTO, one codegen unit, `panic = "abort"`, stripped symbols; `selfcheck` became a feature and packaging builds `--no-default-features`. |
 | P1 | Quick Open rebuilt workspace-relative and lowercase path strings for every file on every keystroke (20k files → ~60k allocations per keypress). | `FileIndex` caches `displays` and `lower`; query scores borrowed data and clones only the capped results. |
-| P2 | Dependency code was optimized for speed even where bundle size dominates. | `opt-level = "s"` for third-party packages; app and `igui_*` stay at `opt-level = 3`. |
+| P2 | Dependency code was optimized for speed even where bundle size dominates. | `opt-level = "s"` for third-party packages; app and `igui_*` stay at `opt-level = 3`. (Superseded: dependencies are now at `2` because neither `"s"` nor `3` measures any faster — see [`benchmarks.md`](benchmarks.md#bundle-budget).) |
 
 Acceptance:
 

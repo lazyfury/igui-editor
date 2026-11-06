@@ -79,7 +79,13 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    and hit testing, so the menu never depends on z-order or a second window.
 5. **Mouse hit rectangles are recorded during paint** (tabs, menu bar, sidebar
    rows). Pointer events happen after a frame, so this is stable and avoids a
-   parallel layout implementation.
+   parallel layout implementation. App overlays are not scene nodes, so
+   `state::overlay::pointer_capture` is the single pointer-precedence function
+   (mirroring the overlay paint order): an open prompt, menu, settings panel,
+   git diff or LSP card owns pointer move/press/release/wheel/double-click,
+   clears every hover underneath, suppresses the delayed editor/LSP hover, and
+   supplies the cursor. Transient LSP cards (hover, completion, signature help)
+   let a wheel gesture through after dismissing themselves.
 6. **Keyboard focus is always the editor.** Clicking the sidebar or tab strip
    makes the engine focus that control on pointer-down; `app.event` restores
    focus right after routing, so typing and shortcuts never stop working.
@@ -99,9 +105,14 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    without an OS window.
 9. **Keys are dispatched centrally.** `input.rs` orders:
    modal → menu Esc → find field (if focused) → global shortcuts → editor/tree.
-   Text and IME events follow the `Focus` value (`Editor` / `Find` / `Replace`).
-   Global commands therefore work in every mode, and a field edit can never leak
-   into the document. Shortcuts now go through the command/keymap layer in
+   Text and IME events follow the `Focus` value (`Editor` / `Find` / `Replace`);
+   the app overlays (Quick Open, search, prompts, settings) are app-owned, so
+   they get text first when open. Global commands therefore work in every mode,
+   and a field edit can never leak into the document. Because overlays are not
+   scene nodes, the platform IME candidate window follows
+   `AppState::ime_caret()`: each field painter records its caret rectangle in
+   state, and one precedence function (mirroring this routing) picks the active
+   one. There is no second caret source in the scene tree. Shortcuts now go through the command/keymap layer in
    `keymap.rs`; see [`keymaps.md`](keymaps.md) for profiles and
    the remaining Vim scope.
 10. **Find state is a value, matching is pure.** `model::find` maps `(text,
@@ -131,7 +142,17 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
    typography (`font`, derived `line_h`, `tab_width`), gutter/guide toggles and
    the sidebar width come from `Settings`. Painters read
    `state.editor_metrics()`; changing a setting only marks paint/layout dirty,
-   and nothing rebuilds the tree. Settings persist in the session file.
+   and nothing rebuilds the tree. Settings persist in the session file. The
+   panel itself is data: `settings::ROWS` is the one table of row order, group
+   and widget kind (`Toggle`, `Choice`, `Number`, `Action`), and
+   `ui::settings::layout` is the one geometry function used by paint, hit
+   testing, wheel scrolling and keyboard reveal. The panel is two panes — a left
+   group navigation and one scrolling row pane (the selected group, or every
+   search match) — with the title and search on one header row; the body height
+   is capped (`MAX_BODY_H`) so a tall window does not stretch it, and the window
+   minimum (`host::MIN_WINDOW_SIZE`) guarantees the clamped panel fits. View toggles (minimap, soft
+   wrap, scroll sync) delegate to the same `AppState` commands as the View menu,
+   so the panel never forks their behavior.
 15. **The syntax API is the plugin seam.** `syntax::SyntaxProvider` is a pure,
    `Send + Sync` line tokenizer returning byte-range tokens plus a `u32` carried
    state; `SyntaxRegistry` maps extensions to providers and built-ins register
@@ -141,9 +162,15 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
 16. **Highlighting is incremental by line, with a budget.** `Document` records
    the line span of its last mutation; `model::highlight` re-tokenizes from the
    first touched line and stops when the outgoing state equals the cached state
-   for the next line (and the edit is behind it). Work is capped per frame and
-   resumed next frame (`needs_frame`), so a large file cannot stall a keystroke.
-   Above 2 MB / 20k lines highlighting is off.
+   for the next line (and the edit is behind it). Convergence is trusted only up
+   to the *frontier* — the lines this revision already tokenized — so an edit
+   that settles early during the initial budgeted pass resumes the catch-up from
+   the frontier instead of restarting it; otherwise typing at the top of a large
+   file would re-tokenize the same budget every frame and never finish. A line
+   count change (newline/join) keeps the tokenized prefix and resumes at the
+   edit instead of discarding the cache. Work is capped per frame and resumed
+   next frame (`needs_frame`), so a large file cannot stall a keystroke. Above
+   2 MB / 20k lines highlighting is off.
 17. **Large files degrade explicitly.** 2 MB/20k lines: no highlighting;
    8 MB: no preview (banner, editing still works); 32 MB: opening is refused;
    preview above 512 KB renders a prefix plus a truncation banner. Limits are
@@ -617,7 +644,9 @@ reduction; the editor is not an asset viewer.
 **M15 (done, Session 5 reduction)** — image preview, Git staging/commit/history,
 Material file-type icons and the Go/TypeScript/C-C++/Python language-server
 specs were removed; crash snapshots and the undo history are bounded. The
-release binary is gated at 6 MB (currently 4.41 MB).
+release binary is gated at 12 MB (currently 5.13 MB) as a growth guard, not a
+size target; see [`benchmarks.md`](benchmarks.md#bundle-budget) for the
+opt-level tiers.
 
 Next candidates: Dock reopen, cross-file undo and incremental preview layout for
 very large documents.

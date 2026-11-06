@@ -461,14 +461,13 @@ impl EditorApp {
         // an idle frame replays the cached commands.
         self.last_paint_reused =
             igui_ui::paint_cached(&self.tree, &mut self.paint_cache, ctx).is_reused();
-        // Git diff is an app overlay, above the tree but below menus/modals.
+        // Overlays in stacking order (lowest first): LSP cards sit directly
+        // above the editor, a prompt/menu/diff always covers them. The pointer
+        // precedence in `state::overlay` mirrors this order.
         let measurer = igui_ui::text_measurer(&self.tree);
         let mut state = self.state.borrow_mut();
+        ui::lsp::paint(&mut state, measurer.as_ref(), ctx);
         ui::git::paint_diff(&mut state, measurer.as_ref(), ctx);
-        drop(state);
-        // Overlays, in stacking order: menu drop-down, settings, modal.
-        let measurer = igui_ui::text_measurer(&self.tree);
-        let mut state = self.state.borrow_mut();
         ui::menu::paint_popup(&mut state, measurer.as_ref(), ctx);
         ui::tab_menu::paint(&mut state, measurer.as_ref(), ctx);
         ui::tree_menu::paint(&mut state, measurer.as_ref(), ctx);
@@ -479,7 +478,6 @@ impl EditorApp {
         ui::project_search::paint(&mut state, measurer.as_ref(), ctx);
         ui::references::paint(&mut state, measurer.as_ref(), ctx);
         ui::rename_symbol::paint(&mut state, measurer.as_ref(), ctx);
-        ui::lsp::paint(&mut state, measurer.as_ref(), ctx);
         ui::tooling::paint(&mut state, measurer.as_ref(), ctx);
         ui::drop::paint(&state, measurer.as_ref(), ctx);
         ui::modal::paint(&mut state, measurer.as_ref(), ctx);
@@ -499,6 +497,11 @@ impl EditorApp {
 
     pub fn event(&mut self, event: &InputEvent) -> EventResult {
         let measurer = igui_ui::text_measurer(&self.tree);
+        if let Some(position) = event.position() {
+            self.state.borrow_mut().pointer = position;
+        } else if matches!(event, InputEvent::PointerLeave) {
+            self.state.borrow_mut().pointer = Vec2::new(-1.0, -1.0);
+        }
         #[cfg(feature = "profile")]
         if let Some(profile) = self.profile.clone() {
             if matches!(event, InputEvent::KeyDown { key: Key::F4 }) {
@@ -520,6 +523,13 @@ impl EditorApp {
                     crate::macos::end_window_drag();
                 }
                 let mut state = self.state.borrow_mut();
+                // A press owned by an app overlay drops every hover below it,
+                // even when the pointer never moved after the overlay opened.
+                if crate::state::overlay::pointer_capture(&state, *position).is_some()
+                    && crate::state::overlay::clear_pointer_hover(&mut state)
+                {
+                    state.dirty = true;
+                }
                 if state.recovery_prompt.is_some() {
                     ui::recovery::click(&mut state, *position);
                     return EventResult::Handled;
@@ -565,6 +575,105 @@ impl EditorApp {
                     ui::tooling::click(&mut state, *position);
                     return EventResult::Handled;
                 }
+                state.clear_hover_target();
+                state.hover_leave_at = None;
+                if state.rename_symbol.open {
+                    ui::rename_symbol::click(&mut state, *position);
+                    return EventResult::Handled;
+                }
+                if state.references.open {
+                    ui::references::click(&mut state, *position);
+                    return EventResult::Handled;
+                }
+                if state.search.open {
+                    ui::project_search::click(&mut state, *position);
+                    return EventResult::Handled;
+                }
+                if state.goto_line.open {
+                    ui::goto_line::click(&mut state, *position);
+                    return EventResult::Handled;
+                }
+                if state.new_file.open {
+                    ui::new_file::click(&mut state, *position);
+                    return EventResult::Handled;
+                }
+                if state.quick_open.open {
+                    ui::quick_open::click(&mut state, *position);
+                    return EventResult::Handled;
+                }
+                if state.settings_open {
+                    ui::settings::click(&mut state, *position);
+                    return EventResult::Handled;
+                }
+                if state.tree_menu.is_some() {
+                    match ui::tree_menu::click(&mut state, *position) {
+                        ui::tree_menu::Click::Outside => {
+                            state.tree_menu = None;
+                            state.dirty = true;
+                        }
+                        ui::tree_menu::Click::Consumed => return EventResult::Handled,
+                        ui::tree_menu::Click::Run(action) => {
+                            let menu = state.tree_menu.clone();
+                            state.tree_menu = None;
+                            if let Some(menu) = menu {
+                                state.run_tree_menu(menu.path, menu.is_dir, action);
+                            }
+                            return EventResult::Handled;
+                        }
+                    }
+                }
+                if state.tab_menu.is_some() {
+                    match ui::tab_menu::click(&mut state, *position) {
+                        ui::tab_menu::Click::Outside => {
+                            state.tab_menu = None;
+                            state.dirty = true;
+                        }
+                        ui::tab_menu::Click::Consumed => return EventResult::Handled,
+                        ui::tab_menu::Click::Run(action) => {
+                            let tab = state.tab_menu.as_ref().map_or(0, |menu| menu.tab);
+                            state.tab_menu = None;
+                            state.run_tab_menu(action, tab);
+                            return EventResult::Handled;
+                        }
+                    }
+                }
+                // A menu-bar item stays clickable while its drop-down is open.
+                if state.menu_open.is_some() {
+                    if ui::menu::handle_panel_click(&mut state, *position) {
+                        return EventResult::Handled;
+                    }
+                    if ui::menu::handle_bar_click(&mut state, *position) {
+                        return EventResult::Handled;
+                    }
+                }
+                if state.git.diff_visible {
+                    ui::git::click_diff(&mut state, *position);
+                    return EventResult::Handled;
+                }
+                if ui::menu::handle_panel_click(&mut state, *position) {
+                    return EventResult::Handled;
+                }
+                if ui::menu::handle_bar_click(&mut state, *position) {
+                    return EventResult::Handled;
+                }
+                // The bar sits above the drop-down: a press on a bar item
+                // toggles that menu (including closing the open one).
+                if state.menu_open.is_some() {
+                    match ui::menu::handle_click(&mut state, *position, measurer.as_ref()) {
+                        ui::menu::Click::Run(action) => {
+                            state.menu_open = None;
+                            state.menu_hover = None;
+                            state.run(action);
+                            return EventResult::Handled;
+                        }
+                        ui::menu::Click::Consumed => return EventResult::Handled,
+                        ui::menu::Click::Outside => {
+                            state.menu_open = None;
+                            state.menu_hover = None;
+                            state.dirty = true;
+                        }
+                    }
+                }
                 if state.lsp.hover_doc_hit.contains(*position) {
                     if let Some(target) = state
                         .lsp
@@ -597,74 +706,6 @@ impl EditorApp {
                     state.dirty = true;
                     if !definition_click {
                         return EventResult::Handled;
-                    }
-                }
-                state.clear_hover_target();
-                state.hover_leave_at = None;
-                // The bar sits above the drop-down: a press on a bar item
-                // toggles that menu (including closing the open one).
-                if state.git.diff_visible {
-                    ui::git::click_diff(&mut state, *position);
-                    return EventResult::Handled;
-                }
-                if state.rename_symbol.open {
-                    ui::rename_symbol::click(&mut state, *position);
-                    return EventResult::Handled;
-                }
-                if state.references.open {
-                    ui::references::click(&mut state, *position);
-                    return EventResult::Handled;
-                }
-                if state.settings_open {
-                    ui::settings::click(&mut state, *position);
-                    return EventResult::Handled;
-                }
-                if state.new_file.open {
-                    ui::new_file::click(&mut state, *position);
-                    return EventResult::Handled;
-                }
-                if state.goto_line.open {
-                    ui::goto_line::click(&mut state, *position);
-                    return EventResult::Handled;
-                }
-                if state.quick_open.open {
-                    ui::quick_open::click(&mut state, *position);
-                    return EventResult::Handled;
-                }
-                if state.search.open {
-                    ui::project_search::click(&mut state, *position);
-                    return EventResult::Handled;
-                }
-                if state.tab_menu.is_some() {
-                    match ui::tab_menu::click(&mut state, *position) {
-                        ui::tab_menu::Click::Outside => {
-                            state.tab_menu = None;
-                            state.dirty = true;
-                        }
-                        ui::tab_menu::Click::Consumed => return EventResult::Handled,
-                        ui::tab_menu::Click::Run(action) => {
-                            let tab = state.tab_menu.as_ref().map_or(0, |menu| menu.tab);
-                            state.tab_menu = None;
-                            state.run_tab_menu(action, tab);
-                            return EventResult::Handled;
-                        }
-                    }
-                }
-                if state.tree_menu.is_some() {
-                    match ui::tree_menu::click(&mut state, *position) {
-                        ui::tree_menu::Click::Outside => {
-                            state.tree_menu = None;
-                            state.dirty = true;
-                        }
-                        ui::tree_menu::Click::Consumed => return EventResult::Handled,
-                        ui::tree_menu::Click::Run(action) => {
-                            let menu = state.tree_menu.clone();
-                            state.tree_menu = None;
-                            if let Some(menu) = menu {
-                                state.run_tree_menu(menu.path, menu.is_dir, action);
-                            }
-                            return EventResult::Handled;
-                        }
                     }
                 }
                 // Footer LSP dot: start/stop every language server.
@@ -704,28 +745,6 @@ impl EditorApp {
                     state.dirty = true;
                     return EventResult::Handled;
                 }
-                if ui::menu::handle_panel_click(&mut state, *position) {
-                    return EventResult::Handled;
-                }
-                if ui::menu::handle_bar_click(&mut state, *position) {
-                    return EventResult::Handled;
-                }
-                if state.menu_open.is_some() {
-                    match ui::menu::handle_click(&mut state, *position, measurer.as_ref()) {
-                        ui::menu::Click::Run(action) => {
-                            state.menu_open = None;
-                            state.menu_hover = None;
-                            state.run(action);
-                            return EventResult::Handled;
-                        }
-                        ui::menu::Click::Consumed => return EventResult::Handled,
-                        ui::menu::Click::Outside => {
-                            state.menu_open = None;
-                            state.menu_hover = None;
-                            state.dirty = true;
-                        }
-                    }
-                }
                 if ui::outline::click(&mut state, *position) {
                     return EventResult::Handled;
                 }
@@ -760,11 +779,15 @@ impl EditorApp {
                 button: PointerButton::Right,
             } => {
                 let mut state = self.state.borrow_mut();
-                if state.recovery_prompt.is_some() || state.modal.is_some() {
-                    return EventResult::Handled;
-                }
-                if state.settings_open || state.quick_open.open || state.search.open {
-                    return EventResult::Handled;
+                // Any app overlay above the tree owns the pointer: a right
+                // click on a prompt must not open a context menu underneath.
+                // Context menus are the exception: right-clicking another row
+                // moves the menu there instead of needing a dismiss click.
+                if let Some(capture) = crate::state::overlay::pointer_capture(&state, *position) {
+                    use crate::state::overlay::Overlay;
+                    if !matches!(capture.overlay(), Overlay::TreeMenu | Overlay::TabMenu) {
+                        return EventResult::Handled;
+                    }
                 }
                 if let Some(index) = ui::sidebar::hover_at(&state, *position) {
                     if let Some(row) = state.ws.tree.rows().get(index).cloned() {
@@ -824,6 +847,23 @@ impl EditorApp {
                     return EventResult::Handled;
                 }
                 let mut state = self.state.borrow_mut();
+                // A prompt/menu/card above the tree owns the pointer. The
+                // engine does not know those app-level surfaces exist, so it
+                // must not receive this move (otherwise the editor keeps its
+                // hover dwell alive and schedules a tooltip on top of the
+                // popup, and stale tab/sidebar/footer hovers stay lit).
+                if let Some(capture) = crate::state::overlay::pointer_capture(&state, *position) {
+                    if crate::state::overlay::capture_pointer_move(
+                        &mut state,
+                        capture,
+                        *position,
+                        measurer.as_ref(),
+                    ) {
+                        state.dirty = true;
+                    }
+                    drop(state);
+                    return EventResult::Handled;
+                }
                 let menubar = state
                     .menubar_hits
                     .iter()
@@ -927,7 +967,7 @@ impl EditorApp {
                 self.focus_editor();
                 result
             }
-            InputEvent::PointerUp { .. } => {
+            InputEvent::PointerUp { position, .. } => {
                 let header_pressed = std::mem::take(&mut self.header_pressed);
                 if header_pressed
                     || self.window_drag_pending.take().is_some()
@@ -935,6 +975,10 @@ impl EditorApp {
                 {
                     self.window_dragging = false;
                     crate::macos::end_window_drag();
+                    return EventResult::Handled;
+                }
+                if crate::state::overlay::pointer_capture(&self.state.borrow(), *position).is_some()
+                {
                     return EventResult::Handled;
                 }
                 let result = igui_ui::route_input(&mut self.tree, event);
@@ -967,6 +1011,10 @@ impl EditorApp {
                         return EventResult::Handled;
                     }
                 }
+                if crate::state::overlay::pointer_capture(&self.state.borrow(), *position).is_some()
+                {
+                    return EventResult::Handled;
+                }
                 let result = igui_ui::route_input(&mut self.tree, event);
                 self.focus_editor();
                 result
@@ -979,6 +1027,10 @@ impl EditorApp {
                     return EventResult::Handled;
                 }
                 if state.rename_symbol.open {
+                    return EventResult::Handled;
+                }
+                if state.settings_open {
+                    ui::settings::scroll(&mut state, *position, delta.y);
                     return EventResult::Handled;
                 }
                 if state.references.open {
@@ -994,6 +1046,17 @@ impl EditorApp {
                         ui::git::wheel_diff(&mut state, *delta);
                         return EventResult::Handled;
                     }
+                }
+                if let Some(capture) = crate::state::overlay::pointer_capture(&state, *position) {
+                    if capture.blocks_wheel() {
+                        return EventResult::Handled;
+                    }
+                    // Transient LSP cards do not own the scroll gesture: dismiss
+                    // them, then let the wheel scroll the editor.
+                    state.lsp.dismiss_transient();
+                    state.clear_signature_help();
+                    crate::state::overlay::clear_pointer_hover(&mut state);
+                    state.dirty = true;
                 }
                 drop(state);
                 igui_ui::route_input(&mut self.tree, event)
@@ -1169,8 +1232,11 @@ impl EditorApp {
                     ui::rename_symbol::on_text(&mut state, text);
                     return EventResult::Handled;
                 }
-                if state.settings_open
-                    || state.recovery_prompt.is_some()
+                if state.settings_open {
+                    ui::settings::on_text(&mut state, text);
+                    return EventResult::Handled;
+                }
+                if state.recovery_prompt.is_some()
                     || state.menu_open.is_some()
                     || state.tooling.prompt.is_some()
                     || state.references.open
@@ -1226,35 +1292,10 @@ impl EditorApp {
             InputEvent::PointerLeave => {
                 {
                     let mut state = self.state.borrow_mut();
-                    state.clear_hover_target();
-                    state.hover_leave_at = None;
+                    crate::state::overlay::clear_pointer_hover(&mut state);
                     state.lsp.hover = None;
                     state.lsp.hover_anchor = None;
                     state.lsp.hover_rect = igui_core::Rect::ZERO;
-                    // Leaving the window must drop every visual hover, not
-                    // just the editor's symbol hover.
-                    state.menubar_hover = None;
-                    state.menu_hover = None;
-                    state.tabs.hover = None;
-                    state.sidebar.hover = None;
-                    state.language_hover = false;
-                    state.theme_hover = false;
-                    state.lsp_hover = false;
-                    state.lsp_toggle_hover = false;
-                    state.lsp_toggle_hover = false;
-                    state.problems.hover = None;
-                    state.dock_hover = None;
-                    state.dock_close_hover = None;
-                    state.git.hover = None;
-                    state.outline.hover = None;
-                    state.header_hover = None;
-                    state.panel_hover = None;
-                    if let Some(menu) = state.tab_menu.as_mut() {
-                        menu.hover = None;
-                    }
-                    if let Some(menu) = state.tree_menu.as_mut() {
-                        menu.hover = None;
-                    }
                     state.dirty = true;
                 }
                 igui_ui::route_input(&mut self.tree, event)
@@ -1265,10 +1306,11 @@ impl EditorApp {
             }
             InputEvent::Ime(ime) => {
                 let mut state = self.state.borrow_mut();
-                if state.settings_open
-                    || state.recovery_prompt.is_some()
-                    || state.tooling.prompt.is_some()
-                {
+                if state.settings_open {
+                    ui::settings::on_ime(&mut state, ime);
+                    return EventResult::Handled;
+                }
+                if state.recovery_prompt.is_some() || state.tooling.prompt.is_some() {
                     return EventResult::Handled;
                 }
                 if state.lsp.hover.is_some() || state.lsp.completion.is_some() {
@@ -1322,24 +1364,21 @@ impl EditorApp {
         }
     }
 
+    /// Where the platform IME candidate window goes. App overlays are not scene
+    /// nodes, so this comes from the field each painter recorded rather than
+    /// from the tree's focused control.
     pub fn caret(&self) -> Option<Rect> {
-        let state = self.state.borrow();
-        if state.terminal.open
-            && state.bottom_tab == crate::state::Panel::Terminal
-            && state.focus == Focus::Terminal
-        {
-            return Some(
-                state
-                    .terminal
-                    .active()
-                    .map_or(Rect::ZERO, |session| session.caret_rect),
-            );
-        }
-        drop(state);
-        igui_ui::focused_caret(&self.tree)
+        self.state.borrow().ime_caret()
     }
 
     pub fn cursor(&self) -> Cursor {
+        // App overlays are not scene nodes: while one owns the pointer the tree
+        // would report the surface underneath (e.g. the editor's text cursor).
+        let state = self.state.borrow();
+        if crate::state::overlay::pointer_capture(&state, state.pointer).is_some() {
+            return Cursor::Default;
+        }
+        drop(state);
         igui_ui::hovered_cursor(&self.tree)
     }
 
@@ -1964,6 +2003,15 @@ impl AppLogic for EditorApp {
                 }
             }
             self.restore_window_position();
+            // Keep the window big enough for the shell and its overlays; the
+            // engine has no `WindowConfig` field for this. Apply it after the
+            // restored geometry so a tiny saved size is clamped too.
+            if let Some(handle) = window.borrow().as_ref() {
+                handle.set_min_inner_size(Some(winit::dpi::LogicalSize::new(
+                    crate::host::MIN_WINDOW_SIZE.0,
+                    crate::host::MIN_WINDOW_SIZE.1,
+                )));
+            }
         }
         if let Some(drop) = ctx.service::<SharedDropTarget>() {
             self.drop = Some(drop.clone());

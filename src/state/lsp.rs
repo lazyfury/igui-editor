@@ -157,6 +157,22 @@ impl AppState {
 
     /// Fires the pending hover request once the dwell time has passed.
     pub fn tick_hover(&mut self) {
+        // A popup above the editor owns the pointer: the mouse resting there
+        // (or a prompt opened without moving it) must never schedule a tooltip
+        // that paints on top of the popup.
+        if let Some(capture) = super::overlay::pointer_capture(self, self.pointer) {
+            self.hover_target = None;
+            if !capture.overlay().is_lsp()
+                && (self.lsp.hover.is_some()
+                    || self.lsp.completion.is_some()
+                    || self.lsp.signature_help.is_some())
+            {
+                self.lsp.dismiss_transient();
+                self.clear_signature_help();
+                self.dirty = true;
+            }
+            return;
+        }
         if let Some(at) = self.hover_leave_at {
             if at.elapsed() >= super::schedule::HOVER_DISMISS {
                 self.hover_leave_at = None;

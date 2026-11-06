@@ -15,8 +15,14 @@ shipped bundle. Release uses fat LTO, `panic = "abort"` and stripped symbols.
 
 | Profile | Settings | Use |
 |---|---|---|
-| `release` | fat LTO, 1 codegen unit, stripped | the shipped bundle and `scripts/bench.sh` |
+| `release` | fat LTO, 1 codegen unit, app/engine at `opt-level = 3`, dependencies at 2, stripped | the shipped bundle and `scripts/bench.sh` |
 | `release-fast` | thin LTO, 16 codegen units, same opt levels | iterating on release-only problems, manual testing of an optimized build |
+
+`opt-level` is not the lever for this app: the hot paths are the app and the
+`igui_*` engine crates (always 3), and fat LTO does the cross-crate inlining.
+Measured tiers and the 12 MB growth guard are in
+[`benchmarks.md`](benchmarks.md#bundle-budget); use `release-fast` while
+iterating instead of editing the shipped profile.
 
 `release-fast` inherits `release` (including the per-package opt-level
 overrides) and only relaxes link-time choices, so a bug that only appears with

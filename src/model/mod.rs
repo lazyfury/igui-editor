@@ -25,6 +25,7 @@ pub mod recovery;
 pub mod replace;
 pub mod search;
 pub mod session;
+pub(crate) mod spans;
 pub mod typing;
 pub mod watch;
 pub mod workspace;

@@ -151,6 +151,11 @@ impl PlatformObserver for DropObserver {
     }
 }
 
+/// Smallest window the shell stays usable at: the sidebar/editor keep a workable
+/// width and the settings panel (title + search row, capped body, footer) fits
+/// without clipping.
+pub const MIN_WINDOW_SIZE: (f64, f64) = (640.0, 500.0);
+
 /// Builds the windowed app (also used by the self-check to prove the wiring).
 ///
 /// `profile` opens the runtime performance panel on startup; it is ignored in

@@ -21,6 +21,7 @@ use crate::model::doc::Document;
 use crate::model::find::Matcher;
 use crate::model::git::{GitDiff, GitEvent, GitRequest, GitWorker, RepoStatus};
 use crate::model::highlight::HighlightCache;
+use crate::model::ignore::IgnoreMode;
 use crate::model::lsp::{self as model_lsp, LspController};
 use crate::model::pty::PtySession;
 use crate::model::recovery::{RecoveryEntry, RecoveryStore};
@@ -31,7 +32,9 @@ use crate::model::typing;
 use crate::model::workspace_index::{display_path, FileIndex, IndexWorker};
 use crate::model::Workspace;
 use crate::services::{ServiceRegistry, SidebarContribution};
-use crate::settings::{EditorMetrics, Row, Settings};
+use crate::settings::{
+    clamp_font, clamp_sidebar, clamp_tab, EditorMetrics, Group, Row, RowKind, Settings, TAB_WIDTHS,
+};
 use crate::syntax::{SyntaxProvider, SyntaxRegistry, TokenKind};
 use crate::theme::{Mode, Theme};
 use crate::ui::preview::PreviewUi;
@@ -44,6 +47,7 @@ pub(crate) mod schedule;
 // in this module; each child owns one concern so no single file becomes a god
 // object. Fields remain private to `state`, which child modules may access.
 mod actions;
+mod caret;
 mod commands;
 mod dock;
 mod files;
@@ -56,6 +60,7 @@ mod lsp;
 mod modal;
 mod new_file;
 mod outline;
+pub(crate) mod overlay;
 mod quick_open;
 mod references;
 mod reliability;
@@ -74,6 +79,7 @@ mod workspace;
 pub use dock::{DockId, Panel};
 pub use outline::{NativeOutline, MARKDOWN_HEADING_KIND};
 pub use references::ReferencesUi;
+pub use settings::SettingsUi;
 
 pub const MAX_RECENT: usize = 8;
 /// Recent entries shown per group in the File menu (the session keeps 8 each).
@@ -536,6 +542,9 @@ pub struct FindState {
     /// Bar geometry and hit targets from the last paint.
     pub hits: Vec<(FindHit, Rect)>,
     pub preedit: Option<String>,
+    /// Caret rectangles of the two fields (viewport space, IME placement).
+    pub find_caret: Rect,
+    pub replace_caret: Rect,
 }
 
 impl Default for FindState {
@@ -553,6 +562,8 @@ impl Default for FindState {
             rev: u64::MAX,
             hits: Vec::new(),
             preedit: None,
+            find_caret: Rect::ZERO,
+            replace_caret: Rect::ZERO,
         }
     }
 }
@@ -1057,6 +1068,8 @@ pub struct QuickOpenState {
     /// True while `worker` is expected to deliver the next index.
     pub indexing: bool,
     pub preedit: Option<String>,
+    /// Query caret (viewport space, IME placement).
+    pub caret_rect: Rect,
 }
 
 /// What the inline create prompt will create.
@@ -1087,6 +1100,8 @@ pub struct NewFileState {
     pub target: Option<PathBuf>,
     pub error: Option<String>,
     pub preedit: Option<String>,
+    /// Name-field caret (viewport space, IME placement).
+    pub caret_rect: Rect,
 }
 
 impl Default for NewFileState {
@@ -1099,6 +1114,7 @@ impl Default for NewFileState {
             target: None,
             error: None,
             preedit: None,
+            caret_rect: Rect::ZERO,
         }
     }
 }
@@ -1109,6 +1125,8 @@ pub struct GotoLineState {
     pub field: TextEdit,
     pub error: Option<String>,
     pub preedit: Option<String>,
+    /// Field caret (viewport space, IME placement).
+    pub caret_rect: Rect,
 }
 
 impl Default for GotoLineState {
@@ -1118,6 +1136,7 @@ impl Default for GotoLineState {
             field: TextEdit::new(""),
             error: None,
             preedit: None,
+            caret_rect: Rect::ZERO,
         }
     }
 }
@@ -1134,6 +1153,7 @@ impl Default for QuickOpenState {
             worker: None,
             indexing: false,
             preedit: None,
+            caret_rect: Rect::ZERO,
         }
     }
 }
@@ -1146,6 +1166,8 @@ pub struct RenameSymbolUi {
     pub name: TextEdit,
     pub error: Option<String>,
     pub preedit: Option<String>,
+    /// Name-field caret (viewport space, IME placement).
+    pub caret_rect: Rect,
 }
 
 impl Default for RenameSymbolUi {
@@ -1157,6 +1179,7 @@ impl Default for RenameSymbolUi {
             name: TextEdit::new(""),
             error: None,
             preedit: None,
+            caret_rect: Rect::ZERO,
         }
     }
 }
@@ -1189,6 +1212,8 @@ pub struct SearchState {
     /// Geometry of the replace row (recorded in paint for hit tests).
     pub replace_rect: Rect,
     pub replace_button: Rect,
+    /// Caret of the focused query/replace field (viewport space, IME placement).
+    pub caret_rect: Rect,
 }
 
 impl Default for SearchState {
@@ -1210,6 +1235,7 @@ impl Default for SearchState {
             preedit: None,
             replace_rect: Rect::ZERO,
             replace_button: Rect::ZERO,
+            caret_rect: Rect::ZERO,
         }
     }
 }
@@ -1233,6 +1259,9 @@ pub struct AppState {
     pub(crate) outline_drag: Option<(f32, f32)>,
     pub(crate) hover_target: Option<HoverTarget>,
     pub(crate) hover_leave_at: Option<Instant>,
+    /// Last pointer position in viewport space (`(-1, -1)` outside the window),
+    /// used by the overlay pointer precedence and the cursor override.
+    pub(crate) pointer: Vec2,
     /// Debounced auto-completion activation while typing.
     pub(crate) auto_completion_at: Option<Instant>,
     /// Pending signature-help request (trigger characters or an edit refresh).
@@ -1323,7 +1352,7 @@ pub struct AppState {
     pub(crate) bracket: Option<(usize, usize)>,
     bracket_key: Option<(u64, u64, usize, bool)>,
     pub(crate) settings_open: bool,
-    pub(crate) settings_row: usize,
+    pub(crate) settings_ui: SettingsUi,
     /// Node ids captured by the shell for live layout tweaks.
     pub(crate) sidebar_node: Option<NodeId>,
     /// Sidebar resize drag: `(start_pointer_x, start_width)`.
@@ -1435,6 +1464,7 @@ impl AppState {
             outline_drag: None,
             hover_target: None,
             hover_leave_at: None,
+            pointer: Vec2::new(-1.0, -1.0),
             auto_completion_at: None,
             signature_help_at: None,
             signature_help_doc: None,
@@ -1514,7 +1544,7 @@ impl AppState {
             bracket: None,
             bracket_key: None,
             settings_open: false,
-            settings_row: 0,
+            settings_ui: SettingsUi::default(),
             sidebar_node: None,
             sidebar_drag: None,
             language_hit: Rect::ZERO,
@@ -1626,7 +1656,9 @@ fn home_dir() -> Option<PathBuf> {
 }
 
 /// Preview scroll offset (content space) for a fractional source line.
-fn preview_y_for_line(anchors: &[(usize, f32)], line: f32) -> f32 {
+///
+/// Shared by the split-view scroll sync and the preview's outline reveal.
+pub(crate) fn preview_y_for_line(anchors: &[(usize, f32)], line: f32) -> f32 {
     let base = anchors[0].1;
     let line = line.max(0.0);
     if line <= anchors[0].0 as f32 {
@@ -1916,6 +1948,17 @@ mod tests {
         assert_eq!(ViewMode::Edit.next(), ViewMode::Split);
         assert_eq!(ViewMode::Split.next(), ViewMode::Preview);
         assert_eq!(ViewMode::Preview.next(), ViewMode::Edit);
+    }
+
+    #[test]
+    fn preview_line_mapping_is_monotonic_and_invertible() {
+        let anchors = [(0usize, 18.0f32), (10, 218.0), (20, 418.0)];
+        assert_eq!(preview_y_for_line(&anchors, 0.0), 0.0);
+        assert_eq!(preview_y_for_line(&anchors, 10.0), 200.0);
+        assert!((preview_y_for_line(&anchors, 5.0) - 100.0).abs() < 0.01);
+        assert!((line_for_preview_y(&anchors, 100.0) - 5.0).abs() < 0.01);
+        assert_eq!(line_for_preview_y(&anchors, 200.0), 10.0);
+        assert_eq!(preview_y_for_line(&anchors, 20.0), 400.0);
     }
 
     #[test]

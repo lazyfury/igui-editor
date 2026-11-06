@@ -23,6 +23,7 @@ use igui_scene::SceneTree;
 use igui_ui::{Container, PaintEnv, PointerPhase, TextMeasurer};
 
 use crate::kit::{self, RectExt};
+use crate::model::spans;
 use crate::model::typing::Insert;
 use crate::model::wrap::{self, WrapKey, WrapLayout};
 use crate::state::{Action, AppState, Drag, Focus};
@@ -326,15 +327,6 @@ pub fn build(tree: &mut SceneTree, parent: NodeId, state: Rc<RefCell<AppState>>)
             }
             state.dirty = true;
             igui_ui::request_paint(tree);
-        }
-    });
-
-    kit::set_caret_provider(tree, id, {
-        let state = state.clone();
-        move || {
-            let state = state.borrow();
-            let rect = state.editor.caret_rect;
-            (rect.size.width > 0.0 && rect.size.height > 0.0).then_some(rect)
         }
     });
 
@@ -1101,159 +1093,94 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         let doc = state.ws.active_doc().expect("checked above");
         (doc.is_git_view(), doc.preview_start())
     };
-    let mut scratch = String::new();
+    let semantic: Vec<crate::model::lsp::SemanticToken> = if !git_view && state.settings.syntax {
+        state
+            .ws
+            .active_doc()
+            .and_then(|doc| doc.path())
+            .map(|path| state.lsp.semantic_for(path).to_vec())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let mut spans: Vec<(usize, usize, Color)> = Vec::new();
+    let mut drawn = String::new();
     for vis in &vis {
-        let line_text = {
-            let doc = state.ws.active_doc().expect("checked above");
-            doc.line(vis.line)
-        };
+        let doc = state.ws.active_doc().expect("checked above");
+        let line_text = doc.line(vis.line);
+        let line_start = doc.line_start(vis.line);
         let segment = &line_text[vis.start_byte..vis.end_byte];
-        scratch.clear();
-        if segment.contains('\t') {
-            scratch.push_str(&wrap::expand_tabs(segment, tab));
-        } else {
-            scratch.push_str(segment);
-        }
-        if scratch.is_empty() {
-            continue;
-        }
-        let row_start_x = x_in_line(measurer, line_text, vis.start_byte, font, tab, family);
-        let y = row_y(vis.row);
-        let baseline = kit::line_baseline_with_ascent(y, line_h, font, ascent);
-        let color = if git_view && preview_start.is_none_or(|start| vis.line < start) {
+        spans.clear();
+        let base = if git_view && preview_start.is_none_or(|start| vis.line < start) {
             diff_line_color(segment, &p)
         } else {
             p.text
         };
-        draw_text_mixed(
-            env.ctx,
-            measurer,
-            scratch.as_str(),
-            Vec2::new(text_rect.left() + pad + row_start_x - scroll_x, baseline),
-            font,
-            family,
-            color,
-        );
-    }
+        spans.push((vis.start_byte, vis.end_byte, base));
 
-    // Syntax tokens are painted over the base text (same glyphs, token color),
-    // which keeps tab expansion and horizontal metrics identical to the caret.
-    if state.settings.syntax && !git_view {
-        let doc = state.ws.active_doc().expect("checked above");
-        for vis in &vis {
-            let Some(tokens) = state.highlight.tokens(vis.line) else {
-                continue;
-            };
-            if tokens.is_empty() {
-                continue;
+        // Compose syntax and semantic colors before painting: drawing a token
+        // over the base glyph composites two antialiased coverage masks, which
+        // reads as heavier, muddier text than a single pass.
+        if state.settings.syntax && !git_view {
+            if let Some(tokens) = state.highlight.tokens(vis.line) {
+                for token in tokens {
+                    if token.end <= token.start || token.end > line_text.len() {
+                        continue;
+                    }
+                    let from = token.start.max(vis.start_byte);
+                    let to = token.end.min(vis.end_byte);
+                    if from < to {
+                        spans::overlay(&mut spans, from, to, theme.token_color(token.kind));
+                    }
+                }
             }
-            let line_text = doc.line(vis.line);
-            let row_start_x = x_in_line(measurer, line_text, vis.start_byte, font, tab, family);
-            let y = row_y(vis.row);
-            let baseline = kit::line_baseline_with_ascent(y, line_h, font, ascent);
-            for token in tokens {
-                let from = token.start.max(vis.start_byte);
-                let to = token.end.min(vis.end_byte);
-                if from >= to || token.end <= token.start || token.end > line_text.len() {
+            for token in &semantic {
+                if token.line != vis.line {
                     continue;
                 }
-                let text = &line_text[from..to];
-                let x = x_in_line(measurer, line_text, from, font, tab, family) - row_start_x;
-                let drawn = wrap::expand_tabs(text, tab);
-                draw_text_mixed(
-                    env.ctx,
-                    measurer,
-                    drawn.as_str(),
-                    Vec2::new(text_rect.left() + pad + x - scroll_x, baseline),
-                    font,
-                    family,
-                    theme.token_color(token.kind),
-                );
+                let Some(color) = state.lsp.semantic_color(&token.kind, &p) else {
+                    continue;
+                };
+                let start = crate::model::lsp::byte_for_position(
+                    doc,
+                    token.line as u32,
+                    token.start as u32,
+                )
+                .saturating_sub(line_start);
+                let end =
+                    crate::model::lsp::byte_for_position(doc, token.line as u32, token.end as u32)
+                        .saturating_sub(line_start)
+                        .max(start);
+                let from = start.max(vis.start_byte);
+                let to = end.min(vis.end_byte);
+                if from < to && to <= line_text.len() {
+                    spans::overlay(&mut spans, from, to, color);
+                }
             }
+        }
+
+        let row_start_x = x_in_line(measurer, line_text, vis.start_byte, font, tab, family);
+        let y = row_y(vis.row);
+        let baseline = kit::line_baseline_with_ascent(y, line_h, font, ascent);
+        for &(from, to, color) in &spans {
+            drawn.clear();
+            drawn.push_str(&wrap::expand_tabs(&line_text[from..to], tab));
+            if drawn.is_empty() {
+                continue;
+            }
+            let x = x_in_line(measurer, line_text, from, font, tab, family) - row_start_x;
+            draw_text_mixed(
+                env.ctx,
+                measurer,
+                drawn.as_str(),
+                Vec2::new(text_rect.left() + pad + x - scroll_x, baseline),
+                font,
+                family,
+                color,
+            );
         }
     }
     env.ctx.restore();
-
-    // LSP semantic tokens are painted over the syntax pass, so variables,
-    // parameters, fields, functions and types get server-aware colors without
-    // losing syntax colors for tokens the server did not classify.
-    if !git_view && state.settings.syntax {
-        let doc = state.ws.active_doc().expect("checked above");
-        let semantic: Vec<crate::model::lsp::SemanticToken> = doc
-            .path()
-            .map(|path| state.lsp.semantic_for(path).to_vec())
-            .unwrap_or_default();
-        if !semantic.is_empty() {
-            env.ctx.save();
-            env.ctx.clip_rect(text_rect);
-            for vis in &vis {
-                let line_text = doc.line(vis.line);
-                let line_start = doc.line_start(vis.line);
-                for token in &semantic {
-                    if token.line != vis.line {
-                        continue;
-                    }
-                    let Some(color) = state.lsp.semantic_color(&token.kind, &p) else {
-                        continue;
-                    };
-                    let start = crate::model::lsp::byte_for_position(
-                        doc,
-                        token.line as u32,
-                        token.start as u32,
-                    )
-                    .saturating_sub(line_start)
-                    .min(line_text.len());
-                    let end = crate::model::lsp::byte_for_position(
-                        doc,
-                        token.line as u32,
-                        token.end as u32,
-                    )
-                    .saturating_sub(line_start)
-                    .min(line_text.len())
-                    .max(start);
-                    let row_start_byte = line_start + vis.start_byte;
-                    let row_end_byte = line_start + vis.end_byte;
-                    let from = (line_start + start).max(row_start_byte);
-                    let to = (line_start + end).min(row_end_byte);
-                    if from >= to {
-                        continue;
-                    }
-                    let start_column = line_text[..from - line_start].chars().count();
-                    let row = if wrap_on {
-                        state
-                            .editor
-                            .wrap
-                            .row_of(vis.line, start_column)
-                            .unwrap_or(vis.row)
-                    } else {
-                        vis.line
-                    };
-                    if vis.row != row {
-                        continue;
-                    }
-                    let row_start_x = if wrap_on {
-                        x_in_line(measurer, line_text, vis.start_byte, font, tab, family)
-                    } else {
-                        0.0
-                    };
-                    let x = x_in_line(measurer, line_text, from - line_start, font, tab, family)
-                        - row_start_x;
-                    let y = row_y(vis.row);
-                    let baseline = kit::line_baseline_with_ascent(y, line_h, font, ascent);
-                    draw_text_mixed(
-                        env.ctx,
-                        measurer,
-                        &line_text[from - line_start..to - line_start],
-                        Vec2::new(text_rect.left() + pad + x - scroll_x, baseline),
-                        font,
-                        family,
-                        color,
-                    );
-                }
-            }
-            env.ctx.restore();
-        }
-    }
 
     // Language-server diagnostics: a thin severity-colored underline on the
     // affected range, plus a gutter marker on the first line.

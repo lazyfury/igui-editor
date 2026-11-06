@@ -186,6 +186,19 @@ pub fn fill(ctx: &mut PaintContext, rect: Rect, color: Color) {
     ctx.fill_rect(rect, color);
 }
 
+/// Caret rectangle of a single-line field, in viewport space.
+///
+/// A host uses it to place the platform IME candidate window
+/// (`Window::set_ime_cursor_area`). `inner` is the clipped text area of the
+/// field, `caret_x` the caret's left edge and `field` the painted field box.
+pub fn field_caret(inner: Rect, caret_x: f32, field: Rect) -> Rect {
+    let x = caret_x.clamp(inner.left(), inner.right().max(inner.left() + 2.0));
+    Rect::from_min_size(
+        Vec2::new(x, field.top() + 4.0),
+        Size::new(2.0, (field.height() - 8.0).max(2.0)),
+    )
+}
+
 pub fn hline(ctx: &mut PaintContext, x0: f32, x1: f32, y: f32, color: Color) {
     if x1 > x0 {
         ctx.fill_rect(
@@ -339,16 +352,6 @@ pub fn on_scroll(
 ) {
     if let Some(control) = tree.data_mut::<Control>(id) {
         control.scroll_callback = Some(std::rc::Rc::new(std::cell::RefCell::new(callback)));
-    }
-}
-
-pub fn set_caret_provider(
-    tree: &mut SceneTree,
-    id: NodeId,
-    provider: impl Fn() -> Option<Rect> + 'static,
-) {
-    if let Some(control) = tree.data_mut::<Control>(id) {
-        control.caret_provider = Some(std::rc::Rc::new(provider));
     }
 }
 

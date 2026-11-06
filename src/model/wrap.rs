@@ -255,6 +255,58 @@ pub fn width_of(
     )
 }
 
+/// Byte ranges of one **code** line that fit `max_width`, never empty.
+///
+/// Markdown code fences in the preview and code lines in an LSP hover card have
+/// no horizontal scroll: painting a long line as one run clips its tail at the
+/// pane edge, which reads as missing characters. Splitting at a space when one
+/// is available keeps identifiers together; otherwise the split falls on a
+/// character boundary. Whitespace is preserved (the space stays at the end of
+/// the previous chunk), so concatenating the chunks reproduces the line.
+pub fn code_line_chunks(
+    line: &str,
+    max_width: f32,
+    font: f32,
+    measurer: &dyn TextMeasurer,
+) -> Vec<(usize, usize)> {
+    if line.is_empty() {
+        return Vec::new();
+    }
+    let width_of = |text: &str| -> f32 {
+        text.chars()
+            .map(|ch| measurer.advance(ch, font))
+            .sum::<f32>()
+    };
+    if width_of(line) <= max_width {
+        return vec![(0, line.len())];
+    }
+    let max_width = max_width.max(8.0);
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    let mut width = 0.0f32;
+    let mut last_space: Option<usize> = None;
+    for (index, ch) in line.char_indices() {
+        let advance = measurer.advance(ch, font);
+        if width + advance > max_width && index > start {
+            let split = last_space
+                .filter(|&space| space > start && space <= index)
+                .unwrap_or(index);
+            out.push((start, split));
+            width = width_of(&line[split..index]);
+            last_space = line[split..index].rfind(' ').map(|at| split + at + 1);
+            start = split;
+        }
+        width += advance;
+        if ch == ' ' {
+            last_space = Some(index + ch.len_utf8());
+        }
+    }
+    if start < line.len() {
+        out.push((start, line.len()));
+    }
+    out
+}
+
 /// Character column whose boundary is closest to `x` within `text`.
 pub fn column_at_x(
     measurer: &dyn TextMeasurer,
@@ -329,6 +381,43 @@ mod tests {
         assert_eq!(&doc.text()[rows[1].start_byte..rows[1].end_byte], "beta ");
         assert_eq!(&doc.text()[rows[2].start_byte..rows[2].end_byte], "gamma");
         assert!(rows[1].start_col > 0);
+    }
+
+    #[test]
+    fn code_lines_split_to_fit_without_losing_bytes() {
+        let chunks = code_line_chunks("let value = alpha_beta_gamma;", 100.0, 13.0, &Fixed);
+        assert!(chunks.len() > 1);
+        assert_eq!(chunks.first().unwrap().0, 0);
+        assert_eq!(chunks.last().unwrap().1, 29);
+        for pair in chunks.windows(2) {
+            assert_eq!(pair[0].1, pair[1].0);
+        }
+        let joined: String = chunks
+            .iter()
+            .map(|&(start, end)| &"let value = alpha_beta_gamma;"[start..end])
+            .collect();
+        assert_eq!(joined, "let value = alpha_beta_gamma;");
+    }
+
+    #[test]
+    fn code_lines_prefer_a_space_break() {
+        // 10 px per char, 60 px per row: the space after "word" is the break.
+        let chunks = code_line_chunks("word word word", 60.0, 13.0, &Fixed);
+        assert_eq!(chunks[0], (0, 5));
+        assert_eq!(chunks[1], (5, 10));
+    }
+
+    #[test]
+    fn code_lines_break_cjk_on_character_boundaries() {
+        let line = "中文字符测试";
+        let chunks = code_line_chunks(line, 30.0, 13.0, &Fixed);
+        assert_eq!(chunks, vec![(0, 9), (9, 18)]);
+    }
+
+    #[test]
+    fn a_short_code_line_is_one_chunk() {
+        assert_eq!(code_line_chunks("ok", 100.0, 13.0, &Fixed), vec![(0, 2)]);
+        assert!(code_line_chunks("", 100.0, 13.0, &Fixed).is_empty());
     }
 
     #[test]

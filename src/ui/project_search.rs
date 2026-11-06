@@ -314,7 +314,7 @@ fn draw_preview(
 }
 
 fn paint_field(
-    state: &AppState,
+    state: &mut AppState,
     measurer: &dyn TextMeasurer,
     ctx: &mut PaintContext,
     rect: Rect,
@@ -353,18 +353,15 @@ fn paint_field(
         );
     }
     kit::text(ctx, edit.text(), inner.left(), baseline, m.font_ui, p.text);
-    let caret_x = inner.left() + kit::width(measurer, &edit.text()[..edit.caret()], m.font_ui);
+    let mut caret_x = inner.left() + kit::width(measurer, &edit.text()[..edit.caret()], m.font_ui);
     if focused {
         if let Some(preedit) = &state.search.preedit {
             kit::text(ctx, preedit, caret_x, baseline, m.font_ui, p.accent);
+            caret_x += kit::width(measurer, preedit, m.font_ui);
         }
-        ctx.fill_rect(
-            Rect::from_min_size(
-                Vec2::new(caret_x, rect.top() + 4.0),
-                Size::new(2.0, rect.height() - 8.0),
-            ),
-            p.accent,
-        );
+        let caret = kit::field_caret(inner, caret_x, rect);
+        ctx.fill_rect(caret, p.accent);
+        state.search.caret_rect = caret;
     }
     ctx.restore();
 }

@@ -104,7 +104,7 @@ Read the minimum set; do not preload the whole tree.
 |---|---|---|
 | Text buffer, caret, selection, undo | `src/model/doc.rs` | Tests at the bottom of the file. |
 | Tabs, files, save/open, folder | `src/model/workspace.rs`, `src/state/files.rs` | `src/state/tabs.rs` for lifecycle. |
-| Editor painting / gutter / IME | `src/ui/editor.rs`, `src/kit.rs` | `src/fonts.rs` for family policy. |
+| Editor painting / gutter / IME | `src/ui/editor.rs`, `src/kit.rs`, `src/state/caret.rs` | IME placement comes from `AppState::ime_caret()` (painters record field carets), not the scene tree. `src/fonts.rs` for family policy. |
 | Icons / header panel toggles / dock grouping | `src/ui/icon.rs`, `assets/icons/README.md`, `src/ui/menu.rs`, `src/state/dock.rs`, `src/ui/dock.rs` | Vendored Lucide SVGs; render through engine `igui_svg`, never fetch at build time. One dock header layout serves paint and hit-test. |
 | Bottom dock tabs (Terminal / Problems) | `src/state/dock.rs`, `src/ui/dock.rs`, `src/ui/terminal.rs`, `src/ui/problems.rs` | Closing a dock hides it; shells keep running. |
 | External file changes / file watches | `src/state/watch.rs`, `src/model/watch.rs`, `src/model/fs_tree.rs`, `src/model/lsp.rs` | Poll only: no OS watcher dependency. Refresh the tree with `FsTree::refresh` (keeps expansions), never `reload`. Report changes via `FileEvent`. |
@@ -121,7 +121,7 @@ Read the minimum set; do not preload the whole tree.
 | Terminal | `src/model/pty.rs`, `src/state/terminal.rs`, `src/ui/terminal.rs` | Login shell (`-l`), UTF-8 locale and augmented PATH are enforced for child processes. |
 | Git panel | `src/model/git.rs`, `src/ui/git.rs` | Service boundary in `docs/services.md`. |
 | Missing tool / install hint prompt | `src/state/tooling.rs`, `src/ui/tooling.rs`, `src/services/mod.rs` | Copy-only command, never auto-install; shared by every native service. |
-| Settings / theme / metrics | `src/settings.rs`, `src/theme.rs` | [`docs/design.md`](docs/design.md). |
+| Settings / theme / metrics | `src/settings.rs`, `src/ui/settings.rs`, `src/theme.rs` | One `ROWS` table (group + widget kind); one layout function for paint/hit-test/scroll. [`docs/design.md`](docs/design.md). |
 | Dialogs / macOS integration | `src/dialogs.rs`, `src/host.rs`, `src/macos/`, `src/native.rs` | Async sheets only; native menu/window chrome route through `NativeRequest`. |
 | Session / recovery / window state | `src/model/session.rs`, `src/model/recovery.rs`, `src/state/reliability.rs` | Atomic writes. |
 | Headless verification | `src/selfcheck.rs` | [`docs/verification.md`](docs/verification.md). |

@@ -1,6 +1,65 @@
-//! Editor settings, language overrides and analysis.
+//! Editor settings, the settings-panel input state, language overrides and
+//! analysis.
 
 use super::*;
+
+/// In-progress typed edit of a numeric row.
+pub struct SettingsEdit {
+    pub row: Row,
+    pub field: TextEdit,
+}
+
+/// Settings-panel input state: the search query, the selected row, an optional
+/// typed number edit and the scroll offset. Paint records the field carets so
+/// the host can place the IME candidate window.
+pub struct SettingsUi {
+    pub query: TextEdit,
+    /// Selected row (never `Reset`, which is a footer button).
+    pub row: Row,
+    pub editing: Option<SettingsEdit>,
+    pub scroll: f32,
+    /// In-progress IME composition in the search or edit field.
+    pub preedit: Option<String>,
+    /// Caret of the search field, in viewport space (IME placement).
+    pub search_caret: Rect,
+    /// Caret of the typed number field while `editing` is set.
+    pub edit_caret: Rect,
+}
+
+impl Default for SettingsUi {
+    fn default() -> Self {
+        Self {
+            query: TextEdit::new(""),
+            row: Row::Theme,
+            editing: None,
+            scroll: 0.0,
+            preedit: None,
+            search_caret: Rect::ZERO,
+            edit_caret: Rect::ZERO,
+        }
+    }
+}
+
+impl SettingsUi {
+    /// Rows matching the search query, in display order. An empty query lists
+    /// every row; the row label and its group name both match.
+    pub fn visible_rows(&self) -> Vec<&'static crate::settings::RowSpec> {
+        let query = self.query.text().to_ascii_lowercase();
+        crate::settings::ROWS
+            .iter()
+            .filter(|spec| {
+                query.is_empty()
+                    || spec.row.label().to_ascii_lowercase().contains(&query)
+                    || spec.group.label().to_ascii_lowercase().contains(&query)
+            })
+            .collect()
+    }
+
+    /// Whether a row is visible under the current query.
+    pub fn shows(&self, row: Row) -> bool {
+        self.visible_rows().iter().any(|spec| spec.row == row)
+    }
+}
 
 impl AppState {
     // -- settings --------------------------------------------------------
@@ -229,12 +288,18 @@ impl AppState {
             self.close_project_search();
         }
         self.menu_open = None;
-        self.settings_row = self.settings_row.min(Row::Reset as usize);
+        let previous = self.settings_ui.row;
+        self.settings_ui = SettingsUi::default();
+        if previous.spec().is_some() {
+            self.settings_ui.row = previous;
+        }
         self.dirty = true;
     }
 
     pub fn close_settings(&mut self) {
         self.settings_open = false;
+        self.settings_ui.editing = None;
+        self.settings_ui.preedit = None;
         self.dirty = true;
     }
 
@@ -246,49 +311,127 @@ impl AppState {
         }
     }
 
-    /// Display value of a settings row.
-    pub fn settings_value(&self, row: Row) -> String {
-        match row {
-            Row::Theme => self.theme.name().to_string(),
-            Row::FontSize => format!("{} px", self.settings.font_size as i32),
-            Row::IndentStyle => {
-                if self.settings.indent_tabs {
-                    "TABS".into()
-                } else {
-                    "SPACES".into()
-                }
-            }
-            Row::TabWidth => format!("{}", self.settings.tab_width),
-            Row::LineNumbers => on_off(self.settings.line_numbers),
-            Row::IndentGuides => on_off(self.settings.indent_guides),
-            Row::AutoPairs => on_off(self.settings.auto_pairs),
-            Row::Syntax => on_off(self.settings.syntax),
-            Row::Autosave => on_off(self.settings.autosave),
-            Row::LanguageIntelligence => on_off(self.settings.lsp),
-            Row::TrustLocalServers => on_off(self.settings.trust_local_servers),
-            Row::SidebarWidth => format!("{} px", self.settings.sidebar_width as i32),
-            Row::HiddenFiles => on_off(self.settings.show_hidden),
-            Row::IgnoredFiles => self.settings.ignored_files.label().into(),
-            Row::Keymap => self.settings.keymap.name().into(),
-            Row::Reset => "DEFAULT".into(),
+    /// Rows the search currently matches (the selection domain).
+    pub fn settings_visible(&self) -> Vec<&'static crate::settings::RowSpec> {
+        self.settings_ui.visible_rows()
+    }
+
+    /// Group shown in the right pane: the selected row's group.
+    pub fn settings_group(&self) -> Group {
+        self.settings_ui
+            .row
+            .spec()
+            .map_or(Group::Appearance, |spec| spec.group)
+    }
+
+    /// Rows the right pane lists: the active group, or every search match.
+    ///
+    /// Selection still walks the search-filtered list across groups, so `↑`/`↓`
+    /// crossing a group boundary switches the pane and the left navigation.
+    pub fn settings_pane(&self) -> Vec<&'static crate::settings::RowSpec> {
+        if self.settings_ui.query.text().is_empty() {
+            let group = self.settings_group();
+            crate::settings::ROWS
+                .iter()
+                .filter(|spec| spec.group == group)
+                .collect()
+        } else {
+            self.settings_ui.visible_rows()
         }
     }
 
-    /// Steps a row (`delta` is -1 or +1). Returns whether anything changed.
-    pub fn adjust_setting(&mut self, row: Row, delta: i32) -> bool {
+    /// Groups in panel order (each exactly once).
+    pub fn settings_groups() -> Vec<Group> {
+        let mut groups: Vec<Group> = Vec::new();
+        for spec in crate::settings::ROWS {
+            if groups.last() != Some(&spec.group) {
+                groups.push(spec.group);
+            }
+        }
+        groups
+    }
+
+    /// Selects the first visible row of a group (left-navigation click).
+    pub fn settings_show_group(&mut self, group: Group) {
+        if self.settings_editing().is_some() {
+            self.settings_commit_edit();
+        }
+        self.settings_ui.query.set_text("");
+        self.settings_ui.preedit = None;
+        self.settings_ui.scroll = 0.0;
+        if let Some(spec) = crate::settings::ROWS
+            .iter()
+            .find(|spec| spec.group == group)
+        {
+            self.settings_ui.row = spec.row;
+        }
+        self.dirty = true;
+    }
+
+    /// Moves the selection to the next/previous group that still has a match.
+    pub fn settings_select_group(&mut self, delta: i32) {
+        let visible = self.settings_ui.visible_rows();
+        let groups = Self::settings_groups();
+        if visible.is_empty() || groups.is_empty() || delta == 0 {
+            return;
+        }
+        let current = self.settings_group();
+        let index = groups
+            .iter()
+            .position(|group| *group == current)
+            .unwrap_or(0) as i32;
+        let count = groups.len() as i32;
+        for step in 1..=count {
+            let next = (index + delta.signum() * step).rem_euclid(count) as usize;
+            if let Some(spec) = visible.iter().find(|spec| spec.group == groups[next]) {
+                self.settings_ui.row = spec.row;
+                self.settings_ui.scroll = 0.0;
+                self.dirty = true;
+                return;
+            }
+        }
+    }
+
+    /// Index of a `Choice` row's current value in its option list.
+    pub fn settings_choice_index(&self, row: Row) -> Option<usize> {
+        Some(match row {
+            Row::Theme => match self.theme.mode {
+                Mode::Dark => 0,
+                Mode::Light => 1,
+            },
+            Row::IndentStyle => usize::from(self.settings.indent_tabs),
+            Row::TabWidth => TAB_WIDTHS
+                .iter()
+                .position(|width| *width == clamp_tab(self.settings.tab_width))
+                .unwrap_or(1),
+            Row::IgnoredFiles => IgnoreMode::ALL
+                .iter()
+                .position(|mode| *mode == self.settings.ignored_files)
+                .unwrap_or(1),
+            Row::Keymap => KeymapId::ALL
+                .iter()
+                .position(|keymap| *keymap == self.settings.keymap)
+                .unwrap_or(0),
+            _ => return None,
+        })
+    }
+
+    /// Picks one option of a `Choice` row (button-group clicks).
+    pub fn settings_set_choice(&mut self, row: Row, index: usize) -> bool {
+        let RowKind::Choice(options) = row.kind() else {
+            return false;
+        };
+        let index = index.min(options.len().saturating_sub(1));
         match row {
             Row::Theme => {
-                if delta != 0 {
-                    self.theme.toggle();
+                let mode = if index == 0 { Mode::Dark } else { Mode::Light };
+                if self.theme.mode != mode {
+                    self.theme = Theme::new(mode);
                     self.settings_changed();
                 }
             }
-            Row::FontSize => {
-                self.settings.step_font(delta);
-                self.settings_changed();
-            }
             Row::IndentStyle => {
-                self.settings.indent_tabs = !self.settings.indent_tabs;
+                self.settings.indent_tabs = index == 1;
                 self.settings_changed();
                 self.status(format!(
                     "indent: {}",
@@ -300,20 +443,86 @@ impl AppState {
                 ));
             }
             Row::TabWidth => {
-                self.settings.step_tab(delta);
+                self.settings.tab_width = TAB_WIDTHS[index];
                 self.settings_changed();
             }
-            Row::LineNumbers => {
-                self.settings.line_numbers = !self.settings.line_numbers;
+            Row::IgnoredFiles => {
+                self.settings.ignored_files = IgnoreMode::ALL[index];
                 self.settings_changed();
+                self.apply_explorer_filter();
+                self.status(format!(
+                    "ignored files: {}",
+                    self.settings.ignored_files.label()
+                ));
             }
-            Row::IndentGuides => {
-                self.settings.indent_guides = !self.settings.indent_guides;
+            Row::Keymap => {
+                self.settings.keymap = KeymapId::ALL[index];
+                self.rebuild_keymap();
                 self.settings_changed();
+                self.status(format!("keymap: {}", self.settings.keymap.name()));
             }
+            _ => return false,
+        }
+        self.dirty = true;
+        true
+    }
+
+    /// Current numeric value of a `Number` row.
+    pub fn settings_number_value(&self, row: Row) -> Option<f32> {
+        match row {
+            Row::FontSize => Some(self.settings.font_size),
+            Row::SidebarWidth => Some(self.settings.sidebar_width),
+            _ => None,
+        }
+    }
+
+    /// Sets a `Number` row from a stepped or typed value (rounded to the row's
+    /// step, then clamped).
+    pub fn settings_set_number(&mut self, row: Row, value: f32) -> bool {
+        let RowKind::Number(spec) = row.kind() else {
+            return false;
+        };
+        let value = (value / spec.step).round() * spec.step;
+        let value = value.clamp(spec.min, spec.max);
+        match row {
+            Row::FontSize => self.settings.font_size = clamp_font(value),
+            Row::SidebarWidth => {
+                self.settings.sidebar_width = clamp_sidebar(value);
+                self.pending_sidebar_sync = true;
+            }
+            _ => return false,
+        }
+        self.settings_changed();
+        self.dirty = true;
+        true
+    }
+
+    /// On/off state of a `Toggle` row.
+    pub fn settings_toggle_state(&self, row: Row) -> bool {
+        match row {
+            Row::LineNumbers => self.settings.line_numbers,
+            Row::IndentGuides => self.settings.indent_guides,
+            Row::AutoPairs => self.settings.auto_pairs,
+            Row::Syntax => self.settings.syntax,
+            Row::Autosave => self.settings.autosave,
+            Row::LanguageIntelligence => self.settings.lsp,
+            Row::TrustLocalServers => self.settings.trust_local_servers,
+            Row::HiddenFiles => self.settings.show_hidden,
+            Row::Minimap => self.session.minimap,
+            Row::SoftWrap => self.session.soft_wrap,
+            Row::ScrollSync => self.sync_scroll,
+            _ => false,
+        }
+    }
+
+    /// Flips a `Toggle` row. View toggles reuse the menu commands so the panel
+    /// and the View menu never fork their behavior.
+    pub fn toggle_setting(&mut self, row: Row) -> bool {
+        match row {
+            Row::LineNumbers => self.settings.line_numbers = !self.settings.line_numbers,
+            Row::IndentGuides => self.settings.indent_guides = !self.settings.indent_guides,
             Row::AutoPairs => {
                 self.settings.auto_pairs = !self.settings.auto_pairs;
-                self.settings_changed();
                 self.status(format!(
                     "auto pairs: {}",
                     if self.settings.auto_pairs {
@@ -323,20 +532,14 @@ impl AppState {
                     }
                 ));
             }
-            Row::Syntax => {
-                self.settings.syntax = !self.settings.syntax;
-                self.settings_changed();
-            }
-            Row::Autosave => {
-                self.settings.autosave = !self.settings.autosave;
-                self.settings_changed();
-            }
+            Row::Syntax => self.settings.syntax = !self.settings.syntax,
+            Row::Autosave => self.settings.autosave = !self.settings.autosave,
             Row::LanguageIntelligence => {
                 self.set_lsp_enabled(!self.settings.lsp);
+                return true;
             }
             Row::TrustLocalServers => {
                 self.settings.trust_local_servers = !self.settings.trust_local_servers;
-                self.settings_changed();
                 self.status(format!(
                     "local language servers: {}",
                     if self.settings.trust_local_servers {
@@ -346,14 +549,8 @@ impl AppState {
                     }
                 ));
             }
-            Row::SidebarWidth => {
-                self.settings.step_sidebar(delta as f32 * 8.0);
-                self.settings_changed();
-                self.pending_sidebar_sync = true;
-            }
             Row::HiddenFiles => {
                 self.settings.show_hidden = !self.settings.show_hidden;
-                self.settings_changed();
                 self.apply_explorer_filter();
                 self.status(format!(
                     "hidden files: {}",
@@ -364,52 +561,183 @@ impl AppState {
                     }
                 ));
             }
-            Row::IgnoredFiles => {
-                self.settings.ignored_files = if delta < 0 {
-                    self.settings.ignored_files.previous()
-                } else {
-                    self.settings.ignored_files.next()
-                };
-                self.settings_changed();
-                self.apply_explorer_filter();
-                self.status(format!(
-                    "ignored files: {}",
-                    self.settings.ignored_files.label()
-                ));
+            Row::Minimap => {
+                self.toggle_minimap();
+                return true;
             }
-            Row::Keymap => {
+            Row::SoftWrap => {
+                let on = !self.session.soft_wrap;
+                self.set_soft_wrap(on);
+                return true;
+            }
+            Row::ScrollSync => {
+                self.toggle_sync_scroll();
+                return true;
+            }
+            _ => return false,
+        }
+        self.settings_changed();
+        self.dirty = true;
+        true
+    }
+
+    /// Display value of a settings row.
+    pub fn settings_value(&self, row: Row) -> String {
+        match row.kind() {
+            RowKind::Toggle => on_off(self.settings_toggle_state(row)),
+            RowKind::Choice(options) => {
+                let index = self.settings_choice_index(row).unwrap_or(0);
+                options[index].to_string()
+            }
+            RowKind::Number(spec) => {
+                let value = self.settings_number_value(row).unwrap_or(spec.min);
+                format!("{} {}", value.round() as i32, spec.unit)
+            }
+            RowKind::Action => "DEFAULT".into(),
+        }
+    }
+
+    /// Steps a row (`delta` is -1 or +1). Returns whether anything changed.
+    pub fn adjust_setting(&mut self, row: Row, delta: i32) -> bool {
+        match row.kind() {
+            RowKind::Toggle => {
                 if delta != 0 {
-                    self.settings.keymap = if delta > 0 {
-                        self.settings.keymap.next()
-                    } else {
-                        let mut previous = self.settings.keymap;
-                        for _ in 0..KeymapId::ALL.len() - 1 {
-                            previous = previous.next();
-                        }
-                        previous
-                    };
-                    self.rebuild_keymap();
-                    self.settings_changed();
-                    self.status(format!("keymap: {}", self.settings.keymap.name()));
+                    self.toggle_setting(row);
                 }
             }
-            Row::Reset => self.reset_settings(),
+            RowKind::Choice(options) => {
+                if delta != 0 && !options.is_empty() {
+                    let index = self.settings_choice_index(row).unwrap_or(0) as i32;
+                    let count = options.len() as i32;
+                    let next = (index + delta).rem_euclid(count) as usize;
+                    self.settings_set_choice(row, next);
+                }
+            }
+            RowKind::Number(spec) => {
+                if delta != 0 {
+                    let current = self.settings_number_value(row).unwrap_or(spec.min);
+                    self.settings_set_number(row, current + spec.step * delta as f32);
+                }
+            }
+            RowKind::Action => self.reset_settings(),
         }
         self.dirty = true;
         true
     }
 
-    /// Enter/Space on a row: toggles booleans, resets, or steps other rows.
+    /// Enter/Space on a row: numbers start a typed edit, everything else acts
+    /// like a `+` step (toggles flip, choices advance).
     pub fn activate_setting(&mut self, row: Row) {
-        self.adjust_setting(row, 1);
+        if matches!(row.kind(), RowKind::Number(_)) {
+            self.settings_begin_edit(row);
+        } else {
+            self.adjust_setting(row, 1);
+        }
+    }
+
+    /// Starts typing a numeric row: the field is seeded with the current value
+    /// and fully selected.
+    pub fn settings_begin_edit(&mut self, row: Row) -> bool {
+        let Some(value) = self.settings_number_value(row) else {
+            return false;
+        };
+        if !matches!(row.kind(), RowKind::Number(_)) {
+            return false;
+        }
+        let mut field = TextEdit::new(format!("{}", value.round() as i32));
+        field.select_all();
+        self.settings_ui.editing = Some(SettingsEdit { row, field });
+        self.settings_ui.preedit = None;
+        self.dirty = true;
+        true
+    }
+
+    /// Drops the typed number edit without applying it.
+    pub fn settings_cancel_edit(&mut self) {
+        if self.settings_ui.editing.take().is_some() {
+            self.settings_ui.preedit = None;
+            self.dirty = true;
+        }
+    }
+
+    /// Applies the typed number edit. An empty or unparsable value keeps the
+    /// old setting.
+    pub fn settings_commit_edit(&mut self) -> bool {
+        let Some(edit) = self.settings_ui.editing.take() else {
+            return false;
+        };
+        self.settings_ui.preedit = None;
+        self.dirty = true;
+        let text = edit.field.text().trim().to_string();
+        let Ok(value) = text.parse::<f32>() else {
+            return false;
+        };
+        self.settings_set_number(edit.row, value)
+    }
+
+    /// Row whose number is being typed, if any.
+    pub fn settings_editing(&self) -> Option<Row> {
+        self.settings_ui.editing.as_ref().map(|edit| edit.row)
+    }
+
+    /// Committed text from the keyboard/IME: digits while editing a number,
+    /// otherwise the search query.
+    pub fn settings_text(&mut self, text: &str) {
+        if let Some(edit) = self.settings_ui.editing.as_mut() {
+            let digits: String = text.chars().filter(char::is_ascii_digit).collect();
+            if !digits.is_empty() && edit.field.text().len() + digits.len() <= 5 {
+                edit.field.insert(&digits);
+            }
+        } else {
+            self.settings_ui.query.insert(text);
+            self.settings_query_changed();
+        }
+        self.settings_ui.preedit = None;
+        self.dirty = true;
+    }
+
+    /// Re-filters after a query edit and keeps the selection on a visible row.
+    pub fn settings_query_changed(&mut self) {
+        if !self.settings_ui.shows(self.settings_ui.row) {
+            if let Some(spec) = self.settings_ui.visible_rows().first() {
+                self.settings_ui.row = spec.row;
+            }
+        }
+        self.settings_ui.scroll = 0.0;
+        self.dirty = true;
+    }
+
+    /// Moves the selected row through the filtered list.
+    pub fn settings_select(&mut self, delta: i32) {
+        let visible = self.settings_ui.visible_rows();
+        if visible.is_empty() {
+            return;
+        }
+        let index = visible
+            .iter()
+            .position(|spec| spec.row == self.settings_ui.row)
+            .unwrap_or(0);
+        let next = (index as i32 + delta).clamp(0, visible.len() as i32 - 1) as usize;
+        let previous_group = self.settings_group();
+        self.settings_ui.row = visible[next].row;
+        if self.settings_group() != previous_group {
+            self.settings_ui.scroll = 0.0;
+        }
+        self.dirty = true;
     }
 
     pub fn reset_settings(&mut self) {
         self.settings = Settings::default();
+        self.theme = Theme::new(Mode::Dark);
+        self.sync_scroll = true;
+        self.session.sync_scroll = true;
+        self.session.minimap = true;
+        self.set_soft_wrap(false);
         self.rebuild_keymap();
         self.settings_changed();
         self.apply_explorer_filter();
         self.pending_sidebar_sync = true;
+        self.settings_ui = SettingsUi::default();
         self.status("settings reset");
     }
 

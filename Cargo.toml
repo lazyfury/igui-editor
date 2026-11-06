@@ -125,10 +125,13 @@ codegen-units = 1
 panic = "abort"
 strip = "symbols"
 
-# Keep the app's hot paths at `opt-level = 3`; size-optimize dependency code
-# (wgpu, winit, parser crates) where steady-state throughput matters less.
+# Keep the app and the engine crates at `opt-level = 3`: text shaping,
+# scene/layout and painting run on every frame. Everything else is I/O or
+# driver bound and measures the same at 2, 3 or "s" (see
+# docs/benchmarks.md), so dependencies use 2 — a middle ground that costs
+# ~0.65 MB over size-optimizing them and needs no per-crate list.
 [profile.release.package."*"]
-opt-level = "s"
+opt-level = 2
 [profile.release.package.igui_app]
 opt-level = 3
 [profile.release.package.igui_backend_wgpu]

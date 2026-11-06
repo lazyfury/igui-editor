@@ -122,17 +122,14 @@ pub fn paint(state: &mut AppState, measurer: &dyn TextMeasurer, ctx: &mut PaintC
         );
     }
     kit::text(ctx, text.text(), inner.left(), baseline, m.font_ui, p.text);
-    let caret_x = inner.left() + kit::width(measurer, &text.text()[..text.caret()], m.font_ui);
+    let mut caret_x = inner.left() + kit::width(measurer, &text.text()[..text.caret()], m.font_ui);
     if let Some(preedit) = &state.new_file.preedit {
         kit::text(ctx, preedit, caret_x, baseline, m.font_ui, p.accent);
+        caret_x += kit::width(measurer, preedit, m.font_ui);
     }
-    ctx.fill_rect(
-        Rect::from_min_size(
-            Vec2::new(caret_x, layout.field.top() + 4.0),
-            Size::new(2.0, layout.field.height() - 8.0),
-        ),
-        p.accent,
-    );
+    let caret = kit::field_caret(inner, caret_x, layout.field);
+    ctx.fill_rect(caret, p.accent);
+    state.new_file.caret_rect = caret;
     ctx.restore();
 
     if let Some(error) = &state.new_file.error {

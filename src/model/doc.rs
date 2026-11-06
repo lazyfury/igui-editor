@@ -1892,19 +1892,32 @@ impl Document {
         };
 
         let new_starts = insert.bytes().filter(|byte| *byte == b'\n').count();
-        let mut starts = Vec::with_capacity(
-            prefix_end + new_starts + self.line_starts.len().saturating_sub(suffix_start),
-        );
-        starts.extend_from_slice(&self.line_starts[..prefix_end]);
-        for (index, byte) in insert.bytes().enumerate() {
-            if byte == b'\n' {
-                starts.push(start + index + 1);
+        // The common keystroke adds no line break: only the tail shifts, and it
+        // shifts in place instead of copying the whole index into a new Vec.
+        if new_starts == 0 {
+            if suffix_start > prefix_end {
+                self.line_starts.drain(prefix_end..suffix_start);
+            }
+            if delta != 0 {
+                for line_start in &mut self.line_starts[prefix_end..] {
+                    *line_start = (*line_start as isize + delta) as usize;
+                }
+            }
+            return;
+        }
+        let added: Vec<usize> = insert
+            .bytes()
+            .enumerate()
+            .filter(|(_, byte)| *byte == b'\n')
+            .map(|(index, _)| start + index + 1)
+            .collect();
+        let tail = prefix_end + added.len();
+        self.line_starts.splice(prefix_end..suffix_start, added);
+        if delta != 0 {
+            for line_start in &mut self.line_starts[tail..] {
+                *line_start = (*line_start as isize + delta) as usize;
             }
         }
-        for &line_start in &self.line_starts[suffix_start..] {
-            starts.push((line_start as isize + delta) as usize);
-        }
-        self.line_starts = starts;
     }
 
     fn rebuild_lines(&mut self) {
@@ -2104,6 +2117,49 @@ mod tests {
         doc.dirty = false;
         doc.undo = UndoStack::default();
         doc
+    }
+
+    #[test]
+    fn incremental_line_starts_match_a_full_rebuild() {
+        fn rebuilt(doc: &Document) -> Vec<usize> {
+            let mut starts = vec![0];
+            for (index, byte) in doc.text().bytes().enumerate() {
+                if byte == b'\n' {
+                    starts.push(index + 1);
+                }
+            }
+            starts
+        }
+
+        let mut doc = doc("alpha\nbeta\ngamma\n");
+        // Plain inserts shift the tail, breaks insert new starts, deletions
+        // merge lines, and replacements cover both at once.
+        let edits: &[(usize, usize, &str)] = &[
+            (0, 0, "x"),
+            (7, 0, "\n"),
+            (14, 0, "a\nb\n"),
+            (3, 4, ""),
+            (0, 0, ""),
+            (5, 3, "\n"),
+            (2, 0, "\n\n"),
+            (0, 40, ""),
+            (0, 0, "tail\n"),
+        ];
+        for &(start, removed, insert) in edits {
+            let len = doc.text().len();
+            let start = start.min(len);
+            let end = (start + removed).min(len);
+            let caret = Cursor {
+                caret: start,
+                anchor: start,
+            };
+            doc.replace_with(start, end, insert, Kind::Other, caret);
+            assert_eq!(
+                doc.line_starts,
+                rebuilt(&doc),
+                "line index diverged after ({start}+{removed}) {insert:?}"
+            );
+        }
     }
 
     #[test]

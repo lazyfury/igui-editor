@@ -20,6 +20,7 @@ use igui_ui::{Container, PaintEnv, PointerPhase, TextMeasurer};
 
 use crate::kit::{self, RectExt};
 use crate::model::markdown::{self, Align, Block, BlockKind, Run, Style, Table};
+use crate::model::wrap;
 use crate::state::AppState;
 use crate::theme::{Mode, Theme};
 
@@ -89,6 +90,9 @@ pub struct PreviewUi {
     /// Block anchors for scroll sync (populated by the layout). `Rc` keeps the
     /// per-frame scroll-sync path from copying the list.
     pub anchors: Rc<Vec<(usize, f32)>>,
+    /// Source line an outline click asked to reveal; applied by the next paint
+    /// (the pane owns the layout, so only the painter knows the target offset).
+    pub reveal_line: Option<usize>,
     /// The document was cut at [`PREVIEW_MAX_BYTES`].
     truncated: bool,
     /// The document is too large to preview at all.
@@ -122,6 +126,7 @@ impl std::fmt::Debug for PreviewUi {
         f.debug_struct("PreviewUi")
             .field("scroll", &self.scroll)
             .field("total_h", &self.total_h)
+            .field("reveal_line", &self.reveal_line)
             .field("rect", &self.rect)
             .finish()
     }
@@ -264,6 +269,16 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     state.preview.total_h = height;
     let max_scroll = (height - view.height()).max(0.0);
     state.preview.scroll = state.preview.scroll.clamp(0.0, max_scroll);
+    // An outline click in preview-only mode has no editor caret painter to
+    // reveal it, so the pane scrolls to the heading itself. The mapping is the
+    // same one the split-view scroll sync uses.
+    if let Some(line) = state.preview.reveal_line.take() {
+        if !state.preview.anchors.is_empty() {
+            state.preview.scroll =
+                crate::state::preview_y_for_line(&state.preview.anchors, line as f32)
+                    .clamp(0.0, max_scroll);
+        }
+    }
 
     env.ctx.save();
     env.ctx.clip_rect(view);
@@ -520,7 +535,25 @@ pub(crate) fn layout(
             }
             BlockKind::Code { lang, lines } => {
                 let line_h = code_line;
-                let height = lines.len().max(1) as f32 * line_h + 16.0;
+                // Fenced code has no horizontal scroll, so wrap each line to
+                // the pane instead of letting the clip hide its tail.
+                let max_w = (content_w - 20.0).max(20.0);
+                let mut rows: Vec<String> = Vec::new();
+                for line in lines {
+                    if line.is_empty() {
+                        rows.push(String::new());
+                        continue;
+                    }
+                    // Fences keep tabs in the model; draw them as four spaces so
+                    // columns and wrapping agree with the hover card.
+                    let expanded = wrap::expand_tabs(line, 4);
+                    for (start, end) in
+                        wrap::code_line_chunks(&expanded, max_w, code_font, measurer)
+                    {
+                        rows.push(expanded[start..end].to_string());
+                    }
+                }
+                let height = rows.len().max(1) as f32 * line_h + 16.0;
                 prims.push(Prim::Fill {
                     rect: Rect::from_min_size(Vec2::new(PAD, y), Size::new(content_w, height)),
                     color: p.raised,
@@ -539,14 +572,14 @@ pub(crate) fn layout(
                         strike: false,
                     });
                 }
-                for (index, line) in lines.iter().enumerate() {
-                    if line.is_empty() {
+                for (index, text) in rows.iter().enumerate() {
+                    if text.is_empty() {
                         continue;
                     }
                     prims.push(Prim::Text {
                         x: PAD + 10.0,
                         baseline: y + 8.0 + index as f32 * line_h + 13.0,
-                        text: line.clone(),
+                        text: text.clone(),
                         size: code_font,
                         weight: FontWeight::NORMAL,
                         color: p.text,

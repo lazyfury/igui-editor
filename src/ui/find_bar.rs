@@ -118,7 +118,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
     hits.push((FindHit::ReplaceAll, replace_all));
 
     let focus = state.focus;
-    paint_field(
+    let find_caret = paint_field(
         env,
         &theme,
         find_rect,
@@ -127,7 +127,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         state.find.preedit.as_deref(),
         "Find",
     );
-    paint_field(
+    let replace_caret = paint_field(
         env,
         &theme,
         replace_rect,
@@ -136,6 +136,8 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         None,
         "Replace",
     );
+    state.find.find_caret = find_caret;
+    state.find.replace_caret = replace_caret;
 
     paint_toggle(env, &theme, case_rect, "Aa", state.find.case_sensitive);
     paint_toggle(env, &theme, word_rect, "W", state.find.whole_word);
@@ -197,7 +199,7 @@ fn paint_field(
     focused: bool,
     preedit: Option<&str>,
     placeholder: &str,
-) {
+) -> Rect {
     let p = theme.p;
     let m = theme.m;
     let measurer = env.measurer;
@@ -243,7 +245,7 @@ fn paint_field(
         size,
         p.text,
     );
-    let caret_x = inner.left() + 2.0 + kit::width(measurer, &edit.text()[..edit.caret()], size);
+    let mut caret_x = inner.left() + 2.0 + kit::width(measurer, &edit.text()[..edit.caret()], size);
     if let Some(preedit) = preedit {
         kit::text(env.ctx, preedit, caret_x, baseline, size, p.accent);
         env.ctx.fill_rect(
@@ -253,17 +255,14 @@ fn paint_field(
             ),
             p.accent,
         );
+        caret_x += kit::width(measurer, preedit, size);
     }
+    let caret = kit::field_caret(inner, caret_x, rect);
     if focused {
-        env.ctx.fill_rect(
-            Rect::from_min_size(
-                Vec2::new(caret_x, rect.top() + 3.0),
-                Size::new(2.0, rect.height() - 6.0),
-            ),
-            p.accent,
-        );
+        env.ctx.fill_rect(caret, p.accent);
     }
     env.ctx.restore();
+    caret
 }
 
 fn paint_toggle(env: &mut PaintEnv<'_>, theme: &Theme, rect: Rect, label: &str, on: bool) {

@@ -51,13 +51,17 @@ pub fn run() -> Result<(), String> {
         .and_then(|()| check_lsp(&dir))
         .and_then(|()| check_keymaps(&dir))
         .and_then(|()| check_goto_line(&dir))
+        .and_then(|()| check_overlay_pointer(&dir))
+        .and_then(|()| check_markdown_code_wrap(&dir))
+        .and_then(|()| check_ime_caret(&dir))
         .and_then(|()| check_markdown_outline(&dir))
+        .and_then(|()| check_markdown_preview_outline_jump(&dir))
         .and_then(|()| check_godot_outline(&dir))
         .and_then(|()| check_minimap(&dir));
     let _ = fs::remove_dir_all(&dir);
     if result.is_ok() {
         println!(
-            "selfcheck ok: main flow + workspace/recovery + explorer filters + typing + LSP + keymap + go-to-line + Markdown/GDScript outline + minimap checks"
+            "selfcheck ok: main flow + workspace/recovery + explorer filters + typing + LSP + keymap + go-to-line + overlay pointer + code wrap + IME caret + Markdown/GDScript outline + preview outline jump + minimap checks"
         );
     }
     result
@@ -391,6 +395,63 @@ fn check_footer_controls(harness: &mut Harness, frame: &RecordedFrame) -> Result
     Ok(())
 }
 
+/// Every glyph in the editor text area must be painted exactly once.
+///
+/// Antialiased glyphs composite, so a token painted over base text (or a
+/// semantic token over a syntax token) renders heavier and muddier than the
+/// same text in one pass. Two overlapping runs on one baseline is that bug.
+fn check_editor_text_painted_once(harness: &Harness, frame: &RecordedFrame) -> Result<(), String> {
+    let state = harness.app.state();
+    // The find bar and the IME preedit intentionally paint over the text.
+    if state.find.open || state.editor.preedit.is_some() {
+        return Ok(());
+    }
+    let rect = state.editor.text_rect;
+    let measurer = igui_ui::text_measurer(harness.app.tree());
+    let mut runs: Vec<(f32, f32, f32, String)> = Vec::new();
+    for command in frame.commands() {
+        let DrawCommand::DrawText {
+            text,
+            position,
+            font_size,
+            family,
+            ..
+        } = command
+        else {
+            continue;
+        };
+        if text.trim().is_empty()
+            || position.x >= rect.right() + 1.0
+            || position.y < rect.top() - 0.5
+            || position.y > rect.bottom() + font_size
+        {
+            continue;
+        }
+        let width = measurer.measure_run_weighted_in(
+            text,
+            *font_size,
+            igui_core::FontWeight::NORMAL,
+            family.as_deref(),
+        );
+        runs.push((position.y, position.x, position.x + width, text.clone()));
+    }
+    if runs.is_empty() {
+        return Err("the editor text area painted no text to check".into());
+    }
+    for (index, a) in runs.iter().enumerate() {
+        for b in &runs[index + 1..] {
+            let same_baseline = (a.0 - b.0).abs() < 0.01;
+            if same_baseline && a.1 < b.2 - 0.5 && b.1 < a.2 - 0.5 {
+                return Err(format!(
+                    "editor text painted twice on one baseline: {:?} at x={:.1} overlaps {:?} at x={:.1}",
+                    a.3, a.1, b.3, b.1
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn check(dir: &Path) -> Result<(), String> {
     let config = dir.join("session.conf");
     // Data-only language pack loaded at startup.
@@ -463,8 +524,11 @@ fn check(dir: &Path) -> Result<(), String> {
         return Err("the declarative lua language pack was not registered".into());
     }
     let painted = texts(&frame);
-    expect(&painted, "fn main() {", "the opened file's first line")?;
+    // Highlighted lines are painted per token, so a token — not the whole
+    // line — is the painted unit.
+    expect(&painted, "main", "the opened file's first line")?;
     expect(&painted, "println!", "the opened file's second line")?;
+    check_editor_text_painted_once(&harness, &frame)?;
     if cfg!(target_os = "macos") {
         if harness.app.state().header_close.width() == 0.0 {
             return Err("custom macOS traffic lights were not painted".into());
@@ -1428,24 +1492,34 @@ fn check(dir: &Path) -> Result<(), String> {
     expect(&painted, "Notes", "preview renders the heading")?;
     expect(&painted, "square corners", "preview renders list items")?;
     expect(&painted, "RUST", "preview labels the fenced code block")?;
-    {
+    let (editor_right, preview_left) = {
         let state = harness.app.state();
-        let editor_right = state.editor.text_rect.right();
-        let preview_left = state.preview.rect.left();
-        if preview_left < editor_right {
-            return Err("split preview must sit right of the editor".into());
-        }
-        if state.preview.rect.width() < 300.0 {
-            return Err("split preview is implausibly narrow".into());
-        }
+        (state.editor.text_rect.right(), state.preview.rect.left())
+    };
+    if preview_left < editor_right {
+        return Err("split preview must sit right of the editor".into());
     }
+    if harness.app.state().preview.rect.width() < 300.0 {
+        return Err("split preview is implausibly narrow".into());
+    }
+    // The editor also paints the raw Markdown source, so table assertions must
+    // only look at runs inside the preview pane.
+    let in_preview = |needle: &str| -> Option<Vec2> {
+        frame.commands().iter().find_map(|command| match command {
+            DrawCommand::DrawText { text, position, .. }
+                if text == needle && position.x >= preview_left =>
+            {
+                Some(*position)
+            }
+            _ => None,
+        })
+    };
     // Table: header cells share a baseline, columns order left → right, the
     // body row sits below the header, and the right column is right-aligned.
-    let key = draw_position(&frame, "Key").ok_or("table header cell `Key` is missing")?;
-    let meaning =
-        draw_position(&frame, "Meaning").ok_or("table header cell `Meaning` is missing")?;
-    let alpha = draw_position(&frame, "alpha").ok_or("table cell `alpha` is missing")?;
-    let beta = draw_position(&frame, "beta").ok_or("table cell `beta` is missing")?;
+    let key = in_preview("Key").ok_or("table header cell `Key` is missing")?;
+    let meaning = in_preview("Meaning").ok_or("table header cell `Meaning` is missing")?;
+    let alpha = in_preview("alpha").ok_or("table cell `alpha` is missing")?;
+    let beta = in_preview("beta").ok_or("table cell `beta` is missing")?;
     if (key.y - meaning.y).abs() > 0.5 {
         return Err(format!(
             "table header cells must share a baseline (Key y={}, Meaning y={})",
@@ -2107,7 +2181,17 @@ fn check(dir: &Path) -> Result<(), String> {
     if !harness.app.state().settings.autosave {
         return Err("turning autosave back on failed".into());
     }
-    harness.key(Key::ArrowDown); // Sidebar Width
+    // Grouped rows + search: typing a label jumps to its row.
+    harness.type_text("sidebar");
+    let frame = harness.frame()?;
+    expect(&texts(&frame), "Sidebar Width", "settings search result")?;
+    if texts(&frame).iter().any(|text| text == "Minimap") {
+        return Err("the settings search did not filter the rows".into());
+    }
+    harness.key(Key::Escape); // clears the query, keeps the panel open
+    if !harness.app.state().settings_open {
+        return Err("Esc closed the panel instead of clearing the search".into());
+    }
     harness.key(Key::ArrowRight);
     harness.frame()?;
     {
@@ -2119,13 +2203,35 @@ fn check(dir: &Path) -> Result<(), String> {
             ));
         }
     }
-    // Persist an 8-space tab width for the session-restore assertion.
-    for _ in 0..6 {
-        harness.key(Key::ArrowUp); // -> Tab Width row
+    // The Minimap row and the View menu command share one state and one
+    // persistence path.
+    harness.type_text("minimap");
+    harness.frame()?;
+    if !harness.app.state().session.minimap {
+        return Err("the minimap is not on by default".into());
     }
+    harness.key(Key::Enter);
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        if state.session.minimap || state.editor.minimap.rect.width() != 0.0 {
+            return Err("the Minimap settings row did not hide the strip".into());
+        }
+    }
+    harness.key(Key::Enter);
+    harness.frame()?;
+    if !harness.app.state().session.minimap {
+        return Err("turning the minimap back on from the panel failed".into());
+    }
+    // Persist an 8-space tab width for the session-restore assertion.
+    harness.key(Key::Escape); // clear the minimap query
+    harness.type_text("indent width");
+    harness.frame()?;
+    harness.key(Key::Escape);
     harness.key(Key::ArrowRight);
+    harness.frame()?;
     if harness.app.state().settings.tab_width != 8 {
-        return Err("tab width navigation did not land on the Tab Width row".into());
+        return Err("the Indent Width row did not cycle to 8".into());
     }
     harness.key(Key::Escape);
     if harness.app.state().settings_open {
@@ -2161,6 +2267,34 @@ fn check(dir: &Path) -> Result<(), String> {
     harness.frame()?;
     if !harness.app.state().settings_open {
         return Err("View > Settings… did not open the settings panel".into());
+    }
+    // The panel is a left group navigation plus one scrolling pane; the group
+    // click replaces the pane contents.
+    let (nav, panel_height, viewport_height) = {
+        let state = harness.app.state();
+        let layout = crate::ui::settings::layout(&state);
+        let nav = layout
+            .nav_items
+            .iter()
+            .find(|item| item.group == crate::settings::Group::View)
+            .map(|item| item.rect.center())
+            .ok_or("the settings panel has no View group")?;
+        (
+            nav,
+            layout.panel.height(),
+            state.viewport.logical_rect().height(),
+        )
+    };
+    if panel_height > viewport_height - 40.0 {
+        return Err(format!(
+            "the settings panel is {panel_height} px tall in a {viewport_height} px window"
+        ));
+    }
+    harness.click(nav);
+    let frame = harness.frame()?;
+    expect(&texts(&frame), "Minimap", "View group after a nav click")?;
+    if texts(&frame).iter().any(|text| text == "Font Size") {
+        return Err("the settings pane kept another group's rows".into());
     }
     harness.key(Key::Escape);
     harness.frame()?;
@@ -5023,6 +5157,202 @@ fn check_goto_line(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// App overlays are painted above the tree but are not scene nodes. While one
+/// is open it must own the pointer: no hover on the editor/tabs/sidebar/footer
+/// underneath, no delayed LSP tooltip on top of it, no wheel/right-click leak.
+fn check_overlay_pointer(dir: &Path) -> Result<(), String> {
+    let path = dir.join("pointer.txt");
+    let text: String = (0..200).map(|line| format!("line {line}\n")).collect();
+    fs::write(&path, text).map_err(|error| format!("pointer fixture: {error}"))?;
+    let mut harness = Harness::new(
+        Some(path),
+        dir.join("pointer-session.conf"),
+        ScriptedDialogs::new(vec![]),
+    );
+
+    let (text_pos, tab_pos, theme_pos) = {
+        let state = harness.app.state();
+        let text_rect = state.editor.text_rect;
+        let tab = state
+            .tabs
+            .hits
+            .first()
+            .ok_or("the fixture painted no tab hit")?
+            .1
+            .center();
+        (
+            Vec2::new(text_rect.left() + 20.0, text_rect.bottom() - 20.0),
+            tab,
+            state.theme_hit.center(),
+        )
+    };
+
+    // Baseline: tab and editor hover work when nothing is above them.
+    harness.event(InputEvent::PointerMove { position: tab_pos });
+    if harness.app.state().tabs.hover != Some(0) {
+        return Err("the baseline tab hover was not set".into());
+    }
+    harness.event(InputEvent::PointerMove { position: text_pos });
+    {
+        let state = harness.app.state();
+        if state.tabs.hover.is_some() {
+            return Err("leaving a tab did not clear its hover".into());
+        }
+        if state.hover_target.is_none() {
+            return Err("the baseline editor hover target was not set".into());
+        }
+    }
+    if harness.app.cursor() != igui_core::Cursor::Text {
+        return Err("the editor did not ask for a text cursor".into());
+    }
+
+    // Quick Open floats over the editor: it owns the whole window.
+    harness.app.state_mut().open_quick_open();
+    harness.frame()?;
+    harness.event(InputEvent::PointerMove { position: text_pos });
+    harness.event(InputEvent::PointerMove {
+        position: theme_pos,
+    });
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        if !state.quick_open.open {
+            return Err("the pointer move closed Quick Open".into());
+        }
+        if state.hover_target.is_some() {
+            return Err("the editor kept a hover target under Quick Open".into());
+        }
+        if state.tabs.hover.is_some() || state.sidebar.hover.is_some() {
+            return Err("tab/sidebar hover updated under Quick Open".into());
+        }
+        if state.theme_hover || state.panel_hover.is_some() {
+            return Err("footer/header hover updated under Quick Open".into());
+        }
+    }
+    if harness.app.cursor() != igui_core::Cursor::Default {
+        return Err("the cursor over an app overlay is not the default arrow".into());
+    }
+
+    // The wheel belongs to the prompt, not the editor behind it.
+    let scroll_before = harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .map_or(0.0, |doc| doc.scroll_y);
+    harness.event(InputEvent::Wheel {
+        position: text_pos,
+        delta: Vec2::new(0.0, 120.0),
+        phase: igui_core::TouchPhase::Moved,
+        device: igui_core::ScrollDevice::Wheel,
+    });
+    let scroll_after = harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .map_or(0.0, |doc| doc.scroll_y);
+    if scroll_after != scroll_before {
+        return Err(format!(
+            "the wheel scrolled the editor under Quick Open ({scroll_before} -> {scroll_after})"
+        ));
+    }
+
+    // A right click on something under the prompt must not open a menu.
+    harness.right_click(tab_pos);
+    if harness.app.state().tab_menu.is_some() {
+        return Err("a right click under Quick Open opened the tab menu".into());
+    }
+
+    // Closing the prompt restores normal hover ownership.
+    harness.key(Key::Escape);
+    harness.frame()?;
+    harness.event(InputEvent::PointerMove { position: tab_pos });
+    if harness.app.state().tabs.hover != Some(0) {
+        return Err("tab hover did not resume after closing Quick Open".into());
+    }
+
+    // The full-window Settings panel behaves the same way.
+    harness.app.state_mut().open_settings();
+    harness.frame()?;
+    harness.event(InputEvent::PointerMove { position: text_pos });
+    {
+        let state = harness.app.state();
+        if state.hover_target.is_some() || state.theme_hover || state.tabs.hover.is_some() {
+            return Err("hover updated through the settings panel".into());
+        }
+    }
+    if harness.app.cursor() != igui_core::Cursor::Default {
+        return Err("the cursor over settings is not the default arrow".into());
+    }
+    harness.key(Key::Escape);
+    harness.frame()?;
+    if harness.app.state().settings_open {
+        return Err("Esc did not close the settings panel".into());
+    }
+    Ok(())
+}
+
+/// Long fenced-code lines have no horizontal scroll in the preview: they must
+/// wrap instead of being clipped at the pane edge (missing tail characters).
+fn check_markdown_code_wrap(dir: &Path) -> Result<(), String> {
+    let path = dir.join("wrap.md");
+    let long: String = "x".repeat(240);
+    fs::write(&path, format!("# Wrap\n\n```text\n{long}\n```\n"))
+        .map_err(|error| format!("code-wrap fixture: {error}"))?;
+    let mut harness = Harness::new(
+        Some(path),
+        dir.join("wrap-session.conf"),
+        ScriptedDialogs::new(vec![]),
+    );
+    let frame = harness.frame()?;
+    let preview_left = harness.app.state().preview.rect.left();
+    let preview_right = harness.app.state().preview.rect.right();
+    let measurer = igui_ui::text_measurer(harness.app.tree());
+    let mut runs = 0usize;
+    let mut joined = String::new();
+    for command in frame.commands() {
+        let DrawCommand::DrawText {
+            text,
+            position,
+            font_size,
+            family,
+            ..
+        } = command
+        else {
+            continue;
+        };
+        if position.x < preview_left || !text.chars().all(|ch| ch == 'x') || text.is_empty() {
+            continue;
+        }
+        runs += 1;
+        joined.push_str(text);
+        let width = measurer.measure_run_weighted_in(
+            text,
+            *font_size,
+            igui_core::FontWeight::NORMAL,
+            family.as_deref(),
+        );
+        if position.x + width > preview_right - 16.0 {
+            return Err(format!(
+                "the preview clipped a {:.0}px code run at x={:.1}",
+                width, position.x
+            ));
+        }
+    }
+    if runs < 2 {
+        return Err("a long preview code line was not wrapped".into());
+    }
+    if joined != long {
+        return Err(format!(
+            "wrapping lost code bytes ({} of {} characters)",
+            joined.chars().count(),
+            long.chars().count()
+        ));
+    }
+    Ok(())
+}
+
 fn check_markdown_outline(dir: &Path) -> Result<(), String> {
     let path = dir.join("outline.md");
     fs::write(
@@ -5082,8 +5412,270 @@ fn check_markdown_outline(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Preview-only mode has no editor pane, so an outline click must scroll the
+/// rendered Markdown to the heading instead of moving an invisible caret.
+fn check_markdown_preview_outline_jump(dir: &Path) -> Result<(), String> {
+    let path = dir.join("preview-outline.md");
+    let mut text = String::from("# Top heading\n\n");
+    for index in 0..40 {
+        text.push_str(&format!(
+            "Filler {index} keeps the heading below the fold.\n\n"
+        ));
+    }
+    text.push_str("## Middle heading\n\n");
+    for index in 0..40 {
+        text.push_str(&format!("Tail {index} keeps the preview scrollable.\n\n"));
+    }
+    fs::write(&path, &text).map_err(|error| format!("preview outline fixture: {error}"))?;
+    let config = dir.join("preview-outline-session.conf");
+    let mut harness = Harness::new(Some(path), config, ScriptedDialogs::new(vec![]));
+
+    harness.frame()?;
+    {
+        let mut state = harness.app.state_mut();
+        state.set_view(ViewMode::Preview);
+        state.preview.scroll = 0.0;
+    }
+    let before = harness.frame()?;
+    let (target, pane) = {
+        let state = harness.app.state();
+        if state.built_view != ViewMode::Preview {
+            return Err("switching to Preview Only did not mount the preview pane".into());
+        }
+        if state.preview.total_h <= state.preview.rect.height() {
+            return Err(format!(
+                "preview outline fixture does not scroll ({} <= {})",
+                state.preview.total_h,
+                state.preview.rect.height()
+            ));
+        }
+        let row = state
+            .outline
+            .rows
+            .iter()
+            .find(|(index, _)| *index == 1)
+            .map(|(_, rect)| rect.center())
+            .ok_or("the preview outline painted no second heading row")?;
+        (row, state.preview.rect)
+    };
+    if text_y_in(&before, "Middle", pane).is_some() {
+        return Err("the fixture's second heading is already visible in the pane".into());
+    }
+
+    harness.click(target);
+    let after = harness.frame()?;
+    let scroll = harness.app.state().preview.scroll;
+    if scroll <= 0.0 {
+        return Err(format!(
+            "clicking a preview outline row did not scroll the pane (scroll {scroll})"
+        ));
+    }
+    let y = text_y_in(&after, "Middle", pane)
+        .ok_or("the outline jump did not paint the heading inside the pane")?;
+    if y > pane.top() + pane.height() * 0.25 {
+        return Err(format!(
+            "the outline jump must put the heading near the pane top (y={y}, top={})",
+            pane.top()
+        ));
+    }
+    Ok(())
+}
+
 /// Minimap: recorded geometry, painted ink, click/drag mapping, soft wrap,
-/// auto-hide and the persisted toggle.
+/// auto-hide and the persisted toggle./// Every text surface must tell the host where its caret is: the app overlays
+/// are not scene nodes, so the platform IME window can only follow a rectangle
+/// each painter records.
+fn check_ime_caret(dir: &Path) -> Result<(), String> {
+    let path = dir.join("ime-caret.txt");
+    fs::write(&path, "alpha\nbeta\ngamma\n")
+        .map_err(|error| format!("ime caret fixture: {error}"))?;
+    let config = dir.join("ime-caret-session.conf");
+    let mut harness = Harness::new(Some(path), config, ScriptedDialogs::new(vec![]));
+    harness.frame()?;
+
+    let editor_caret = harness
+        .app
+        .caret()
+        .ok_or("the editor reported no IME caret")?;
+    {
+        let state = harness.app.state();
+        if !state.editor.text_rect.contains(editor_caret.center()) {
+            return Err(format!(
+                "the editor IME caret {editor_caret:?} is outside the text area {:?}",
+                state.editor.text_rect
+            ));
+        }
+    }
+
+    fn check(host: Option<Rect>, field: Rect, area: Rect, what: &str) -> Result<(), String> {
+        let Some(host) = host else {
+            return Err(format!("{what}: the host has no IME caret"));
+        };
+        if field.width() <= 0.0 || field.height() <= 0.0 {
+            return Err(format!("{what}: the field recorded no caret rectangle"));
+        }
+        if host != field {
+            return Err(format!(
+                "{what}: the host IME caret {host:?} does not follow the field {field:?}"
+            ));
+        }
+        if !area.contains(host.center()) {
+            return Err(format!(
+                "{what}: the IME caret {host:?} is outside its field {area:?}"
+            ));
+        }
+        Ok(())
+    }
+
+    // Quick Open palette.
+    harness.app.state_mut().open_quick_open();
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        let area = crate::ui::quick_open::layout(
+            state.viewport.logical_rect(),
+            state.quick_open.results.len(),
+        )
+        .query;
+        check(
+            harness.app.caret(),
+            state.quick_open.caret_rect,
+            area,
+            "Quick Open",
+        )?;
+    }
+    harness.app.state_mut().close_quick_open();
+
+    // Find bar (its two fields report separate carets).
+    harness.app.state_mut().open_find(false);
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        let field = state.find.find_caret;
+        check(
+            harness.app.caret(),
+            field,
+            state.viewport.logical_rect(),
+            "Find",
+        )?;
+        if field == editor_caret {
+            return Err("the Find bar kept the editor's IME caret".into());
+        }
+    }
+    harness.app.state_mut().close_find();
+
+    // Project search.
+    harness.app.state_mut().open_project_search();
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        check(
+            harness.app.caret(),
+            state.search.caret_rect,
+            state.viewport.logical_rect(),
+            "Project Search",
+        )?;
+    }
+    harness.app.state_mut().close_project_search();
+
+    // Go to Line.
+    harness.app.state_mut().open_goto_line();
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        let area = crate::ui::goto_line::layout(state.viewport.logical_rect()).field;
+        check(
+            harness.app.caret(),
+            state.goto_line.caret_rect,
+            area,
+            "Go to Line",
+        )?;
+    }
+    harness.app.state_mut().close_goto_line();
+
+    // Quick-create prompt.
+    harness.app.state_mut().open_new_file_in(dir.to_path_buf());
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        let area = crate::ui::new_file::layout(state.viewport.logical_rect()).field;
+        check(
+            harness.app.caret(),
+            state.new_file.caret_rect,
+            area,
+            "New File",
+        )?;
+    }
+    harness.app.state_mut().close_new_file();
+
+    // Symbol rename overlay.
+    {
+        let mut state = harness.app.state_mut();
+        state.rename_symbol.open = true;
+        state.rename_symbol.old_name = "alpha".into();
+        state.rename_symbol.name = igui_ui::TextEdit::new("beta");
+        state.rename_symbol.error = None;
+    }
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        let area = crate::ui::rename_symbol::layout(state.viewport.logical_rect()).field;
+        check(
+            harness.app.caret(),
+            state.rename_symbol.caret_rect,
+            area,
+            "Rename Symbol",
+        )?;
+    }
+    harness.app.state_mut().close_rename_symbol();
+
+    // Settings panel: the search field owns text input until a number is typed.
+    harness.app.state_mut().open_settings();
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        let area = crate::ui::settings::layout(&state).search;
+        check(
+            harness.app.caret(),
+            state.settings_ui.search_caret,
+            area,
+            "Settings search",
+        )?;
+    }
+    harness.type_text("font");
+    harness.frame()?;
+    harness.key(Key::Enter); // Font Size starts a typed edit
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        let area = crate::ui::settings::layout(&state)
+            .rows
+            .iter()
+            .find(|slot| slot.spec.row == Row::FontSize)
+            .map(|slot| slot.value)
+            .ok_or("no Font Size row")?;
+        check(
+            harness.app.caret(),
+            state.settings_ui.edit_caret,
+            area,
+            "Settings number edit",
+        )?;
+    }
+    harness.key(Key::Escape); // cancel the typed number
+    harness.key(Key::Escape); // clear the search query
+    harness.key(Key::Escape); // close the panel
+    harness.frame()?;
+
+    // Closing every overlay returns the caret to the editor.
+    if harness.app.caret() != Some(editor_caret) {
+        return Err(format!(
+            "the IME caret did not return to the editor: {:?} != {editor_caret:?}",
+            harness.app.caret()
+        ));
+    }
+    Ok(())
+}
+
 fn check_minimap(dir: &Path) -> Result<(), String> {
     use crate::model::minimap as map_model;
 
@@ -5577,7 +6169,7 @@ while True:
             }],
         }})
     elif method == "textDocument/hover":
-        send({"jsonrpc": "2.0", "id": request_id, "result": {"contents": {"kind": "markdown", "value": "lsp hover card\n\nUse `struct` inline.\n\n```rust\nfn main() {}\n```"}}})
+        send({"jsonrpc": "2.0", "id": request_id, "result": {"contents": {"kind": "markdown", "value": "lsp hover card\n\nUse `struct` inline.\n\n```rust\nfn main() {}\nlet very_long_identifier_name_for_wrapping = another_long_identifier_name_that_never_fits + yet_another_long_identifier_name_for_wrapping;\n```"}}})
     elif method == "textDocument/prepareRename":
         send({"jsonrpc": "2.0", "id": request_id, "result": {
             "range": {"start": {"line": 0, "character": 3},
@@ -6017,6 +6609,86 @@ fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
             hover_pos
         ));
     }
+    // A long fenced-code line must wrap inside the card, not be clipped at
+    // the right edge (which hid its tail and read as missing characters).
+    let frame = harness.frame()?;
+    let card = harness.app.state().lsp.hover_rect;
+    let measurer = igui_ui::text_measurer(harness.app.tree());
+    let mut code_runs = 0;
+    for command in frame.commands() {
+        let DrawCommand::DrawText {
+            text,
+            position,
+            font_size,
+            family,
+            ..
+        } = command
+        else {
+            continue;
+        };
+        if text.is_empty()
+            || position.x < card.left()
+            || position.x > card.right()
+            || position.y < card.top()
+            || position.y > card.bottom()
+        {
+            continue;
+        }
+        let width = measurer.measure_run_weighted_in(
+            text,
+            *font_size,
+            igui_core::FontWeight::NORMAL,
+            family.as_deref(),
+        );
+        if position.x + width > card.right() - 8.0 {
+            return Err(format!(
+                "the hover card clipped a {:.0}px text run at x={:.1}: {text:?}",
+                width, position.x
+            ));
+        }
+        if text.contains("very_long_identifier") {
+            code_runs += 1;
+        }
+    }
+    if code_runs == 0 {
+        return Err("the long hover code line was not painted as wrapped runs".into());
+    }
+
+    // A prompt above the editor owns the pointer: moving onto the hover card
+    // keeps the card, and opening Quick Open dismisses it instead of leaving it
+    // painted on top of the prompt.
+    let card = card.center();
+    harness.event(InputEvent::PointerMove { position: card });
+    if harness.app.state().hover_target.is_some() {
+        return Err("the hover card left the editor hover target alive".into());
+    }
+    let quick_open_modifiers = if cfg!(target_os = "macos") {
+        Modifiers {
+            meta: true,
+            ..Modifiers::NONE
+        }
+    } else {
+        Modifiers {
+            ctrl: true,
+            ..Modifiers::NONE
+        }
+    };
+    harness.shortcut(Key::Character('p'), quick_open_modifiers);
+    harness.frame()?;
+    {
+        let state = harness.app.state();
+        if !state.quick_open.open {
+            return Err("Quick Open did not open above the hover card".into());
+        }
+        if state.lsp.hover.is_some() {
+            return Err("the LSP hover card survived a popup opened above it".into());
+        }
+    }
+    harness.key(Key::Escape);
+    harness.frame()?;
+    harness.event(InputEvent::PointerMove {
+        position: hover_pos,
+    });
     harness.event(InputEvent::ModifiersChanged(Modifiers {
         ctrl: true,
         ..Modifiers::NONE
@@ -7466,6 +8138,19 @@ fn sidebar_click_position(app: &EditorApp, name: &str) -> Result<Vec2, String> {
 fn draw_position(frame: &RecordedFrame, needle: &str) -> Option<Vec2> {
     frame.commands().iter().find_map(|command| match command {
         DrawCommand::DrawText { text, position, .. } if text == needle => Some(*position),
+        _ => None,
+    })
+}
+
+/// Baseline of the first painted run containing `needle` that lands inside
+/// `area`; used to tell a preview run from the outline row with the same label.
+fn text_y_in(frame: &RecordedFrame, needle: &str, area: Rect) -> Option<f32> {
+    frame.commands().iter().find_map(|command| match command {
+        DrawCommand::DrawText { text, position, .. }
+            if text.contains(needle) && area.contains(*position) =>
+        {
+            Some(position.y)
+        }
         _ => None,
     })
 }

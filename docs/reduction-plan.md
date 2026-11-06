@@ -103,7 +103,7 @@ Deferred on purpose (recorded so they are not lost):
 | 2.2 Git read-only | done | Worker requests/events, state, UI prompts and history/detail views removed; selfcheck now covers status + diff only. |
 | 2.3 File-type icons | done | `model/fileicon`, `ui/fileicon`, `assets/icons/material` and the selfcheck icon assertion removed; plain file labels remain. |
 | 2.4 Extra language servers | done | Four specs and their plugin registrations removed; docs/README now list Rust + Godot. |
-| 3.1 Markdown extensions | done | `MARKDOWN_EXTENSIONS` is the single table; the syntax provider and file icons read it. 2 new tests. |
+| 3.1 Markdown extensions | done | `MARKDOWN_EXTENSIONS` is the single table; the syntax provider reads it (file icons were already removed in 2.3). 2 new tests. |
 | 3.2 Session version | done | `SESSION_VERSION` constant and one `Session::migrate` seam; render writes the constant. |
 | 3.3 Binary budget | done | `check.sh --release` gates 6 MB; current binary 4.41 MB. |
 | 3.4 Docs | done | Features, roadmap, design, code map, README, AGENTS routing, verification and the Session 4 plan are current. |
