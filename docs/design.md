@@ -480,6 +480,18 @@ Rules:
   fixed-pitch face (Menlo first);
 - sizes are em pixels (`FontConfig::em_size`, CSS/VS Code semantics), so the
   editor, chrome and terminal share one scale;
+- each glyph is painted **once**: syntax and semantic-token colors are composed
+  into byte spans (`model::spans`) before the text pass. Painting a token over
+  the base text would composite two antialiased coverage masks and read as
+  heavier, muddier glyphs;
+- **the glyph atlas grows on demand.** `igui_font` keeps one shelf-packed
+  atlas for every face/size, starting at 1024² and doubling its height to
+  1024×4096. Slots carry atlas **texel** coordinates; the wgpu font pipeline
+  normalizes them in the vertex shader, so growth never rebakes cached slots or
+  the cached `DrawList`. Only the dirty rectangle is re-uploaded (a growth
+  recreates the texture once). A long CJK document therefore keeps every glyph
+  instead of losing the tail of the atlas; `fonts::atlas_probe` guards this with
+  2400 unique Han characters.
 - dense rhythm, generous horizontal air inside rows.
 
 Metrics (`theme::Metrics::COMPACT`):

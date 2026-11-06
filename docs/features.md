@@ -744,7 +744,14 @@ No filesystem-watcher dependency; everything is metadata polling.
 `⇧⌘M` cycles Editor → Split Preview → Preview Only. In split mode the divider is
 draggable (20–80%, double-click resets to 50%) and uses the same 4 px handle
 specification as the sidebar; the preview draws no extra border. The ratio is
-remembered per document and the last ratio is persisted.
+remembered per document and the last ratio is persisted. Fenced code has no
+horizontal scroll in the preview, so long code lines wrap at a space or a
+character boundary instead of being clipped.
+
+The glyph atlas grows on demand (1024² → 1024×4096 in the engine), so a long
+Chinese document does not lose characters as more unique glyphs are seen. The
+app's `fonts::atlas_probe` test shapes 2400 unique Han characters past the old
+fixed-atlas limit and asserts that none rasterize to empty slots.
 
 ## Autosave, recovery and window state
 

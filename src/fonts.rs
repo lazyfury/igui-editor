@@ -316,3 +316,64 @@ mod tests {
         );
     }
 }
+
+/// Guards the engine's growable glyph atlas.
+///
+/// `igui_font` starts at 1024², doubles its height on demand and addresses
+/// glyphs by texel rectangle, so a CJK document larger than the old fixed atlas
+/// must keep every glyph. This test shapes more unique Han characters than the
+/// old 1024² atlas held after chrome/Latin, and fails if any rasterize to an
+/// empty slot.
+#[cfg(test)]
+mod atlas_probe {
+    use super::*;
+
+    #[test]
+    fn cjk_text_beyond_the_old_atlas_keeps_its_glyphs() {
+        use std::rc::Rc;
+        let server = Rc::new(igui_font::FontServer::load_with(crate::host::font_config()));
+        server.set_scale(2.0);
+        let before = server.atlas_size();
+        // Chrome + editor Latin first, as a real session shapes them.
+        for weight in [FontWeight::NORMAL, FontWeight::BOLD] {
+            for size in [12.0f32, 13.0, 14.0] {
+                for code in 0x20u32..0x7F {
+                    let Some(ch) = char::from_u32(code) else {
+                        continue;
+                    };
+                    server.shape(&ch.to_string(), size, weight);
+                }
+            }
+        }
+        for code in 0x20u32..0x7F {
+            let Some(ch) = char::from_u32(code) else {
+                continue;
+            };
+            server.shape_in(&ch.to_string(), 13.0, FontWeight::NORMAL, Some("Menlo"));
+        }
+        let mut missing = Vec::new();
+        for index in 0..2400u32 {
+            let Some(ch) = char::from_u32(0x4E00 + index) else {
+                continue;
+            };
+            let slots = server.shape(&ch.to_string(), 13.0, FontWeight::NORMAL);
+            if slots
+                .iter()
+                .all(|slot| slot.size[0] == 0.0 || slot.size[1] == 0.0)
+            {
+                missing.push(ch);
+            }
+        }
+        assert!(
+            server.atlas_size().1 > before.1,
+            "the atlas did not grow (before {before:?}, after {:?})",
+            server.atlas_size()
+        );
+        assert!(
+            missing.is_empty(),
+            "{} CJK glyphs rasterized to empty slots (first {:?})",
+            missing.len(),
+            missing.first()
+        );
+    }
+}
