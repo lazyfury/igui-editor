@@ -137,3 +137,34 @@ release binary: 4.41 MB (limit 6.00 MB)
 The `release-fast` profile is an iteration build (thin LTO, 16 codegen units)
 and is reported but not gated. Re-check this number before adding a dependency;
 the Session 5 reduction brought it from 4.8 MB to 4.41 MB.
+## Runtime profiler (local only)
+
+The editor can link the engine's `igui_profile`/`igui_debug_ui` tools behind the
+non-default `profile` feature:
+
+```bash
+cargo run --features profile --no-default-features -- --profile README.md
+```
+
+F4 toggles the panel. It shows FPS, update/layout/paint/render milliseconds,
+draw-command and entity counts, and `igui_profile::inspect` findings (budget
+violations, bad geometry, unbalanced save/restore). Packaging always uses
+`--no-default-features`, so the profiler is not part of a shipped bundle.
+
+## Local performance gate
+
+`scripts/perf.sh` is the local counterpart to a perf CI job — deliberately not
+wired into GitHub Actions:
+
+```bash
+scripts/perf.sh --update    # record baselines on THIS machine
+scripts/perf.sh             # compare (default 15% threshold)
+PERF_THRESHOLD=10 scripts/perf.sh
+```
+
+It checks that the profiler feature still compiles, runs the upstream
+`igui_bench_suite` CPU pipeline bench against
+`target/perf/igui-cpu.baseline.txt`, and compares the app's Markdown/editor
+benchmarks against `target/perf/markdown.baseline.txt`. Baselines live under
+`target/` (git-ignored) because absolute timings depend on the machine; use
+`--update` only after confirming a slower number is intentional.
