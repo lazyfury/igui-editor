@@ -491,7 +491,11 @@ Rules:
   the cached `DrawList`. Only the dirty rectangle is re-uploaded (a growth
   recreates the texture once). A long CJK document therefore keeps every glyph
   instead of losing the tail of the atlas; `fonts::atlas_probe` guards this with
-  2400 unique Han characters.
+  2400 unique Han characters. Fallback coverage is read from an mmapped cmap
+  table (then dropped) so only the chosen face is loaded, and font bytes are
+  cached once per file so a `.ttc`'s weights share one buffer. Both matter on
+  macOS: probing used to leak Apple Color Emoji (183 MB) and PingFang twice
+  (75 MB each) just to find a kana/symbol fallback.
 - dense rhythm, generous horizontal air inside rows.
 
 Metrics (`theme::Metrics::COMPACT`):

@@ -269,6 +269,23 @@ mod tests {
         assert_eq!(mono_family(&measurer, 14.0), None);
     }
 
+    /// Metadata coverage must still pick a real fallback face: kana and a
+    /// geometric symbol should rasterize to ink instead of a missing box.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn fallback_covers_kana_and_symbols() {
+        let server = std::rc::Rc::new(igui_font::FontServer::load_with(crate::host::font_config()));
+        for ch in ['あ', '▼', '→'] {
+            let slots = server.shape(&ch.to_string(), 13.0, FontWeight::NORMAL);
+            assert!(
+                slots
+                    .iter()
+                    .any(|slot| slot.size[0] > 0.0 && slot.size[1] > 0.0),
+                "{ch:?} did not rasterize through fallback"
+            );
+        }
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn real_font_server_resolves_menlo() {

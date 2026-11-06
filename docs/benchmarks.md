@@ -42,18 +42,18 @@ macOS arm64, release/bench profile, 0.1.0:
 ```text
 fixture: 128885 bytes, 4800 lines
 code fixture: 90680 bytes, 4760 lines
-markdown parse            1.75 ms/iter
-preview layout            2.03 ms/iter      ~19k primitives
-minimap build             0.416 ms/iter
-minimap incremental       0.064 ms/iter
-typing, map off           0.360 ms/frame work    953 commands
-typing, map on            0.454 ms/frame work   2026 commands
-preview paint             0.018 ms/iter         1075 visible commands   (DrawList reused)
-typing (16 ms frame)      1.55 ms/frame work
+markdown parse            1.49 ms/iter
+preview layout            2.00 ms/iter      ~19k primitives
+minimap build             0.422 ms/iter
+minimap incremental       0.065 ms/iter
+typing, map off           0.358 ms/frame work    971 commands
+typing, map on            0.456 ms/frame work   2044 commands
+preview paint             0.018 ms/iter         1099 visible commands   (DrawList reused)
+typing (16 ms frame)      1.48 ms/frame work
 ```
 
 The two Edit-view typing rows use the same 4,760-line JavaScript fixture, so
-the difference is exactly the minimap with syntax-colored runs: **+0.094
+the difference is exactly the minimap with syntax-colored runs: **+0.098
 ms/frame and +1073 draw commands**. JavaScript was chosen because it has a
 highlight provider but no language server, so the rows measure the editor and
 the map rather than LSP serialization. The extra commands are the per-cell runs
@@ -69,6 +69,20 @@ Windowed idle (macOS arm64, 1193×656, terminal panel open, maximized session):
 ```text
 CPU 0.0–0.1%      RSS 237 MB      footprint 315 MB
 ```
+
+Long CJK Markdown (262 KB, 2325 unique Han plus kana/symbols), macOS arm64,
+`release-fast`:
+
+```text
+before: footprint 512 MB (peak 561 MB)   183 MB Apple Color Emoji + 2×75 MB PingFang in the heap
+after:  footprint 224 MB (peak 265 MB)   76 MB PingFang + ~12 MB atlas/heap large
+```
+
+The old fallback probed coverage with `FontFace::load`, so it leaked whole font
+files while merely *checking* whether a face covered a character; collections
+with several weights also leaked the same `.ttc` once per face index. Coverage
+now comes from an mmapped cmap table, only the chosen face is loaded, and font
+bytes are cached once per file.
 
 Before the frame-scheduling change the same window sat at 13–30% CPU (a
 vsync-locked 60 fps loop kept alive by the open terminal panel) and 480 MB RSS.
