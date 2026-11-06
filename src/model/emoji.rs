@@ -257,6 +257,13 @@ pub struct EmojiBitmap {
     pub pixels_per_em: u16,
 }
 
+/// The process-wide color emoji face, discovered once (mmap is virtual until a
+/// glyph page is touched).
+pub fn system_font() -> Option<&'static EmojiFont> {
+    static FONT: std::sync::OnceLock<Option<EmojiFont>> = std::sync::OnceLock::new();
+    FONT.get_or_init(EmojiFont::discover).as_ref()
+}
+
 /// A memory-mapped color emoji face.
 ///
 /// The font file is never copied: Apple Color Emoji is ~183 MB, and only the

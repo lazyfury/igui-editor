@@ -54,6 +54,7 @@ pub fn run() -> Result<(), String> {
         .and_then(|()| check_overlay_pointer(&dir))
         .and_then(|()| check_markdown_code_wrap(&dir))
         .and_then(|()| check_ime_caret(&dir))
+        .and_then(|()| check_emoji(&dir))
         .and_then(|()| check_markdown_outline(&dir))
         .and_then(|()| check_markdown_preview_outline_jump(&dir))
         .and_then(|()| check_godot_outline(&dir))
@@ -61,7 +62,7 @@ pub fn run() -> Result<(), String> {
     let _ = fs::remove_dir_all(&dir);
     if result.is_ok() {
         println!(
-            "selfcheck ok: main flow + workspace/recovery + explorer filters + typing + LSP + keymap + go-to-line + overlay pointer + code wrap + IME caret + Markdown/GDScript outline + preview outline jump + minimap checks"
+            "selfcheck ok: main flow + workspace/recovery + explorer filters + typing + LSP + keymap + go-to-line + overlay pointer + code wrap + IME caret + emoji + Markdown/GDScript outline + preview outline jump + minimap checks"
         );
     }
     result
@@ -5348,6 +5349,58 @@ fn check_markdown_code_wrap(dir: &Path) -> Result<(), String> {
             "wrapping lost code bytes ({} of {} characters)",
             joined.chars().count(),
             long.chars().count()
+        ));
+    }
+    Ok(())
+}
+
+fn check_emoji(dir: &Path) -> Result<(), String> {
+    let path = dir.join("emoji.txt");
+    fs::write(&path, "hello 😀 world ❤️\n").map_err(|error| format!("emoji fixture: {error}"))?;
+    let mut harness = Harness::new(
+        Some(path),
+        dir.join("emoji-session.conf"),
+        ScriptedDialogs::new(vec![]),
+    );
+    let frame = harness.frame()?;
+    let (available, font) = {
+        let state = harness.app.state();
+        (
+            state.emoji.available(),
+            state
+                .emoji
+                .font_path()
+                .map(|path| path.display().to_string()),
+        )
+    };
+    if !available {
+        println!("selfcheck: no color emoji font installed; emoji paint skipped");
+        return Ok(());
+    }
+    let text_rect = harness.app.state().editor.text_rect;
+    let mut images = 0usize;
+    for command in frame.commands() {
+        match command {
+            DrawCommand::DrawImage { destination, .. } if destination.intersects(text_rect) => {
+                images += 1;
+            }
+            DrawCommand::DrawText { text, position, .. }
+                if text_rect.contains(*position)
+                    && text
+                        .chars()
+                        .any(|ch| crate::model::emoji::is_emoji(ch, None)) =>
+            {
+                return Err(format!(
+                    "the editor painted emoji as text instead of an image: {text:?}"
+                ));
+            }
+            _ => {}
+        }
+    }
+    if images < 2 {
+        return Err(format!(
+            "emoji in the editor painted {images} images (face: {})",
+            font.unwrap_or_else(|| "unknown".into())
         ));
     }
     Ok(())

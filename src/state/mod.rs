@@ -50,6 +50,7 @@ mod actions;
 mod caret;
 mod commands;
 mod dock;
+mod emoji;
 mod files;
 mod find;
 mod format;
@@ -77,6 +78,7 @@ mod watch;
 mod workspace;
 
 pub use dock::{DockId, Panel};
+pub use emoji::EmojiStore;
 pub use outline::{NativeOutline, MARKDOWN_HEADING_KIND};
 pub use references::ReferencesUi;
 pub use settings::SettingsUi;
@@ -1272,6 +1274,8 @@ pub struct AppState {
     pub(crate) occurrence_at: Option<Instant>,
     occurrence_key: Option<(u64, u64, usize)>,
     pub(crate) editor: EditorUi,
+    /// Color emoji textures for editor/preview/terminal paint.
+    pub(crate) emoji: EmojiStore,
     pub(crate) tabs: TabsUi,
     pub(crate) tab_drag: Option<TabDrag>,
     pub(crate) tab_menu: Option<TabMenuUi>,
@@ -1476,6 +1480,7 @@ impl AppState {
                 wrap_scroll_x: 0.0,
                 ..EditorUi::default()
             },
+            emoji: EmojiStore::default(),
             tabs: TabsUi {
                 reveal_active: true,
                 ..TabsUi::default()

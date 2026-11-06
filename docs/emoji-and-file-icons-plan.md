@@ -175,7 +175,7 @@ is off, no per-frame file IO, `scripts/check.sh` green, release size within the
 |---|---|---|
 | 0 Baseline | done | `d41f1ca`; 438 unit + 2 doc tests, selfcheck green. |
 | 1 Emoji model | done | `model/emoji.rs`; classification, mmap font discovery, sbix/CBDT PNG + premul BGRA decode, 7 tests. |
-| 2 Emoji editor paint | todo | |
+| 2 Emoji editor paint | done | Sprite store + texture upload, editor split-at-emoji paint, selfcheck image assertion. |
 | 3 Emoji preview/terminal | todo | |
 | 4 Icon theme model | todo | |
 | 5 Explorer icons | todo | |

@@ -15,7 +15,7 @@ use igui_core::{
 use igui_render::PaintContext;
 use igui_scene::SceneTree;
 use igui_ui::{Control, ControlData, TextMeasurer};
-use igui_winit::SharedWindow;
+use igui_winit::{SharedBackend, SharedWindow, SharedWindowState};
 
 use crate::dialogs::{poll_dialog, DialogFuture, Dialogs};
 use crate::drop::SharedDropTarget;
@@ -2016,6 +2016,26 @@ impl AppLogic for EditorApp {
         if let Some(drop) = ctx.service::<SharedDropTarget>() {
             self.drop = Some(drop.clone());
         }
+        if let Some(backend) = ctx.service::<SharedBackend>() {
+            let backend = backend.clone();
+            self.state
+                .borrow_mut()
+                .emoji
+                .set_uploader(Box::new(move |id, width, height, rgba| {
+                    igui_render::RenderBackend::register_texture(
+                        &mut *backend.borrow_mut(),
+                        id,
+                        width,
+                        height,
+                        rgba,
+                    )
+                    .map_err(|error| format!("{error:?}"))
+                }));
+        }
+        if let Some(window_state) = ctx.service::<SharedWindowState>() {
+            let scale = window_state.borrow().scale_factor as f32;
+            self.state.borrow().emoji.set_scale(scale);
+        }
         crate::macos::install_dock();
         self.sync_title();
     }
@@ -2025,6 +2045,12 @@ impl AppLogic for EditorApp {
     }
 
     fn update(&mut self, ctx: &FrameContext<'_>) {
+        // A monitor change alters the emoji strike; the store drops stale
+        // sprites when the ratio moves.
+        if let Some(window_state) = ctx.service::<SharedWindowState>() {
+            let scale = window_state.borrow().scale_factor as f32;
+            self.state.borrow().emoji.set_scale(scale);
+        }
         self.update(ctx.delta());
     }
 

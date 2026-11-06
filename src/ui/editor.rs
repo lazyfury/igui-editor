@@ -362,8 +362,10 @@ fn x_in_line(
 ///
 /// Wide glyphs are measured and advanced in their own face, so the caret, the
 /// selection and syntax overlaps stay aligned on mixed Chinese/Latin lines.
+#[allow(clippy::too_many_arguments)]
 fn draw_text_mixed(
     ctx: &mut PaintContext,
+    store: &crate::state::EmojiStore,
     measurer: &dyn TextMeasurer,
     text: &str,
     pos: Vec2,
@@ -373,16 +375,16 @@ fn draw_text_mixed(
 ) {
     let mut x = pos.x;
     for (run, run_family) in crate::fonts::family_runs(text, family) {
-        ctx.draw_text_in(
+        x += crate::ui::emoji::paint_text(
+            ctx,
+            store,
+            measurer,
             run,
             Vec2::new(x, pos.y),
             font,
-            FontWeight::NORMAL,
-            TextAlign::Left,
             run_family,
             color,
         );
-        x += measurer.measure_run_weighted_in(run, font, FontWeight::NORMAL, run_family);
     }
 }
 
@@ -1171,6 +1173,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             let x = x_in_line(measurer, line_text, from, font, tab, family) - row_start_x;
             draw_text_mixed(
                 env.ctx,
+                &state.emoji,
                 measurer,
                 drawn.as_str(),
                 Vec2::new(text_rect.left() + pad + x - scroll_x, baseline),
@@ -1292,6 +1295,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
         env.ctx.clip_rect(text_rect);
         draw_text_mixed(
             env.ctx,
+            &state.emoji,
             measurer,
             text.as_str(),
             Vec2::new(text_rect.left() + pad + x - scroll_x, baseline),
