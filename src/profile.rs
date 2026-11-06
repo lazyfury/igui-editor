@@ -19,7 +19,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use igui_app::{App, FrameObserver};
-use igui_core::{EventResult, InputEvent, ViewportSize};
+use igui_core::{EventResult, InputEvent, Size, ViewportSize};
 use igui_debug_ui::PerformanceOverlay;
 use igui_profile::{inspect, FrameCounters, FrameStats, InspectionReport, Profiler, StageTimes};
 use igui_render::{DrawList, PaintContext};
@@ -153,6 +153,23 @@ fn millis(duration: Duration) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_open_panel_paints_commands() {
+        let mut state = ProfileState::new(true);
+        state.begin_frame();
+        state.end_update();
+        state.end_layout();
+        state.begin_paint();
+        state.end_paint(10, 20);
+        state.after_frame(&DrawList::default());
+        let mut ctx = PaintContext::new();
+        state.paint(&mut ctx, ViewportSize::new(Size::new(1000.0, 700.0)));
+        assert!(
+            !ctx.into_draw_list().commands().is_empty(),
+            "the open performance panel painted nothing"
+        );
+    }
 
     #[test]
     fn a_frame_is_recorded_and_the_panel_toggles() {
