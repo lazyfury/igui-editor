@@ -14,6 +14,8 @@
 //! describes only the last one.
 
 use super::doc::Document;
+use super::highlight::HighlightCache;
+use crate::syntax::{Highlight, TokenKind};
 
 /// Files above this size are not mapped (same policy as highlighting/wrap).
 pub const MAX_MINIMAP_BYTES: usize = 2 * 1024 * 1024;
@@ -25,14 +27,29 @@ pub const MAP_ROW_H: f32 = 2.0;
 pub const MAX_COLUMNS: u32 = 120;
 /// Upper bound on painted buckets, so a very tall window cannot grow the list.
 pub const MAX_BUCKETS: usize = 512;
+/// Classes tracked per bucket: `Plain` plus the eight styled non-punctuation
+/// kinds. Punctuation folds into `Plain` (it is structural, not an accent).
+const KIND_COUNT: usize = 9;
 
 /// Ink extent of one logical line, in display columns (tabs expanded).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LineMark {
     /// Column of the first non-blank character (0 when the line is blank).
     pub start: u32,
     /// One past the column of the last non-blank character.
     pub end: u32,
+    /// Most prominent styled token on the line (`Plain` when none).
+    pub kind: TokenKind,
+}
+
+impl Default for LineMark {
+    fn default() -> Self {
+        Self {
+            start: 0,
+            end: 0,
+            kind: TokenKind::Plain,
+        }
+    }
 }
 
 impl LineMark {
@@ -51,9 +68,16 @@ pub struct Bucket {
     pub inked: u32,
     /// Lines in this bucket (including blank ones).
     pub lines: u32,
+    /// Column coverage per [`TokenKind`] class (indexed by [`kind_index`]).
+    kinds: [u32; KIND_COUNT],
 }
 
 impl Bucket {
+    /// Most prominent styled class in this bucket (`Plain` when none).
+    pub fn kind(&self) -> TokenKind {
+        dominant(&self.kinds)
+    }
+
     /// Share of lines with ink, in `0.0..=1.0`.
     pub fn density(&self) -> f32 {
         if self.lines == 0 {
@@ -69,8 +93,9 @@ pub fn is_active(doc: &Document) -> bool {
     doc.text().len() <= MAX_MINIMAP_BYTES && doc.line_count() <= MAX_MINIMAP_LINES
 }
 
-/// First/last non-blank columns of one line.
-pub fn line_mark(text: &str, tab: usize) -> LineMark {
+/// First/last non-blank columns of one line, plus its most prominent styled
+/// token class. `tokens` is the line's highlight slice when it is ready.
+pub fn line_mark(text: &str, tab: usize, tokens: Option<&[Highlight]>) -> LineMark {
     let tab = tab.max(1) as u32;
     let mut column = 0_u32;
     let mut start = 0_u32;
@@ -88,7 +113,67 @@ pub fn line_mark(text: &str, tab: usize) -> LineMark {
             end = column;
         }
     }
-    LineMark { start, end }
+
+    let mut weights = [0_u32; KIND_COUNT];
+    for token in tokens.unwrap_or_default() {
+        if !token.kind.is_styled() {
+            continue;
+        }
+        let weight = token.end.saturating_sub(token.start).max(1) as u32;
+        weights[kind_index(token.kind)] = weights[kind_index(token.kind)].saturating_add(weight);
+    }
+    LineMark {
+        start,
+        end,
+        kind: dominant(&weights),
+    }
+}
+
+/// Index into the per-class weight table. Punctuation is structural and folds
+/// into `Plain`, so it never wins the color choice.
+fn kind_index(kind: TokenKind) -> usize {
+    match kind {
+        TokenKind::Plain | TokenKind::Punctuation => 0,
+        TokenKind::Keyword => 1,
+        TokenKind::TypeName => 2,
+        TokenKind::Function => 3,
+        TokenKind::String => 4,
+        TokenKind::Number => 5,
+        TokenKind::Comment => 6,
+        TokenKind::Constant => 7,
+        TokenKind::Macro => 8,
+    }
+}
+
+fn kind_at(index: usize) -> TokenKind {
+    match index {
+        1 => TokenKind::Keyword,
+        2 => TokenKind::TypeName,
+        3 => TokenKind::Function,
+        4 => TokenKind::String,
+        5 => TokenKind::Number,
+        6 => TokenKind::Comment,
+        7 => TokenKind::Constant,
+        8 => TokenKind::Macro,
+        _ => TokenKind::Plain,
+    }
+}
+
+/// Most prominent styled class; `Plain` when every styled weight is zero.
+fn dominant(weights: &[u32; KIND_COUNT]) -> TokenKind {
+    let mut best = 0usize;
+    let mut best_weight = 0u32;
+    for (index, &weight) in weights.iter().enumerate().skip(1) {
+        if weight > best_weight {
+            best = index;
+            best_weight = weight;
+        }
+    }
+    if best_weight == 0 {
+        TokenKind::Plain
+    } else {
+        kind_at(best)
+    }
 }
 
 /// Per-document mark cache. One slot only: the minimap always shows the active
@@ -104,6 +189,10 @@ pub struct MinimapCache {
     max_end: u32,
     buckets: Vec<Bucket>,
     bucket_count: usize,
+    /// Whether a provider was active when the marks were built.
+    available: bool,
+    /// Whether the highlight cache was complete, so every line has its color.
+    colored: bool,
 }
 
 impl MinimapCache {
@@ -117,6 +206,8 @@ impl MinimapCache {
         self.max_end = 0;
         self.buckets.clear();
         self.bucket_count = 0;
+        self.available = false;
+        self.colored = false;
     }
 
     /// True when nothing is cached for the current document.
@@ -125,23 +216,36 @@ impl MinimapCache {
         self.doc.is_none() || self.marks.is_empty()
     }
 
-    /// Brings the cache up to date with `doc` and the tab width it is shown at.
-    pub fn sync(&mut self, doc: &Document, tab: usize) {
+    /// Brings the cache up to date with `doc`, the tab width it is shown at and
+    /// the active highlight cache.
+    ///
+    /// Token colors are filled only once highlighting is complete for the
+    /// revision; a cache built during the budgeted catch-up is marked
+    /// uncolored so the completion frame rebuilds it. When highlighting is
+    /// still behind after an edit, incremental rescans use the tokens that are
+    /// available (the edit is always at the head of the resume point) and keep
+    /// the colors of untouched lines.
+    /// Returns whether the incremental path ran (for tests and diagnostics).
+    pub fn sync(&mut self, doc: &Document, tab: usize, highlight: &HighlightCache) -> bool {
         if !is_active(doc) {
             self.reset();
-            return;
+            return false;
         }
+        let available = highlight.is_active();
+        let ready = available && !highlight.is_behind();
         let id = doc.id();
         let rev = doc.rev();
-        if self.doc == Some(id) && self.rev == rev && self.tab == tab {
-            return;
+        let same_doc = self.doc == Some(id) && self.tab == tab;
+        if same_doc && self.rev == rev && self.available == available && (self.colored || !ready) {
+            return false;
         }
 
-        let incremental = self.doc == Some(id)
-            && self.tab == tab
+        let incremental = same_doc
+            && self.available == available
             && self.marks.len() == self.line_count
             && self.rev + 1 == rev
-            && doc.edit_span().is_some();
+            && doc.edit_span().is_some()
+            && !(ready && !self.colored);
         if incremental {
             if let Some((first, last)) = doc.edit_span() {
                 let new_count = doc.line_count();
@@ -153,25 +257,28 @@ impl MinimapCache {
                     && first + old_len as usize <= self.line_count
                     && last < new_count
                 {
-                    let fresh = scan(doc, first, last, tab);
+                    let fresh = scan(doc, first, last, tab, highlight);
                     self.marks.splice(first..first + old_len as usize, fresh);
                     self.recompute();
                     self.line_count = new_count;
                     self.rev = rev;
-                    return;
+                    return true;
                 }
             }
         }
-        self.rebuild(doc, tab);
+        self.rebuild(doc, tab, highlight);
+        false
     }
 
-    fn rebuild(&mut self, doc: &Document, tab: usize) {
+    fn rebuild(&mut self, doc: &Document, tab: usize, highlight: &HighlightCache) {
         let line_count = doc.line_count();
-        self.marks = scan(doc, 0, line_count.saturating_sub(1), tab);
+        self.marks = scan(doc, 0, line_count.saturating_sub(1), tab, highlight);
         self.line_count = line_count;
         self.doc = Some(doc.id());
         self.rev = doc.rev();
         self.tab = tab;
+        self.available = highlight.is_active();
+        self.colored = self.available && !highlight.is_behind();
         self.recompute();
     }
 
@@ -216,6 +323,8 @@ impl MinimapCache {
                     bucket.x1 = bucket.x1.max(mark.end);
                 }
                 bucket.inked += 1;
+                bucket.kinds[kind_index(mark.kind)] = bucket.kinds[kind_index(mark.kind)]
+                    .saturating_add(mark.end.saturating_sub(mark.start).max(1));
             }
         }
         self.bucket_count = bucket_count;
@@ -223,7 +332,13 @@ impl MinimapCache {
     }
 }
 
-fn scan(doc: &Document, first: usize, last: usize, tab: usize) -> Vec<LineMark> {
+fn scan(
+    doc: &Document,
+    first: usize,
+    last: usize,
+    tab: usize,
+    highlight: &HighlightCache,
+) -> Vec<LineMark> {
     let first = first.min(doc.line_count().saturating_sub(1));
     let last = last.min(doc.line_count().saturating_sub(1));
     if doc.line_count() == 0 || last < first {
@@ -231,7 +346,7 @@ fn scan(doc: &Document, first: usize, last: usize, tab: usize) -> Vec<LineMark> 
     }
     let mut out = Vec::with_capacity(last - first + 1);
     for line in first..=last {
-        out.push(line_mark(doc.line(line), tab));
+        out.push(line_mark(doc.line(line), tab, highlight.tokens(line)));
     }
     out
 }
@@ -296,6 +411,13 @@ pub fn slider(line_count: usize, first: usize, last: usize, content_h: f32) -> (
 mod tests {
     use super::*;
     use crate::model::doc::{Document, IndentStyle, LineEnding};
+    use crate::settings::Settings;
+    use crate::syntax::SyntaxRegistry;
+
+    /// Highlight cache with no provider: marks stay plain.
+    fn plain() -> HighlightCache {
+        HighlightCache::new()
+    }
 
     fn doc(text: &str) -> Document {
         Document::from_snapshot(7, "map.txt".into(), None, text.into(), 0, 0, LineEnding::Lf)
@@ -304,21 +426,39 @@ mod tests {
     fn fresh(text: &str) -> MinimapCache {
         let doc = doc(text);
         let mut cache = MinimapCache::default();
-        cache.sync(&doc, 4);
+        cache.sync(&doc, 4, &plain());
         cache
     }
 
     #[test]
     fn line_marks_track_indentation_and_trailing_space() {
         assert_eq!(
-            line_mark("    let value = 1;   ", 4),
-            LineMark { start: 4, end: 18 }
+            line_mark("    let value = 1;   ", 4, None),
+            LineMark {
+                start: 4,
+                end: 18,
+                kind: TokenKind::Plain,
+            }
         );
-        assert_eq!(line_mark("\t\tfoo", 4), LineMark { start: 8, end: 11 });
-        assert_eq!(line_mark("", 4), LineMark::default());
-        assert_eq!(line_mark("   ", 4), LineMark::default());
+        assert_eq!(
+            line_mark("\t\tfoo", 4, None),
+            LineMark {
+                start: 8,
+                end: 11,
+                kind: TokenKind::Plain,
+            }
+        );
+        assert_eq!(line_mark("", 4, None), LineMark::default());
+        assert_eq!(line_mark("   ", 4, None), LineMark::default());
         // Wide glyphs count as one display column each.
-        assert_eq!(line_mark("中文", 4), LineMark { start: 0, end: 2 });
+        assert_eq!(
+            line_mark("中文", 4, None),
+            LineMark {
+                start: 0,
+                end: 2,
+                kind: TokenKind::Plain,
+            }
+        );
     }
 
     #[test]
@@ -336,50 +476,44 @@ mod tests {
         assert_eq!(buckets.len(), 4);
         // One line per bucket: exact extents.
         assert_eq!(
-            buckets[0],
-            Bucket {
-                x0: 4,
-                x1: 5,
-                inked: 1,
-                lines: 1
-            }
+            (
+                buckets[0].x0,
+                buckets[0].x1,
+                buckets[0].inked,
+                buckets[0].lines
+            ),
+            (4, 5, 1, 1)
         );
         assert_eq!(
-            buckets[1],
-            Bucket {
-                x0: 2,
-                x1: 5,
-                inked: 1,
-                lines: 1
-            }
+            (
+                buckets[1].x0,
+                buckets[1].x1,
+                buckets[1].inked,
+                buckets[1].lines
+            ),
+            (2, 5, 1, 1)
         );
+        assert_eq!((buckets[2].inked, buckets[2].lines), (0, 1));
         assert_eq!(
-            buckets[2],
-            Bucket {
-                lines: 1,
-                ..Bucket::default()
-            }
-        );
-        assert_eq!(
-            buckets[3],
-            Bucket {
-                x0: 0,
-                x1: 4,
-                inked: 1,
-                lines: 1
-            }
+            (
+                buckets[3].x0,
+                buckets[3].x1,
+                buckets[3].inked,
+                buckets[3].lines
+            ),
+            (0, 4, 1, 1)
         );
 
         // Compressing two lines per bucket unions their extents.
         let buckets = cache.buckets(2);
         assert_eq!(
-            buckets[0],
-            Bucket {
-                x0: 2,
-                x1: 5,
-                inked: 2,
-                lines: 2
-            }
+            (
+                buckets[0].x0,
+                buckets[0].x1,
+                buckets[0].inked,
+                buckets[0].lines
+            ),
+            (2, 5, 2, 2)
         );
         assert_eq!((buckets[1].x0, buckets[1].x1), (0, 4));
         assert_eq!(buckets[1].density(), 0.5);
@@ -454,9 +588,9 @@ mod tests {
     ) {
         let before = doc.line_count();
         mutate(doc);
-        cache.sync(doc, 4);
+        cache.sync(doc, 4, &plain());
         let mut fresh = MinimapCache::default();
-        fresh.sync(doc, 4);
+        fresh.sync(doc, 4, &plain());
         assert_eq!(
             cache.marks(),
             fresh.marks(),
@@ -470,7 +604,7 @@ mod tests {
     fn incremental_updates_match_a_full_rebuild() {
         let mut doc = doc("fn main() {\n    let a = 1;\n}\n");
         let mut cache = MinimapCache::default();
-        cache.sync(&doc, 4);
+        cache.sync(&doc, 4, &plain());
         let baseline = cache.marks().to_vec();
 
         // Typing inside a line.
@@ -494,9 +628,9 @@ mod tests {
 
         // Undo restores the previous text and must converge to the baseline.
         doc.undo();
-        cache.sync(&doc, 4);
+        cache.sync(&doc, 4, &plain());
         let mut fresh = MinimapCache::default();
-        fresh.sync(&doc, 4);
+        fresh.sync(&doc, 4, &plain());
         assert_eq!(cache.marks(), fresh.marks(), "undo");
         assert_eq!(cache.marks().len(), baseline.len());
     }
@@ -505,23 +639,23 @@ mod tests {
     fn revision_gap_forces_a_full_rebuild() {
         let mut doc = doc("a\nb\nc\n");
         let mut cache = MinimapCache::default();
-        cache.sync(&doc, 4);
+        cache.sync(&doc, 4, &plain());
         // Two mutations before the next sync: `edit_span` only describes the
         // second one, so the cache must rebuild.
         doc.click(0, 0, false);
         doc.insert_text("x");
         doc.insert_text("y");
-        cache.sync(&doc, 4);
-        assert_eq!(cache.marks()[0], line_mark(doc.line(0), 4));
+        cache.sync(&doc, 4, &plain());
+        assert_eq!(cache.marks()[0], line_mark(doc.line(0), 4, None));
     }
 
     #[test]
     fn tab_width_change_rebuilds() {
         let mut doc = doc("\tindented\n");
         let mut cache = MinimapCache::default();
-        cache.sync(&doc, 4);
+        cache.sync(&doc, 4, &plain());
         assert_eq!(cache.marks()[0].start, 4);
-        cache.sync(&doc, 8);
+        cache.sync(&doc, 8, &plain());
         assert_eq!(cache.marks()[0].start, 8);
         // No document change needed for a rebuild.
         doc.click(0, 0, false);
@@ -531,7 +665,7 @@ mod tests {
     fn random_edits_converge_to_a_rebuild() {
         let mut doc = doc("alpha\nbeta\ngamma\ndelta\n");
         let mut cache = MinimapCache::default();
-        cache.sync(&doc, 4);
+        cache.sync(&doc, 4, &plain());
         let mut expected_incremental = 0usize;
         let mut seed = 0x1234_5678_u64;
         for step in 0..400 {
@@ -569,17 +703,13 @@ mod tests {
                     doc.insert_text(&"x".repeat(count));
                 }
             }
-            // The revision gap rule is the fallback; count how often the fast
-            // path actually ran so the test cannot silently stop covering it.
-            let incremental = cache.doc == Some(doc.id())
-                && cache.rev + 1 == doc.rev()
-                && cache.marks.len() == cache.line_count;
-            cache.sync(&doc, 4);
-            if incremental {
+            // Count the fast path itself so the test cannot silently fall back
+            // to full rebuilds.
+            if cache.sync(&doc, 4, &plain()) {
                 expected_incremental += 1;
             }
             let mut fresh = MinimapCache::default();
-            fresh.sync(&doc, 4);
+            fresh.sync(&doc, 4, &plain());
             assert_eq!(
                 cache.marks(),
                 fresh.marks(),
@@ -593,11 +723,124 @@ mod tests {
         );
     }
 
+    fn rust_doc(text: &str) -> Document {
+        Document::from_snapshot(
+            9,
+            "map.rs".into(),
+            Some("map.rs".into()),
+            text.into(),
+            0,
+            0,
+            LineEnding::Lf,
+        )
+    }
+
+    /// Highlight cache primed to completion for `doc` (Rust provider).
+    fn colored(doc: &Document) -> HighlightCache {
+        let registry = SyntaxRegistry::with_builtins();
+        let mut highlight = HighlightCache::new();
+        assert!(highlight.sync(doc, &registry, &Settings::default(), 100_000, None));
+        highlight
+    }
+
+    #[test]
+    fn line_marks_pick_the_dominant_styled_token() {
+        let tokens = [
+            Highlight {
+                start: 0,
+                end: 3,
+                kind: TokenKind::Keyword,
+            },
+            Highlight {
+                start: 8,
+                end: 21,
+                kind: TokenKind::String,
+            },
+            Highlight {
+                start: 21,
+                end: 22,
+                kind: TokenKind::Punctuation,
+            },
+        ];
+        let mark = line_mark("let x = \"long string\";", 4, Some(&tokens));
+        assert_eq!(mark.kind, TokenKind::String);
+        // Punctuation is structural and never wins.
+        let punct = [Highlight {
+            start: 0,
+            end: 4,
+            kind: TokenKind::Punctuation,
+        }];
+        assert_eq!(line_mark("(){}", 4, Some(&punct)).kind, TokenKind::Plain);
+        assert_eq!(line_mark("plain", 4, None).kind, TokenKind::Plain);
+    }
+
+    #[test]
+    fn token_colors_are_aggregated_into_buckets() {
+        let doc = rust_doc("fn main() {\n    let s = \"a long string\";\n}\n");
+        let highlight = colored(&doc);
+        let mut cache = MinimapCache::default();
+        cache.sync(&doc, 4, &highlight);
+        assert!(
+            cache.marks().iter().any(|mark| mark.kind.is_styled()),
+            "no styled line marks"
+        );
+        assert_eq!(cache.marks()[1].kind, TokenKind::String);
+        {
+            let buckets = cache.buckets(3);
+            assert!(
+                buckets.iter().any(|bucket| bucket.kind().is_styled()),
+                "no styled buckets"
+            );
+        }
+    }
+
+    #[test]
+    fn enabling_syntax_recolors_the_map() {
+        let doc = rust_doc("fn main() {}\n");
+        let mut cache = MinimapCache::default();
+        cache.sync(&doc, 4, &HighlightCache::new());
+        assert!(cache
+            .marks()
+            .iter()
+            .all(|mark| mark.kind == TokenKind::Plain));
+        cache.sync(&doc, 4, &colored(&doc));
+        assert!(cache.marks().iter().any(|mark| mark.kind.is_styled()));
+    }
+
+    #[test]
+    fn colored_incremental_edits_match_a_rebuild() {
+        let mut doc = rust_doc("fn main() {\n    let s = \"text\";\n}\n");
+        let registry = SyntaxRegistry::with_builtins();
+        let settings = Settings::default();
+        let mut highlight = HighlightCache::new();
+        assert!(highlight.sync(&doc, &registry, &settings, 100_000, None));
+        let mut cache = MinimapCache::default();
+        cache.sync(&doc, 4, &highlight);
+        let mut colored_steps = 0;
+        for step in 0..40 {
+            doc.click(1, 4, false);
+            doc.insert_text(if step % 3 == 0 { "\"x\"" } else { "y" });
+            assert!(highlight.sync(&doc, &registry, &settings, 100_000, None));
+            cache.sync(&doc, 4, &highlight);
+            let mut fresh = MinimapCache::default();
+            fresh.sync(&doc, 4, &highlight);
+            assert_eq!(cache.marks(), fresh.marks(), "step {step}");
+            assert_eq!(cache.max_columns(), fresh.max_columns(), "step {step}");
+            if cache.marks().iter().any(|mark| mark.kind.is_styled()) {
+                colored_steps += 1;
+            }
+        }
+        assert!(
+            colored_steps > 10,
+            "colors disappeared during incremental edits ({colored_steps})"
+        );
+    }
+
     #[test]
     fn reset_clears_the_slot() {
         let doc = doc("one\n");
         let mut cache = MinimapCache::default();
-        cache.sync(&doc, 4);
+        cache.sync(&doc, 4, &plain());
         assert!(!cache.is_empty());
         cache.reset();
         assert!(cache.is_empty());

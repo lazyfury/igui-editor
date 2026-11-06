@@ -49,18 +49,18 @@ Facts the design depends on, verified in the tree:
 | Option | How | Verdict |
 |---|---|---|
 | A. Structural blocks (chosen) | Cache one `(indent, end)` mark per line; aggregate lines into ~2 px buckets and paint one low-alpha rect per bucket | Chosen: font-independent, no glyph measuring, deterministic, ~1 draw command per bucket, unit-testable |
-| B. Syntax-tinted runs | Same as A but with up to K token-colored spans per bucket | Deferred: +commands and a dependency on the highlight cache for a thumbnail; layer on A later if the plain blocks read poorly |
+| B. Syntax-tinted buckets | Same as A, but the bucket's dominant token class selects its color | Delivered on top of A: no extra draw commands, one color per bucket |
 | C. Tiny-font text thumbnail | Draw each line at 2–3 px | Rejected: tiny runs are illegible, force text measurement and font fallback for every line, and blow up the `DrawList` |
 | D. Render the editor into a scaled sub-viewport | Engine `SubViewport` render target | Rejected: the minimap shows *off-screen* content, so it would have to render the whole document (up to 20k lines) to a texture every edit; cost is proportional to the document, not to the map |
 
 A is the smallest surface that answers "where am I and what shape is this
-file". B is a visual upgrade that can ship later without changing geometry,
-state or input.
+file"; B adds the syntax-colored reading without changing geometry, state or
+input.
 
 ## Content model (`src/model/minimap.rs`, pure Rust)
 
 ```text
-LineMark { start: u32, end: u32 }   // first/last non-blank column (tabs expanded)
+LineMark { start: u32, end: u32, kind: TokenKind }
 ```
 
 One mark per logical line, independent of viewport width, font and theme:
@@ -68,6 +68,9 @@ One mark per logical line, independent of viewport width, font and theme:
 - scan the line's chars; `start` = column of the first non-blank char,
   `end` = one past the column of the last non-blank char (trailing whitespace
   ignored, tabs count as `tab_width` columns);
+- `kind` = the styled token class covering the most line bytes (keywords,
+  strings, comments, numbers, …); punctuation is structural and folds into
+  `Plain`, so a line of braces never wins a color;
 - a blank line is `start == end == 0` and contributes no ink;
 - `scale_col = max(end).clamp(1, MAX_COLUMNS)` normalizes x; ink beyond
   `MAX_COLUMNS` is clipped to the right edge, so one minified line cannot
@@ -85,12 +88,14 @@ line_at(y)   = floor((y - map_top) / content_h * line_count)  // clamped
 slider(line_count, first_visible, last_visible, content_h) -> (top, height)
 ```
 
-Each bucket is `{ x0: min(start), x1: max(end), inked: count(end > start),
-lines: count }`; `x0/x1` are painted with alpha
-`INK_MIN + (INK_MAX - INK_MIN) * inked / lines`, which makes dense code read
-darker than sparse code. Buckets with `x1 <= x0` (blank or entirely clipped)
-are skipped. One rect per bucket: at a 700 px editor that is at most ~350
-commands, capped at `MAX_BUCKETS` on very tall windows.
+Each bucket is `{ x0: min(start), x1: max(end), inked, lines, kinds }`, where
+`kinds` accumulates the column coverage of each class and `kind()` returns the
+dominant styled class. `x0/x1` are painted with alpha
+`INK_MIN + (INK_MAX - INK_MIN) * inked / lines` for plain buckets and
+`STYLED_MIN + (STYLED_MAX - STYLED_MIN) * density` for colored ones, which
+makes dense code read darker than sparse code. Buckets with `x1 <= x0` (blank
+or entirely clipped) are skipped. One rect per bucket: at a 700 px editor that
+is at most ~350 commands, capped at `MAX_BUCKETS` on very tall windows.
 
 Aggregation is `O(line_count)` arithmetic over cached marks (no char scanning,
 no text measurement) and runs only when the document revision or the bucket
@@ -106,11 +111,13 @@ count changed — i.e. on edits and on resize, never on scroll or hover.
   buckets: Vec<Bucket>, bucket_count: usize }
 ```
 
-`sync(&doc, tab)` cases:
+`sync(&doc, tab, highlight)` cases:
 
 | Situation | Work |
 |---|---|
-| Same `(doc, rev, tab)` | none |
+| Same `(doc, rev, tab)` and colors are settled | none |
+| Highlighting became complete for the revision | full rebuild to fill token colors |
+| Highlighting is behind after an edit | incremental; the changed lines use the tokens that are already available, untouched lines keep their colors |
 | Other document / reload (`edit_span() == None`) | rebuild all marks |
 | Revision gap larger than one (`doc.rev() != cache.rev + 1`) | rebuild all marks; several mutations landed between two frames, so the single cached `edit_span` cannot describe them |
 | Edit with the same line count | rescan `[first..=last]` lines, splice marks |
@@ -155,10 +162,11 @@ in `MinimapUi` during paint, matching the scrollbar/tab pattern.
   its own rect with `p.bg` (opaque, so the current-line tint cannot bleed
   through), draws a 1 px `p.border` rule on its left edge, the bucket rects, and
   finally the viewport slider.
-- Ink: `p.text.alpha_mul(0.10 + 0.22 * density)`; slider: fill
-  `p.text.alpha_mul(0.05)` plus a 1 px `p.dim.alpha_mul(0.45)` border, painted
-  only while the document can scroll. Square corners, no radius, no shadow —
-  consistent with the theme spec.
+- Ink: plain buckets use `p.text.alpha_mul(0.10 + 0.22 * density)`; styled
+  buckets use `theme.token_color(kind)` at `0.45 + 0.30 * density`, matching the
+  editor's syntax palette. Slider: fill `p.text.alpha_mul(0.08)` plus a 1 px
+  `p.dim.alpha_mul(0.60)` border, painted only while the document can scroll.
+  Square corners, no radius, no shadow — consistent with the theme spec.
 - The current-line fill and any other full-width editor chrome must stop at the
   map's left edge; the map repaints its own background over the strip.
 
@@ -218,6 +226,7 @@ paint.
 | `Metrics::minimap` (width) | 84 px | `theme.rs` |
 | `MAP_ROW_H` (minimum map row) | 2.0 px | `model/minimap.rs` |
 | `MAX_COLUMNS` (x normalization cap) | 120 | `model/minimap.rs` |
+| Styled bucket alpha | 0.45 + 0.30 × density | `ui/minimap.rs` |
 | `MAX_BUCKETS` (draw-command cap) | 512 | `model/minimap.rs` |
 | `MAX_MINIMAP_BYTES` / `MAX_MINIMAP_LINES` | 2 MB / 20 000 | `model/minimap.rs` |
 | `MIN_TEXT_W` (auto-hide) | 360 px | `ui/minimap.rs` |
@@ -251,16 +260,19 @@ Unit tests (`src/model/minimap.rs`):
    short-file top alignment vs compressed fill, bucket cap;
 3. incremental parity: for typing, newline insert/delete, multi-line indent,
    undo and replace-all, incremental marks equal a fresh build;
-4. geometry helpers: `line_at` top/bottom/blank-area clamping, slider top and
+4. color: dominant-style selection (punctuation never wins), bucket color
+   aggregation, enabling syntax recolors the map, colored incremental edits
+   match a rebuild;
+5. geometry helpers: `line_at` top/bottom/blank-area clamping, slider top and
    height for wrap and non-wrap spans, minimum slider height;
-5. caps: `is_active` is false above 2 MB / 20k lines and for no document.
+6. caps: `is_active` is false above 2 MB / 20k lines and for no document.
 
 `--selfcheck` (real pipeline, recorded frame):
 
 - with a file open, `editor.minimap` is non-zero, sits left of the scrollbar and
   `text_rect.right == minimap.left`;
-- recorded fill commands exist inside the map rect and the slider rect; command
-  count stays under the documented cap;
+- recorded fill commands exist inside the map rect and the slider rect, span the
+  strip, and the command count stays under the documented cap;
 - a click in the map changes `scroll_y` to the expected line and does **not**
   move the caret; a drag scrolls monotonically and clamps at both ends;
 - `ToggleMinimap` (action **and** `⌘⌥M`) removes the map, widens `text_rect`,
@@ -287,7 +299,7 @@ response (host/paint change).
 
 Decided:
 
-- structural blocks (A) v1; syntax-tinted runs (B) only as a later visual layer;
+- structural blocks (A) plus dominant-style bucket colors (B);
 - logical lines as content space, visual rows only for slider/scroll mapping;
 - default on, fixed 84 px, auto-hide under 360 px of text area, caps at
   2 MB / 20k lines;
@@ -298,7 +310,6 @@ Decided:
 Open (not blocking):
 
 - whether find-match and diagnostic ticks earn their draw commands later;
-- whether the bucket color should be the dominant token kind (option B);
 - whether very wide lines should pan the map to the caret instead of clipping.
 
 ## Delivered
@@ -306,10 +317,10 @@ Open (not blocking):
 Implemented in slices S1–S5:
 
 - `src/model/minimap.rs` — line marks, incremental cache, bucket and geometry
-  helpers; 12 unit tests covering marks, caps, aggregation, short/long
-  geometry, the slider, incremental parity (typing, newline, line delete,
-  indent, undo and a 400-step random edit sequence), a revision gap and
-  tab-width changes.
+  helpers; 16 unit tests covering marks, dominant token color, bucket
+  aggregation, caps, short/long geometry, the slider, incremental parity
+  (typing, newline, line delete, indent, undo, colored edits and a 400-step
+  random edit sequence), a revision gap and tab-width changes.
 - `src/ui/minimap.rs` — reserved width, paint, viewport slider, click/drag
   mapping.
 - `src/ui/editor.rs` — strip reservation, paint hook, hover/double-click guards,
@@ -322,22 +333,24 @@ Implemented in slices S1–S5:
 - `src/selfcheck.rs` — `check_minimap`: geometry, draw-command cap, click/drag
   (caret untouched), toggle + persistence, auto-hide, soft wrap, no document.
 
-Measured (macOS arm64, bench profile, 4,800-line fixture): full build **0.104
-ms**, incremental **0.015 ms**, Edit-view typing **0.333 → 0.418 ms/frame** and
-**763 → 1120 commands**; idle frames are unchanged (the map lives in the cached
+Measured (macOS arm64, bench profile): full build **0.116 ms** on the 4,800-line
+Markdown fixture, incremental **0.014 ms**, and Edit-view typing on a 4,760-line
+JavaScript fixture (syntax colors active) **0.361 → 0.369 ms/frame** and
+**953 → 1310 commands**; idle frames are unchanged (the map lives in the cached
 `DrawList`).
 
 Deviations from the plan:
 
 - short documents keep 2 px rows and stay top-aligned; only documents taller
   than the box are compressed to fill it;
-- buckets are plain ink rectangles without syntax colors (option B is still a
-  possible later layer);
+- bucket colors are the bucket's dominant styled class (one color per row, no
+  per-glyph spans), which keeps the draw-command budget flat;
 - the Markdown typing benchmark opens Split view, where the strip auto-hides,
-  so a dedicated Edit-view `editor_typing(..., minimap)` benchmark was added to
-  attribute the cost;
+  so a dedicated Edit-view `editor_typing(..., minimap)` benchmark was added;
+  it uses a JavaScript fixture so highlighting (and therefore colors) is active
+  without spawning a language server;
 - `MinimapUi` is nested in `EditorUi`, and `MinimapCache::marks()` is a
   test-only accessor.
 
-`scripts/check.sh` is green (392 unit tests + 2 doc tests, selfcheck including
+`scripts/check.sh` is green (401 unit tests + 2 doc tests, selfcheck including
 `check_minimap`); the numbers above come from `scripts/bench.sh`.

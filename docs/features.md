@@ -276,7 +276,11 @@ handle: drag it to resize (160–420 px), double-click resets to 224 px. The pan
 is persisted in the session and can be hidden from View → Outline or `⌘⌥O`.
 Symbols are transient LSP state, not saved to disk.
 
-When there is no LSP outline, Markdown documents list their headings instead:
+When there is no LSP outline, native scanners keep the panel useful offline:
+GDScript files list `class_name`/inner classes, functions (with their
+indentation depth), signals, constants, variables and enums, skipping function
+locals, comments and multiline strings. Markdown documents list their headings
+instead:
 ATX (`#`…`######`) and setext (`===` / `---`) headings appear with an `H`
 marker at their level, and clicking one jumps to its source line. Headings in
 fenced or indented code are skipped, and blockquote (`>`) prefixes are
@@ -686,8 +690,11 @@ A low-contrast structural thumbnail of the whole document sits between the text
 area and the vertical scrollbar. Each line contributes its leading indentation
 and its ink extent (trailing whitespace ignored); lines are grouped into 2 px
 rows, so the strip shows the document's shape rather than readable glyphs, and
-its draw cost is bounded by the window height, not the file size. The visible
-viewport is drawn as a bordered translucent slider.
+its draw cost is bounded by the window height, not the file size. Buckets carry
+the dominant syntax class of the lines they cover (keyword, string, comment,
+number, …), so the map is syntax-colored; files without a provider stay
+neutral, and colors land once highlighting has finished. The visible viewport is
+drawn as a bordered translucent slider.
 
 - click anywhere on the strip to scroll that line to the top; the caret and
   selection do not move. Drag to scroll continuously.

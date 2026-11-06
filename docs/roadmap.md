@@ -47,9 +47,10 @@ Reduced (M15, Session 5): image-asset preview, Git staging/commit/history,
 Material file-type icons and the extra language-server specs were removed;
 undo history and crash snapshots are bounded. Session v18 drops `image_preview`.
 
-Delivered (M16): the editor minimap strip — a cached structural thumbnail with a
-viewport slider, click/drag scrolling, the View → Minimap toggle (`⌘⌥M`) and
-`session.minimap` (session v19).
+Delivered (M16): the editor minimap strip — a cached, syntax-colored structural
+thumbnail with a viewport slider, click/drag scrolling, the View → Minimap
+toggle (`⌘⌥M`) and `session.minimap` (session v19) — plus a native GDScript
+outline fallback for files opened without Godot's language server.
 
 Next candidates: cross-file undo and incremental preview layout for very large
 documents.

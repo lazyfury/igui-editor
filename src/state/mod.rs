@@ -72,7 +72,7 @@ mod watch;
 mod workspace;
 
 pub use dock::{DockId, Panel};
-pub use outline::{MarkdownOutline, MARKDOWN_HEADING_KIND};
+pub use outline::{NativeOutline, MARKDOWN_HEADING_KIND};
 pub use references::ReferencesUi;
 
 pub const MAX_RECENT: usize = 8;
@@ -693,7 +693,7 @@ pub struct OutlineUi {
     /// Visible row index and its hit rectangle, recorded during paint.
     pub rows: Vec<(usize, Rect)>,
     /// Cached Markdown heading rows for the active document revision.
-    pub markdown: MarkdownOutline,
+    pub native: NativeOutline,
 }
 
 /// Bottom-dock PROBLEMS panel: a workspace-wide, click-to-jump diagnostic list.

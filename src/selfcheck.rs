@@ -52,11 +52,12 @@ pub fn run() -> Result<(), String> {
         .and_then(|()| check_keymaps(&dir))
         .and_then(|()| check_goto_line(&dir))
         .and_then(|()| check_markdown_outline(&dir))
+        .and_then(|()| check_godot_outline(&dir))
         .and_then(|()| check_minimap(&dir));
     let _ = fs::remove_dir_all(&dir);
     if result.is_ok() {
         println!(
-            "selfcheck ok: main flow + workspace/recovery + explorer filters + typing + LSP + keymap + go-to-line + Markdown outline + minimap checks"
+            "selfcheck ok: main flow + workspace/recovery + explorer filters + typing + LSP + keymap + go-to-line + Markdown/GDScript outline + minimap checks"
         );
     }
     result
@@ -5054,6 +5055,18 @@ fn check_markdown_outline(dir: &Path) -> Result<(), String> {
     for heading in ["First heading", "Second heading", "Third heading"] {
         expect(&texts(&frame), heading, "Markdown outline row")?;
     }
+    // The right dock's shared tab strip must name the panel, including at the
+    // narrow window sizes a restored session can produce.
+    expect(&texts(&frame), "OUTLINE", "outline dock tab")?;
+    harness.viewport = ViewportSize::new(Size::new(945.0, 568.0));
+    let narrow = harness.frame()?;
+    expect(
+        &texts(&narrow),
+        "OUTLINE",
+        "outline dock tab (narrow window)",
+    )?;
+    harness.viewport = ViewportSize::new(Size::new(WIDTH, HEIGHT));
+    harness.frame()?;
 
     harness.click(target);
     harness.frame()?;
@@ -5080,11 +5093,11 @@ fn check_minimap(dir: &Path) -> Result<(), String> {
     for index in 0..400 {
         let indent = " ".repeat((index % 4) * 4);
         text.push_str(&format!(
-            "{indent}line {index} {}\n",
+            "{indent}const value_{index} = \"{}\";\n",
             "x".repeat(index % 30)
         ));
     }
-    let path = map_dir.join("minimap.txt");
+    let path = map_dir.join("minimap.js");
     fs::write(&path, &text).map_err(|error| format!("minimap fixture: {error}"))?;
     let config = map_dir.join("session.conf");
     let mut harness = Harness::new(Some(path), config.clone(), ScriptedDialogs::new(vec![]));
@@ -5164,6 +5177,22 @@ fn check_minimap(dir: &Path) -> Result<(), String> {
     }
     if slider.is_empty() || !map.contains_rect(slider) {
         return Err("the minimap viewport slider is missing or outside the strip".into());
+    }
+    {
+        // The JS fixture has keywords and strings on every line, so the cache
+        // that paint reads must contain styled buckets (syntax colors).
+        let mut state = harness.app.state_mut();
+        let buckets = crate::model::minimap::bucket_count(line_count, map.height());
+        let colored = state
+            .editor
+            .minimap
+            .cache
+            .buckets(buckets)
+            .iter()
+            .any(|bucket| bucket.kind() != crate::syntax::TokenKind::Plain);
+        if !colored {
+            return Err("the minimap buckets carry no syntax color".into());
+        }
     }
 
     // Clicking the strip scrolls the clicked line to the top and keeps the
@@ -5265,7 +5294,7 @@ fn check_minimap(dir: &Path) -> Result<(), String> {
 
     // Auto-hide: a narrow window drops the strip without changing the toggle.
     let mut close = Harness::new(
-        Some(map_dir.join("minimap.txt")),
+        Some(map_dir.join("minimap.js")),
         map_dir.join("auto-hide.conf"),
         ScriptedDialogs::new(vec![]),
     );
@@ -5357,6 +5386,66 @@ fn check_minimap(dir: &Path) -> Result<(), String> {
     empty.frame()?;
     if !empty.app.state().editor.minimap.rect.is_empty() {
         return Err("the minimap was painted without a document".into());
+    }
+    Ok(())
+}
+
+/// Native GDScript outline: rows appear without a language server, the dock
+/// tab is painted, and a click jumps to the declaration.
+fn check_godot_outline(dir: &Path) -> Result<(), String> {
+    let path = dir.join("outline.gd");
+    fs::write(
+        &path,
+        "class_name Brick\nextends Node\n\nsignal died\n\n\
+         func _ready():\n\tvar local = 1\n\nfunc hit(amount):\n\tpass\n",
+    )
+    .map_err(|error| format!("GDScript outline fixture: {error}"))?;
+    let mut harness = Harness::new(
+        Some(path.clone()),
+        dir.join("outline-gd-session.conf"),
+        ScriptedDialogs::new(vec![]),
+    );
+    let frame = harness.frame()?;
+    for name in ["OUTLINE", "Brick", "died", "_ready", "hit"] {
+        expect(&texts(&frame), name, "native GDScript outline row")?;
+    }
+    if harness.app.state().outline.rows.len() < 4 {
+        return Err("the GDScript outline painted no local rows".into());
+    }
+    let target = {
+        let mut state = harness.app.state_mut();
+        // Use the document's canonical path: the fixture directory may resolve
+        // through a symlink (macOS `/var` -> `/private/var`).
+        let doc_path = state
+            .ws
+            .active_doc()
+            .and_then(|doc| doc.path())
+            .map(Path::to_path_buf)
+            .ok_or("no active GDScript document")?;
+        let symbols = state.outline_symbols_for(&doc_path);
+        let index = symbols
+            .iter()
+            .position(|symbol| symbol.name == "hit")
+            .ok_or("the GDScript outline has no hit row")?;
+        state
+            .outline
+            .rows
+            .iter()
+            .find(|(row, _)| *row == index)
+            .map(|(_, rect)| rect.center())
+            .ok_or("the hit outline row was not painted")?
+    };
+    harness.click(target);
+    harness.frame()?;
+    if harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .map_or(0, |doc| doc.line_col().0)
+        != 8
+    {
+        return Err("clicking a native GDScript outline row did not jump".into());
     }
     Ok(())
 }

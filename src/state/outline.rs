@@ -1,27 +1,28 @@
 //! Outline rows for the active document.
 //!
-//! LSP `textDocument/documentSymbol` results always win. Markdown files usually
-//! have no language server, so their headings are derived by a line scanner and
-//! cached by `(document id, revision)`: a repaint reuses the rows instead of
-//! re-scanning the buffer.
+//! LSP `textDocument/documentSymbol` results always win. Markdown headings and
+//! GDScript declarations are derived by line scanners for files that usually
+//! have no running language server, and cached by `(document id, revision)`:
+//! a repaint reuses the rows instead of re-scanning the buffer.
 
 use std::path::Path;
 
 use super::*;
+use crate::model::godot::{self, OutlineKind};
 use crate::model::lsp::OutlineSymbol;
 use crate::model::markdown;
 
 /// Synthetic symbol kind for a Markdown heading row.
 pub const MARKDOWN_HEADING_KIND: u32 = 100;
 
-/// Cached Markdown heading rows for one document revision.
+/// Cached native outline rows for one document revision.
 #[derive(Clone, Debug, Default)]
-pub struct MarkdownOutline {
+pub struct NativeOutline {
     key: Option<(u64, u64)>,
     rows: Vec<OutlineSymbol>,
 }
 
-impl MarkdownOutline {
+impl NativeOutline {
     fn cached(&self, key: (u64, u64)) -> Option<&[OutlineSymbol]> {
         (self.key == Some(key)).then_some(self.rows.as_slice())
     }
@@ -40,46 +41,78 @@ impl MarkdownOutline {
 }
 
 impl AppState {
-    /// Outline rows for `path`: LSP symbols first, then Markdown headings.
+    /// Outline rows for `path`: LSP symbols first, then the native fallbacks
+    /// (Markdown headings, GDScript declarations).
     ///
-    /// The Markdown rows are cached for the active document revision and only
+    /// The native rows are cached for the active document revision and only
     /// derived when that document revision has changed.
     pub fn outline_symbols_for(&mut self, path: &Path) -> Vec<OutlineSymbol> {
         let lsp = self.lsp.symbols_for(path);
         if !lsp.is_empty() {
             let rows = lsp.to_vec();
-            self.outline.markdown.clear();
+            self.outline.native.clear();
             return rows;
         }
-        if !markdown::is_markdown_path(path) {
-            self.outline.markdown.clear();
-            return Vec::new();
-        }
         let Some(doc) = self.ws.active_doc() else {
-            self.outline.markdown.clear();
+            self.outline.native.clear();
             return Vec::new();
         };
         if doc.path() != Some(path) {
-            self.outline.markdown.clear();
+            self.outline.native.clear();
             return Vec::new();
         }
         let key = (doc.id(), doc.rev());
-        if let Some(rows) = self.outline.markdown.cached(key) {
+        if let Some(rows) = self.outline.native.cached(key) {
             return rows.to_vec();
         }
-        let headings = markdown::headings(doc.text());
-        let rows: Vec<OutlineSymbol> = headings
-            .into_iter()
-            .map(|heading| OutlineSymbol {
-                name: heading.text,
-                kind: MARKDOWN_HEADING_KIND,
-                depth: heading.level.saturating_sub(1) as usize,
-                line: heading.line as u32,
-                character: 0,
-            })
-            .collect();
-        self.outline.markdown.store(key, rows.clone());
+        let rows: Vec<OutlineSymbol> = if markdown::is_markdown_path(path) {
+            markdown::headings(doc.text())
+                .into_iter()
+                .map(|heading| OutlineSymbol {
+                    name: heading.text,
+                    kind: MARKDOWN_HEADING_KIND,
+                    depth: heading.level.saturating_sub(1) as usize,
+                    line: heading.line as u32,
+                    character: 0,
+                })
+                .collect()
+        } else if is_gdscript(path) {
+            godot::outline(doc.text())
+                .into_iter()
+                .map(|row| OutlineSymbol {
+                    name: row.name,
+                    kind: godot_kind(row.kind),
+                    depth: row.depth,
+                    line: row.line,
+                    character: 0,
+                })
+                .collect()
+        } else {
+            self.outline.native.clear();
+            return Vec::new();
+        };
+        self.outline.native.store(key, rows.clone());
         rows
+    }
+}
+
+/// Whether `path` is a GDScript source file.
+fn is_gdscript(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("gd"))
+}
+
+/// Maps the native GDScript kinds onto LSP `SymbolKind` numbers so the shared
+/// outline renderer gives them the same marker and color as server symbols.
+fn godot_kind(kind: OutlineKind) -> u32 {
+    match kind {
+        OutlineKind::Class => 5,
+        OutlineKind::Function => 12,
+        OutlineKind::Signal => 24,
+        OutlineKind::Constant => 14,
+        OutlineKind::Variable => 13,
+        OutlineKind::Enum => 10,
     }
 }
 
@@ -186,6 +219,47 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["Uno", "Dos"]
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn gdscript_declarations_become_outline_rows_without_an_lsp() {
+        let dir = temp("godot");
+        let (mut state, path) = open(
+            &dir,
+            "brick.gd",
+            "class_name Brick\nextends Node\n\nsignal died\n\
+             @export var health = 100\n\nfunc _ready():\n\tvar local = 2\n\
+             \nfunc hit(amount):\n\tpass\n",
+        );
+        let rows = state.outline_symbols_for(&path);
+        let summary: Vec<(&str, u32, usize, u32)> = rows
+            .iter()
+            .map(|row| (row.name.as_str(), row.kind, row.depth, row.line))
+            .collect();
+        assert_eq!(
+            summary,
+            vec![
+                ("Brick", 5, 0, 0),
+                ("died", 24, 0, 3),
+                ("health", 13, 0, 4),
+                ("_ready", 12, 0, 6),
+                ("hit", 12, 0, 9),
+            ]
+        );
+        // Function locals are not members.
+        assert!(rows.iter().all(|row| row.name != "local"));
+
+        // The native rows follow edits through the revision cache.
+        let len = state.ws.active_doc().unwrap().text().len();
+        assert!(state.ws.active_doc_mut().unwrap().replace_range(
+            0,
+            len,
+            "func changed():\n\tpass\n"
+        ));
+        let rows = state.outline_symbols_for(&path);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "changed");
         let _ = std::fs::remove_dir_all(dir);
     }
 

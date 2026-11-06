@@ -116,6 +116,7 @@ Read the minimum set; do not preload the whole tree.
 | Find / replace / project search | `src/model/find.rs`, `src/ui/find_bar.rs`, `src/model/search.rs`, `src/ui/project_search.rs` | `src/model/replace.rs` for files. |
 | LSP (Rust/Godot) | `src/model/lsp.rs`, `src/ui/lsp.rs` | Godot attaches to the running editor (no headless spawn); references overlay in `src/state/references.rs` / `src/ui/references.rs`; symbol rename in `src/state/rename_symbol.rs` / `src/ui/rename_symbol.rs`; [`docs/services.md`](docs/services.md). |
 | Indentation / Format Document | `src/model/doc.rs`, `src/model/godot.rs` | Per-file tabs/spaces detection, GDScript `:` newline, `editor.format`; [`docs/design.md`](docs/design.md). |
+| Outline (LSP + native fallbacks) | `src/state/outline.rs`, `src/model/markdown.rs`, `src/model/godot.rs` | LSP symbols win; Markdown headings and GDScript declarations are the offline fallback. |
 | Typing aids: auto pairs, Markdown lists | `src/model/typing.rs`, `src/ui/editor.rs` | Decisions are pure (`typing.rs`); the editor only maps them to `Document` edits. Quote/bracket context comes from `AppState::code_at`. |
 | Terminal | `src/model/pty.rs`, `src/state/terminal.rs`, `src/ui/terminal.rs` | Login shell (`-l`), UTF-8 locale and augmented PATH are enforced for child processes. |
 | Git panel | `src/model/git.rs`, `src/ui/git.rs` | Service boundary in `docs/services.md`. |

@@ -445,16 +445,27 @@ Input -> SceneTree -> Layout -> Paint -> DrawList -> wgpu
 
 44. **The minimap is a cached structural thumbnail, not a second text view.**
     `model::minimap` reduces each logical line to its first/last non-blank
-    column, caches the marks per document revision, updates them from
-    `edit_span` (full rebuild on a load, a revision gap or a tab-width change)
-    and aggregates them into at most 512 buckets. `ui::minimap` paints one rect
-    per bucket between the text area and the vertical scrollbar, records the
-    strip and slider rectangles during paint, and maps clicks/drags to lines
-    (top-aligned, caret untouched) using logical lines even under soft wrap. It
-    is part of the editor's cached `DrawList`, so idle frames stay empty; the
-    map hides below 360 px of text area and above 2 MB/20k lines.
-    `session.minimap` persists the View toggle instead of adding a settings
-    row.
+    column and its most prominent styled token class, caches the marks per
+    document revision, updates them from `edit_span` (full rebuild on a load, a
+    revision gap or a tab-width change) and aggregates them into at most 512
+    buckets. `ui::minimap` paints one rect per bucket between the text area and
+    the vertical scrollbar, using the bucket's dominant syntax color (plain
+    text stays neutral), records the strip and slider rectangles during paint,
+    and maps clicks/drags to lines (top-aligned, caret untouched) using logical
+    lines even under soft wrap. It is part of the editor's cached `DrawList`, so
+    idle frames stay empty; the map hides below 360 px of text area and above
+    2 MB/20k lines. `session.minimap` persists the View toggle instead of
+    adding a settings row. Colors are filled once the highlight cache is
+    complete, so the budgeted catch-up never leaves permanently gray rows.
+45. **Outline fallbacks are native scanners, and LSP still wins.** The right
+    dock prefers `textDocument/documentSymbol`; when no server has symbols,
+    Markdown headings and GDScript declarations (`class_name`, inner classes,
+    functions, signals, constants, variables, enums) are derived by pure,
+    line-based scanners in `model::markdown` / `model::godot`, cached by
+    `(document id, revision)` and mapped onto the same `OutlineSymbol` rows and
+    markers. This keeps the panel useful for GDScript files when Godot is not
+    running and for Markdown files that have no server at all; function locals,
+    comments and multiline strings are skipped.
 
 ## Theme spec (geek / compact / no corners)
 

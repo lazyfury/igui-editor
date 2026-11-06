@@ -29,6 +29,21 @@ fn fixture(sections: usize) -> String {
     text
 }
 
+fn code_fixture(functions: usize) -> String {
+    let mut text = String::with_capacity(functions * 200);
+    for index in 0..functions {
+        text.push_str(&format!(
+            "function section_{index}(value) {{\n\
+             \tconst name = \"item {index}\";\n\
+             \t// section {index}\n\
+             \tconst result = value * {index} + name.length;\n\
+             \treturn result;\n\
+             }}\n\n"
+        ));
+    }
+    text
+}
+
 fn print_report(label: &str, report: igui_editor::bench::Report) {
     println!(
         "{label:<22} {:>8.3} ms/iter  {:>7} iters  {:>6} prims  {:>6} cmds  ({:?})",
@@ -60,8 +75,17 @@ fn main() {
     print_report("minimap build", map_build);
     let map_typing = igui_editor::bench::minimap_incremental(&text, 200);
     print_report("minimap incremental", map_typing);
+    // A JavaScript fixture keeps highlighting local around the edit and has no
+    // language server, so the map on/off rows measure the minimap's token
+    // colors rather than LSP serialization.
+    let code = code_fixture(680);
+    println!(
+        "code fixture: {} bytes, {} lines",
+        code.len(),
+        code.lines().count()
+    );
     for (label, enabled) in [("typing, map off", false), ("typing, map on", true)] {
-        match igui_editor::bench::editor_typing(&text, 60, 16, enabled) {
+        match igui_editor::bench::editor_typing(&code, 240, 0, enabled) {
             Ok(report) => print_report(label, report),
             Err(error) => {
                 eprintln!("editor typing benchmark failed: {error}");

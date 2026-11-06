@@ -258,6 +258,28 @@ mod tests {
     }
 
     #[test]
+    fn typing_on_the_first_line_converges_locally() {
+        let mut text = String::new();
+        for index in 0..200 {
+            text.push_str(&format!("const x{index} = \"s\";\n"));
+        }
+        let (dir, mut doc) = fixture("first-line", &text, "js");
+        let mut cache = HighlightCache::new();
+        let registry = SyntaxRegistry::with_builtins();
+        let settings = Settings::default();
+        assert!(cache.sync(&doc, &registry, &settings, FRAME_LINE_BUDGET, None));
+        doc.set_caret(0);
+        doc.insert_text("x");
+        assert!(cache.sync(&doc, &registry, &settings, FRAME_LINE_BUDGET, None));
+        assert!(
+            cache.resume <= 2,
+            "typing on line 0 re-tokenized {} lines",
+            cache.resume
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn budgeted_pass_resumes_until_complete() {
         let mut text = String::new();
         for index in 0..10 {

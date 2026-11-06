@@ -16,9 +16,11 @@ use igui_render::PaintContext;
 
 use crate::kit::RectExt;
 use crate::model::doc::Document;
+use crate::model::highlight::HighlightCache;
 use crate::model::minimap;
 use crate::model::wrap::WrapLayout;
 use crate::state::{AppState, Drag, Focus, MinimapUi};
+use crate::syntax::TokenKind;
 use crate::theme::Theme;
 
 /// Hide the map rather than shrink the text area below this width.
@@ -28,8 +30,11 @@ const INK_MIN: f32 = 0.10;
 /// Ink alpha for a fully inked bucket.
 const INK_MAX: f32 = 0.32;
 /// Viewport slider fill and border alpha.
-const SLIDER_FILL: f32 = 0.05;
-const SLIDER_BORDER: f32 = 0.45;
+const SLIDER_FILL: f32 = 0.08;
+const SLIDER_BORDER: f32 = 0.60;
+/// Styled (syntax-colored) bucket alpha range.
+const STYLED_MIN: f32 = 0.45;
+const STYLED_MAX: f32 = 0.75;
 
 /// Width the editor must reserve for the map, or 0 when it is disabled, above
 /// the file caps, or would leave too little room for text.
@@ -58,6 +63,7 @@ pub fn paint(
     ui: &mut MinimapUi,
     doc: &Document,
     wrap: &WrapLayout,
+    highlight: &HighlightCache,
     wrap_on: bool,
     map: Rect,
     first_row: usize,
@@ -70,7 +76,7 @@ pub fn paint(
     let line_count = doc.line_count();
     ui.rect = map;
     ui.slider = Rect::ZERO;
-    ui.cache.sync(doc, tab);
+    ui.cache.sync(doc, tab, highlight);
     if map.width() <= 1.0 || map.height() <= 1.0 || line_count == 0 {
         return;
     }
@@ -91,7 +97,6 @@ pub fn paint(
     let bucket_count = minimap::bucket_count(line_count, inner.height());
     let scale = ui.cache.max_columns().max(1) as f32;
     let row_h = content_h / bucket_count as f32;
-    let ink = theme.p.text;
     {
         let rows = ui.cache.buckets(bucket_count);
         for (index, bucket) in rows.iter().enumerate() {
@@ -103,10 +108,20 @@ pub fn paint(
             let x1 =
                 inner.left() + (bucket.x1.min(minimap::MAX_COLUMNS) as f32 / scale) * inner.width();
             let y = inner.top() + index as f32 * row_h;
-            let alpha = INK_MIN + (INK_MAX - INK_MIN) * bucket.density();
+            let density = bucket.density();
+            // Styled buckets carry the syntax color; plain ones stay neutral.
+            let kind = bucket.kind();
+            let (color, alpha) = if kind == TokenKind::Plain {
+                (theme.p.text, INK_MIN + (INK_MAX - INK_MIN) * density)
+            } else {
+                (
+                    theme.token_color(kind),
+                    STYLED_MIN + (STYLED_MAX - STYLED_MIN) * density,
+                )
+            };
             ctx.fill_rect(
                 Rect::from_min_size(Vec2::new(x0, y), Size::new((x1 - x0).max(1.0), row_h)),
-                ink.alpha_mul(alpha),
+                color.alpha_mul(alpha),
             );
         }
     }

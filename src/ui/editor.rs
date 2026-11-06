@@ -1598,6 +1598,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             &mut state.editor.minimap,
             doc,
             &state.editor.wrap,
+            &state.highlight,
             wrap_on,
             map,
             first_row,

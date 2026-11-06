@@ -17,6 +17,7 @@ use igui_ui::TextMeasurer;
 use crate::app::EditorApp;
 use crate::dialogs::ScriptedDialogs;
 use crate::model::doc::{Document, LineEnding};
+use crate::model::highlight::HighlightCache;
 use crate::model::markdown;
 use crate::model::minimap::MinimapCache;
 use crate::theme::{Mode, Theme};
@@ -132,7 +133,7 @@ pub fn minimap_build(text: &str, iterations: usize) -> Report {
     let mut buckets = 0;
     for _ in 0..iterations {
         let mut cache = MinimapCache::default();
-        cache.sync(&doc, 4);
+        cache.sync(&doc, 4, &HighlightCache::new());
         buckets = cache.buckets(256).len();
     }
     let mut report = Report::new(iterations, start.elapsed());
@@ -156,11 +157,11 @@ pub fn minimap_incremental(text: &str, iterations: usize) -> Report {
         LineEnding::Lf,
     );
     let mut cache = MinimapCache::default();
-    cache.sync(&doc, 4);
+    cache.sync(&doc, 4, &HighlightCache::new());
     let start = Instant::now();
     for _ in 0..iterations {
         doc.insert_text("x");
-        cache.sync(&doc, 4);
+        cache.sync(&doc, 4, &HighlightCache::new());
         let _ = cache.buckets(256);
     }
     let mut report = Report::new(iterations, start.elapsed());
@@ -187,7 +188,10 @@ pub fn editor_typing(
         std::process::id()
     ));
     std::fs::create_dir_all(&dir).map_err(|error| format!("fixture dir: {error}"))?;
-    let file = dir.join("bench.txt");
+    // A `.js` path enables syntax highlighting (and therefore the colored
+    // minimap) without a language server: Rust would spawn rust-analyzer and
+    // measure its didChange serialization instead of the editor.
+    let file = dir.join("bench.js");
     std::fs::write(&file, text).map_err(|error| format!("fixture: {error}"))?;
     let config = dir.join("session.conf");
     let mut app = EditorApp::with_config(
