@@ -502,6 +502,7 @@ Every row applies immediately and is stored in the session file.
 | View | Sidebar Width | number | 180–420 px |
 | Explorer | Hidden Files | switch | on / off (dot entries; default off) |
 | Explorer | Ignored Files | choice (arrows) | OFF / DIM / HIDE (generated + temp files; default DIM) |
+| Explorer | File Icons | switch | on / off (installed VS Code Material Icon Theme; default on) |
 | Language | Language Intelligence | switch | on / off (start/stop all language servers) |
 | Language | Trust Local Servers | switch | on / off (allow repository `node_modules/.bin` shims) |
 
@@ -533,6 +534,20 @@ caret. `Esc` (or `⌘,`) closes.
 | > 8 MB | preview disabled (banner); editing continues |
 | > 32 MB | opening refused with a status-bar error |
 | preview > 512 KB | first 512 KB rendered + "truncated" banner |
+
+## Explorer file icons
+
+The Explorer paints file and folder icons from the installed VS Code **Material
+Icon Theme** extension (`pkief.material-icon-theme-*` in the usual extension
+directories; `IGUI_ICON_THEME` overrides). Nothing is vendored: the theme JSON
+is parsed at runtime and the SVGs are rasterized through the engine's SVG
+parser. Lookup follows VS Code: exact file name, then compound extension
+(`d.ts` before `ts`), then the theme default; folders use their named or
+folder-open artwork. The light theme applies the extension's `light` overrides.
+
+**Explorer → File Icons** turns the whole surface off and back on; the choice
+persists in the session. Without a theme (or with icons off) folders keep the
+chevron marker. Details and limits: [`docs/file-icons.md`](file-icons.md).
 
 ## Projects, welcome and drag & drop
 
@@ -820,8 +835,8 @@ fixed-atlas limit and asserts that none rasterize to empty slots.
 - **Window state**: size, position and the maximized flag are persisted and
   restored (fullscreen is not persisted). The window has a 640×500 logical
   minimum size so the shell and its overlays keep a usable layout.
-- Session format is version 19 (v19 added `minimap`; v18 removed the
-  image-preview key; v17 added `image_preview`; v16 added `show_hidden` and `ignored_files`;
+- Session format is version 20 (v20 added `file_icons`; v19 added `minimap`; v18
+  removed the image-preview key; v17 added `image_preview`; v16 added `show_hidden` and `ignored_files`;
   v15 added `bottom_tab` and
   `indent_tabs`; v14 split
   `recent_project.*` / `recent_file.*`; v13 added `trust_local_servers`, v12

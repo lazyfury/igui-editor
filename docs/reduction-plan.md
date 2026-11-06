@@ -53,6 +53,8 @@ Each item removes a surface that does not serve text/Markdown or Godot editing.
   refused destructive/network operations.
 - [x] **2.3 Material file-type icons** — removed the 43 embedded SVGs, the
   kind table and the fill-span rasterizer; folder chevrons and row rhythm stay.
+  (Superseded later: icons returned as a runtime VS Code theme with no vendored
+  artwork — see [`file-icons.md`](file-icons.md).)
 - [x] **2.4 Extra language servers** — kept the generic LSP client, Rust and
   Godot; dropped the Go/TypeScript/C-C++/Python specs. No new languages after
   this.

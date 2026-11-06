@@ -51,6 +51,7 @@ mod caret;
 mod commands;
 mod dock;
 mod emoji;
+mod fileicons;
 mod files;
 mod find;
 mod format;
@@ -79,6 +80,7 @@ mod workspace;
 
 pub use dock::{DockId, Panel};
 pub use emoji::EmojiStore;
+pub use fileicons::FileIcons;
 pub use outline::{NativeOutline, MARKDOWN_HEADING_KIND};
 pub use references::ReferencesUi;
 pub use settings::SettingsUi;
@@ -1276,6 +1278,8 @@ pub struct AppState {
     pub(crate) editor: EditorUi,
     /// Color emoji textures for editor/preview/terminal paint.
     pub(crate) emoji: EmojiStore,
+    /// Runtime VS Code file icons for the Explorer.
+    pub(crate) file_icons: FileIcons,
     pub(crate) tabs: TabsUi,
     pub(crate) tab_drag: Option<TabDrag>,
     pub(crate) tab_menu: Option<TabMenuUi>,
@@ -1481,6 +1485,7 @@ impl AppState {
                 ..EditorUi::default()
             },
             emoji: EmojiStore::default(),
+            file_icons: FileIcons::default(),
             tabs: TabsUi {
                 reveal_active: true,
                 ..TabsUi::default()
@@ -1715,6 +1720,7 @@ fn settings_from_session(session: &Session) -> Settings {
         trust_local_servers: session.trust_local_servers,
         sidebar_width: session.sidebar_width,
         show_hidden: session.show_hidden,
+        file_icons: session.file_icons,
         ignored_files: crate::model::ignore::IgnoreMode::from_session(&session.ignored_files),
         keymap: KeymapId::from_session(&session.keymap),
     }

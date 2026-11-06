@@ -355,6 +355,7 @@ impl EditorApp {
         }
         self.analysis_behind = self.state.borrow_mut().tick_analysis();
         self.state.borrow_mut().tick_preview_debounce();
+        self.state.borrow_mut().tick_file_icons();
         self.state.borrow_mut().tick_external_changes();
         self.state.borrow_mut().tick_git();
         self.state.borrow_mut().tick_lsp();

@@ -22,6 +22,7 @@ Progressive disclosure: read the smallest document that answers your question.
 | Delivered improvement history (cycles 1–3) | [improvement-log.md](improvement-log.md) |
 | Minimap design and delivery notes | [minimap.md](minimap.md) |
 | Color emoji rendering | [emoji.md](emoji.md) |
+| Explorer file icons (VS Code theme) | [file-icons.md](file-icons.md) |
 | Color emoji + VS Code file-icon theme plan | [emoji-and-file-icons-plan.md](emoji-and-file-icons-plan.md) |
 
 ## Maintenance rules

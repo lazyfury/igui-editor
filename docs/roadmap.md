@@ -44,7 +44,8 @@ Replace All are bounded/batched, terminal clipboard commands are focus-aware,
 sidebar rows are cached and external URLs are scheme-restricted.
 
 Reduced (M15, Session 5): image-asset preview, Git staging/commit/history,
-Material file-type icons and the extra language-server specs were removed;
+Material file-type icons (since re-added as a runtime VS Code theme) and the
+ extra language-server specs were removed;
 undo history and crash snapshots are bounded. Session v18 drops `image_preview`.
 
 Delivered (M16): the editor minimap strip — a cached, syntax-colored structural

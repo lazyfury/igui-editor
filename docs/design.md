@@ -643,7 +643,8 @@ reduction; the editor is not an asset viewer.
 
 **M15 (done, Session 5 reduction)** — image preview, Git staging/commit/history,
 Material file-type icons and the Go/TypeScript/C-C++/Python language-server
-specs were removed; crash snapshots and the undo history are bounded. The
+specs were removed (file icons returned later as a runtime VS Code theme, see
+decision 47); crash snapshots and the undo history are bounded. The
 release binary is gated at 12 MB (currently 5.13 MB) as a growth guard, not a
 size target; see [`benchmarks.md`](benchmarks.md#bundle-budget) for the
 opt-level tiers.
@@ -673,3 +674,15 @@ very large documents.
    advance the layout reserved. That keeps every caret/wrap/hit-test invariant
    intact and needs no engine change. Chrome text stays on the glyph path (no
    outline, no ink), and joined sequences are painted per code point on purpose.
+
+47. **File icons are a runtime VS Code theme, not vendored artwork.** The
+   Explorer asks `state::fileicons` for a row's `(path, SVG)` pair; the store
+   loads the installed Material Icon Theme JSON once (lazy, only with the
+   Explorer visible and **File Icons** on), resolves names with VS Code's
+   precedence (exact name → compound extension → default, plus named/expanded
+   folders and the `light` override maps), and preloads the SVG sources of the
+   visible rows before paint. `ui/fileicon` flattens the fill-based SVG through
+   the engine's stroke parser and scanline-fills it into cached coloured spans;
+   painters never open a file. This replaces the deleted `FileKind` table and
+   `assets/icons/material`, so a theme update needs no app change. Session key
+   `file_icons` (v20) and a settings row own the switch.

@@ -183,6 +183,7 @@ Markdown preview, syntax/packs, Quick Open/project search, split/scroll sync,
 tab drag/context menu, soft wrap, minimap, external changes, read-only Git
 status/diff, PTY terminal, LSP (Rust/Godot), macOS integration, settings and
 recovery. The Session 5 reduction removed image preview, Git writes/history,
-file-type icons and four extra language servers.
+file-type icons (later re-added as a runtime VS Code theme) and four extra
+language servers.
 
 Known gaps and next candidates are tracked in [docs/roadmap.md](docs/roadmap.md).

@@ -248,12 +248,12 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             .as_deref()
             .is_some_and(|path| path == row.path);
         let hovered = state.sidebar.hover == Some(index);
-        let marker = if row.is_dir {
-            crate::ui::tree::Marker::Chevron {
+        let marker = match state.file_icon(&row.path, row.is_dir, row.expanded) {
+            Some((key, source)) => crate::ui::tree::Marker::Icon { key, source },
+            None if row.is_dir => crate::ui::tree::Marker::Chevron {
                 expanded: row.expanded,
-            }
-        } else {
-            crate::ui::tree::Marker::Blank
+            },
+            None => crate::ui::tree::Marker::Blank,
         };
         let git = if row.is_dir {
             None

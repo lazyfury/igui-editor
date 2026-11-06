@@ -178,5 +178,5 @@ is off, no per-frame file IO, `scripts/check.sh` green, release size within the
 | 2 Emoji editor paint | done | Sprite store + texture upload, editor split-at-emoji paint, selfcheck image assertion. |
 | 3 Emoji preview/terminal | done | Preview, terminal, Explorer/outline/tab labels, docs/emoji.md, selfcheck image assertions. |
 | 4 Icon theme model | done | `model/icon_theme.rs`; VS Code JSON parse, precedence (name > compound ext > default), light overrides, discovery + newest-version pick, 8 tests. |
-| 5 Explorer icons | todo | |
-| 6 Verification/delivery | todo | |
+| 5 Explorer icons | done | Runtime theme store, visible-row preload, scanline rasterizer (even-odd), tree markers, File Icons setting + session v20, selfcheck fixture. |
+| 6 Verification/delivery | in progress | full gate, release gate, bench numbers, push. |

@@ -77,6 +77,8 @@ pub struct Settings {
     pub sidebar_width: f32,
     /// Show dot entries (`.git`, `.env`, …) in the Explorer.
     pub show_hidden: bool,
+    /// Paint file/folder icons from the installed Material Icon Theme.
+    pub file_icons: bool,
     /// Presentation of generated/temp Explorer files (Godot `.uid` sidecars).
     pub ignored_files: IgnoreMode,
     /// Selectable keyboard profile.
@@ -100,6 +102,7 @@ impl Default for Settings {
             trust_local_servers: false,
             sidebar_width: 232.0,
             show_hidden: false,
+            file_icons: true,
             ignored_files: IgnoreMode::Dim,
             keymap: KeymapId::VsCode,
             auto_pairs: true,
@@ -122,6 +125,7 @@ impl Settings {
             trust_local_servers: self.trust_local_servers,
             sidebar_width: clamp_sidebar(self.sidebar_width),
             show_hidden: self.show_hidden,
+            file_icons: self.file_icons,
             ignored_files: self.ignored_files,
             keymap: self.keymap,
             auto_pairs: self.auto_pairs,
@@ -308,6 +312,11 @@ pub const ROWS: &[RowSpec] = &[
         kind: RowKind::Choice(IGNORED_OPTIONS),
     },
     RowSpec {
+        row: Row::FileIcons,
+        group: Group::Explorer,
+        kind: RowKind::Toggle,
+    },
+    RowSpec {
         row: Row::LanguageIntelligence,
         group: Group::Language,
         kind: RowKind::Toggle,
@@ -336,6 +345,7 @@ pub enum Row {
     SidebarWidth,
     HiddenFiles,
     IgnoredFiles,
+    FileIcons,
     Keymap,
     Minimap,
     SoftWrap,
@@ -345,7 +355,7 @@ pub enum Row {
 
 impl Row {
     /// Every row, including the footer-only `Reset`.
-    pub const ALL: [Row; 19] = [
+    pub const ALL: [Row; 20] = [
         Row::Theme,
         Row::FontSize,
         Row::IndentStyle,
@@ -360,6 +370,7 @@ impl Row {
         Row::SidebarWidth,
         Row::HiddenFiles,
         Row::IgnoredFiles,
+        Row::FileIcons,
         Row::Keymap,
         Row::Minimap,
         Row::SoftWrap,
@@ -383,6 +394,7 @@ impl Row {
             Row::SidebarWidth => "Sidebar Width",
             Row::HiddenFiles => "Hidden Files",
             Row::IgnoredFiles => "Ignored Files",
+            Row::FileIcons => "File Icons",
             Row::Keymap => "Keymap",
             Row::Minimap => "Minimap",
             Row::SoftWrap => "Soft Wrap",
@@ -474,6 +486,7 @@ mod tests {
             Row::LanguageIntelligence,
             Row::TrustLocalServers,
             Row::HiddenFiles,
+            Row::FileIcons,
             Row::Minimap,
             Row::SoftWrap,
             Row::ScrollSync,

@@ -19,7 +19,7 @@ use super::fsutil;
 
 /// Current session format. Bump this together with a `Session::migrate` block
 /// and the `docs/features.md` version history.
-pub const SESSION_VERSION: u32 = 19;
+pub const SESSION_VERSION: u32 = 20;
 
 /// Cap for the two recent lists (`recent_projects`, `recent_files`).
 ///
@@ -66,6 +66,8 @@ pub struct Session {
     pub sidebar_width: f32,
     /// Show dot entries in the Explorer.
     pub show_hidden: bool,
+    /// Paint file/folder icons from the installed Material Icon Theme.
+    pub file_icons: bool,
     /// Explorer presentation of generated/temp files (`off`, `dim`, `hide`).
     pub ignored_files: String,
     /// Editor/preview split ratio (0.2–0.8).
@@ -127,6 +129,7 @@ impl Default for Session {
             syntax: true,
             sidebar_width: 232.0,
             show_hidden: false,
+            file_icons: true,
             ignored_files: "dim".into(),
             split: 0.5,
             autosave: true,
@@ -197,6 +200,7 @@ impl Session {
                     session.sidebar_width = value.parse().unwrap_or(session.sidebar_width)
                 }
                 "show_hidden" => session.show_hidden = value == "1",
+                "file_icons" => session.file_icons = value == "1",
                 "ignored_files" => session.ignored_files = value,
                 "split" => session.split = value.parse().unwrap_or(session.split),
                 "autosave" => session.autosave = value == "1",
@@ -314,6 +318,7 @@ impl Session {
         out.push_str(&format!("syntax={}\n", u8::from(self.syntax)));
         out.push_str(&format!("sidebar_width={}\n", self.sidebar_width));
         out.push_str(&format!("show_hidden={}\n", u8::from(self.show_hidden)));
+        out.push_str(&format!("file_icons={}\n", u8::from(self.file_icons)));
         out.push_str(&format!("ignored_files={}\n", escape(&self.ignored_files)));
         out.push_str(&format!("split={}\n", self.split));
         out.push_str(&format!("autosave={}\n", u8::from(self.autosave)));
@@ -506,6 +511,7 @@ mod tests {
             lsp: false,
             trust_local_servers: true,
             show_hidden: true,
+            file_icons: false,
             ignored_files: "hide".into(),
             languages: vec![(PathBuf::from("/tmp/x.lua"), "lua".into())],
             sync_scroll: false,

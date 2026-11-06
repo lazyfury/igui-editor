@@ -54,6 +54,7 @@ pub fn run() -> Result<(), String> {
         .and_then(|()| check_overlay_pointer(&dir))
         .and_then(|()| check_markdown_code_wrap(&dir))
         .and_then(|()| check_ime_caret(&dir))
+        .and_then(|()| check_file_icons(&dir))
         .and_then(|()| check_emoji(&dir))
         .and_then(|()| check_markdown_outline(&dir))
         .and_then(|()| check_markdown_preview_outline_jump(&dir))
@@ -62,7 +63,7 @@ pub fn run() -> Result<(), String> {
     let _ = fs::remove_dir_all(&dir);
     if result.is_ok() {
         println!(
-            "selfcheck ok: main flow + workspace/recovery + explorer filters + typing + LSP + keymap + go-to-line + overlay pointer + code wrap + IME caret + emoji + Markdown/GDScript outline + preview outline jump + minimap checks"
+            "selfcheck ok: main flow + workspace/recovery + explorer filters + file icons + typing + LSP + keymap + go-to-line + overlay pointer + code wrap + IME caret + emoji + Markdown/GDScript outline + preview outline jump + minimap checks"
         );
     }
     result
@@ -5386,6 +5387,128 @@ fn check_markdown_code_wrap(dir: &Path) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+fn check_file_icons(dir: &Path) -> Result<(), String> {
+    // A deterministic theme: each definition is a solid colour, so the paint
+    // output can be attributed to one row without depending on the installed
+    // extension version.
+    let theme_dir = dir.join("icon-theme");
+    fs::create_dir_all(theme_dir.join("dist")).map_err(|error| format!("icon theme: {error}"))?;
+    fs::create_dir_all(theme_dir.join("icons")).map_err(|error| format!("icon theme: {error}"))?;
+    let svg = |color: &str| {
+        format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path fill="{color}" d="M0 0h16v16H0z"/></svg>"#
+        )
+    };
+    for (name, color) in [
+        ("file.svg", "#808080"),
+        ("rust.svg", "#ff0000"),
+        ("markdown.svg", "#00ff00"),
+        ("folder.svg", "#0000ff"),
+        ("folder-open.svg", "#0000ff"),
+    ] {
+        fs::write(theme_dir.join("icons").join(name), svg(color))
+            .map_err(|error| format!("icon fixture: {error}"))?;
+    }
+    fs::write(
+        theme_dir.join("dist/material-icons.json"),
+        r##"{
+            "iconDefinitions": {
+                "file": {"iconPath": "../icons/file.svg"},
+                "rust": {"iconPath": "../icons/rust.svg"},
+                "markdown": {"iconPath": "../icons/markdown.svg"},
+                "folder": {"iconPath": "../icons/folder.svg"},
+                "folder-open": {"iconPath": "../icons/folder-open.svg"}
+            },
+            "file": "file",
+            "folder": "folder",
+            "folderExpanded": "folder-open",
+            "fileExtensions": {"rs": "rust", "md": "markdown"}
+        }"##,
+    )
+    .map_err(|error| format!("icon theme fixture: {error}"))?;
+
+    let project = dir.join("icons-project");
+    fs::create_dir_all(project.join("src")).map_err(|error| format!("icons project: {error}"))?;
+    fs::write(project.join("main.rs"), "fn main() {}\n")
+        .map_err(|error| format!("icons project: {error}"))?;
+    fs::write(project.join("notes.md"), "# Notes\n")
+        .map_err(|error| format!("icons project: {error}"))?;
+
+    let previous = std::env::var_os(crate::model::icon_theme::THEME_ENV);
+    std::env::set_var(
+        crate::model::icon_theme::THEME_ENV,
+        theme_dir.join("dist/material-icons.json"),
+    );
+    let result = (|| -> Result<(), String> {
+        let mut harness = Harness::new(
+            None,
+            dir.join("icons-session.conf"),
+            ScriptedDialogs::new(vec![]),
+        );
+        harness.app.state_mut().open_project(project.clone());
+        harness.frame()?;
+        let frame = harness.frame()?;
+        let sidebar = harness.app.state().sidebar.rect;
+        let icon_colors = [
+            [255, 0, 0, 255],
+            [0, 255, 0, 255],
+            [0, 0, 255, 255],
+            [128, 128, 128, 255],
+        ];
+        let count_icons = |frame: &RecordedFrame| {
+            frame
+                .commands()
+                .iter()
+                .filter(|command| {
+                    matches!(
+                        command,
+                        DrawCommand::FillRect { rect, paint }
+                            if sidebar.intersects(*rect)
+                                && rect.size.width <= crate::ui::fileicon::SIZE + 0.01
+                                && icon_colors.contains(&paint.color.to_rgba8())
+                    )
+                })
+                .count()
+        };
+        let painted = count_icons(&frame);
+        // One merged span per solid square: main.rs (red), notes.md (green)
+        // and the closed src folder (blue).
+        for color in [&icon_colors[0], &icon_colors[1], &icon_colors[2]] {
+            let hits = frame
+                .commands()
+                .iter()
+                .filter(|command| {
+                    matches!(
+                        command,
+                        DrawCommand::FillRect { rect, paint }
+                            if sidebar.intersects(*rect)
+                                && rect.size.width <= crate::ui::fileicon::SIZE + 0.01
+                                && paint.color.to_rgba8() == *color
+                    )
+                })
+                .count();
+            if hits == 0 {
+                return Err(format!(
+                    "the Explorer did not paint the {color:?} icon (spans {painted}, theme {:?}, error {:?})",
+                    harness.app.state().file_icons.source(),
+                    harness.app.state().file_icons.error()
+                ));
+            }
+        }
+        harness.app.state_mut().toggle_setting(Row::FileIcons);
+        let off = harness.frame()?;
+        if count_icons(&off) != 0 {
+            return Err("File Icons off still painted theme artwork".into());
+        }
+        Ok(())
+    })();
+    match previous {
+        Some(value) => std::env::set_var(crate::model::icon_theme::THEME_ENV, value),
+        None => std::env::remove_var(crate::model::icon_theme::THEME_ENV),
+    }
+    result
 }
 
 fn check_emoji(dir: &Path) -> Result<(), String> {

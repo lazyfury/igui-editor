@@ -61,7 +61,11 @@ file**, then asserts:
     setting from the session file,
 11. an idle app with a terminal panel open requests **no** further frames
     (`needs_frame` is false; async workers are given a bounded settle window),
-    and a second unchanged frame reuses the cached tree `DrawList`.
+    and a second unchanged frame reuses the cached tree `DrawList`,
+12. color emoji paint as images in the editor and the split preview (no emoji
+    code point leaks into a text run) and a PTY row paints a terminal sprite;
+    with a deterministic fixture theme, Explorer rows paint red/green/blue file
+    and folder icons and **File Icons** off removes them.
 
 M3 checks: syntax token colors (keyword/function/string/comment), incremental
 re-highlight after an edit, indent guides on/off, caret bracket matching, the

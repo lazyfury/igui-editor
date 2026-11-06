@@ -508,6 +508,7 @@ impl AppState {
             Row::LanguageIntelligence => self.settings.lsp,
             Row::TrustLocalServers => self.settings.trust_local_servers,
             Row::HiddenFiles => self.settings.show_hidden,
+            Row::FileIcons => self.settings.file_icons,
             Row::Minimap => self.session.minimap,
             Row::SoftWrap => self.session.soft_wrap,
             Row::ScrollSync => self.sync_scroll,
@@ -555,6 +556,17 @@ impl AppState {
                 self.status(format!(
                     "hidden files: {}",
                     if self.settings.show_hidden {
+                        "ON"
+                    } else {
+                        "OFF"
+                    }
+                ));
+            }
+            Row::FileIcons => {
+                self.settings.file_icons = !self.settings.file_icons;
+                self.status(format!(
+                    "file icons: {}",
+                    if self.settings.file_icons {
                         "ON"
                     } else {
                         "OFF"
@@ -774,6 +786,7 @@ impl AppState {
         self.session.trust_local_servers = self.settings.trust_local_servers;
         self.session.sidebar_width = self.settings.sidebar_width;
         self.session.show_hidden = self.settings.show_hidden;
+        self.session.file_icons = self.settings.file_icons;
         self.session.ignored_files = self.settings.ignored_files.session_value().into();
         self.session.keymap = self.settings.keymap.session_value().into();
         self.session.theme = match self.theme.mode {

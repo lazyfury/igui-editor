@@ -5,7 +5,7 @@
 //! markers and typography. Both painters go through [`paint_row`] so a change
 //! to the tree rhythm happens in one place.
 
-use igui_core::{Color, Rect, Vec2};
+use igui_core::{Color, Rect, Size, Vec2};
 use igui_render::PaintContext;
 use igui_ui::TextMeasurer;
 
@@ -28,6 +28,8 @@ pub enum Marker<'a> {
     Chevron { expanded: bool },
     /// No marker: the label starts in the marker column (plain file rows).
     Blank,
+    /// File/folder icon from the active VS Code icon theme.
+    Icon { key: &'a str, source: &'a str },
     /// Outline symbol kind (`T`, `ƒ`, `P`, …).
     Glyph { text: &'a str, color: Color },
 }
@@ -97,6 +99,14 @@ pub fn paint_row(
             }
         }
         Marker::Blank => {}
+        Marker::Icon { key, source } => {
+            let side = crate::ui::fileicon::SIZE;
+            let box_rect = Rect::from_center_size(
+                Vec2::new(indent + MARKER_W * 0.5, rect.center().y),
+                Size::new(side, side),
+            );
+            crate::ui::fileicon::paint(ctx, key, source, box_rect);
+        }
         Marker::Glyph { text, color } => {
             let width = kit::width(measurer, text, m.font_small);
             let x = indent + ((MARKER_W - width) * 0.5).max(0.0);
