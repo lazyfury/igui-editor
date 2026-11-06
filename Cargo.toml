@@ -25,6 +25,9 @@ selfcheck = [
     "dep:igui_headless",
     "dep:igui_profile",
 ]
+# Runtime frame profiler + panel. Development-only: packaging builds with
+# `--no-default-features`, so this is not linked into the shipped bundle.
+profile = ["dep:igui_profile", "dep:igui_debug_ui"]
 # Benchmark target: reuses the headless recorder, no window required.
 bench = ["selfcheck"]
 
@@ -61,6 +64,7 @@ winit = "0.30"
 igui_headless = { path = "../igui/crates/app/igui_headless", optional = true }
 igui_backend_recording = { path = "../igui/crates/platform/recording/igui_backend_recording", optional = true }
 igui_profile = { path = "../igui/crates/debug/igui_profile", optional = true }
+igui_debug_ui = { path = "../igui/crates/debug/igui_debug_ui", optional = true }
 portable-pty = "0.9"
 vt100 = "0.18"
 # Native file dialogs (M2). `rfd` keeps its platform backend behind cfg:

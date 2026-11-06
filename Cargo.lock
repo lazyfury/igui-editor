@@ -1088,6 +1088,7 @@ dependencies = [
  "igui_backend_recording",
  "igui_backend_wgpu",
  "igui_core",
+ "igui_debug_ui",
  "igui_font",
  "igui_headless",
  "igui_profile",
@@ -1138,8 +1139,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "igui_components"
+version = "0.6.0"
+dependencies = [
+ "igui_core",
+ "igui_render",
+ "igui_scene",
+ "igui_theme",
+ "igui_ui",
+]
+
+[[package]]
 name = "igui_core"
 version = "0.6.0"
+
+[[package]]
+name = "igui_debug_ui"
+version = "0.6.0"
+dependencies = [
+ "igui_components",
+ "igui_core",
+ "igui_profile",
+ "igui_render",
+ "igui_scene",
+ "igui_ui",
+]
 
 [[package]]
 name = "igui_font"
@@ -1194,6 +1218,13 @@ version = "0.6.0"
 dependencies = [
  "igui_core",
  "igui_render",
+]
+
+[[package]]
+name = "igui_theme"
+version = "0.6.0"
+dependencies = [
+ "igui_core",
 ]
 
 [[package]]

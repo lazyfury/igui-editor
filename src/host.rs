@@ -1,7 +1,11 @@
 //! Native window host: `winit` window + `wgpu` surface via the `igui_winit`
 //! platform plugins. The app itself stays host-agnostic (see `app.rs`).
 
+#[cfg(feature = "profile")]
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+#[cfg(feature = "profile")]
+use std::rc::Rc;
 
 use igui_app::{App, AppBuilder, AppConfig, PlatformEvent, PlatformObserver, Plugin};
 use igui_backend_wgpu::FontConfig;
@@ -148,7 +152,12 @@ impl PlatformObserver for DropObserver {
 }
 
 /// Builds the windowed app (also used by the self-check to prove the wiring).
-pub fn build(open: Option<PathBuf>, mode: Option<Mode>) -> App {
+///
+/// `profile` opens the runtime performance panel on startup; it is ignored in
+/// builds without the `profile` feature.
+pub fn build(open: Option<PathBuf>, mode: Option<Mode>, profile: bool) -> App {
+    #[cfg(not(feature = "profile"))]
+    let _ = profile;
     // Finder launches inherit almost no PATH; do this before any service
     // spawns Git/LSP or the PTY shell.
     crate::process_env::install();
@@ -163,7 +172,8 @@ pub fn build(open: Option<PathBuf>, mode: Option<Mode>) -> App {
         .window
         .map(|geometry| geometry.size)
         .unwrap_or((1200.0, 800.0));
-    let builder = App::new(AppConfig {
+    #[allow(unused_mut)]
+    let mut builder = App::new(AppConfig {
         title: "igui-editor".into(),
         size: (width as f64, height as f64),
         ..Default::default()
@@ -198,13 +208,20 @@ pub fn build(open: Option<PathBuf>, mode: Option<Mode>) -> App {
         .cloned()
         .unwrap_or_default();
     crate::macos::install(window.clone());
-    let logic = EditorApp::with_dialogs(open, mode, Box::new(NativeDialogs { window }));
+    #[allow(unused_mut)]
+    let mut logic = EditorApp::with_dialogs(open, mode, Box::new(NativeDialogs { window }));
+    #[cfg(feature = "profile")]
+    {
+        let profile = Rc::new(RefCell::new(crate::profile::ProfileState::new(profile)));
+        logic.set_profile(profile.clone());
+        builder.add_frame_observer(crate::profile::ProfileObserver::new(profile));
+    }
     builder.logic(logic).build()
 }
 
 /// Runs the editor until the app exits.
-pub fn run(open: Option<PathBuf>, mode: Option<Mode>) {
-    build(open, mode).run();
+pub fn run(open: Option<PathBuf>, mode: Option<Mode>, profile: bool) {
+    build(open, mode, profile).run();
 }
 
 #[cfg(test)]

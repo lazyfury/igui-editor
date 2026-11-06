@@ -42,6 +42,9 @@
 #[cfg(feature = "bench")]
 pub mod bench;
 
+#[cfg(feature = "profile")]
+pub mod profile;
+
 pub mod keymap;
 pub mod settings;
 pub mod syntax;

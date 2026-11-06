@@ -29,6 +29,7 @@ igui-editor — a compact text/Markdown editor built on igui
       --light        使用浅色主题（默认遵循上次会话，首次为深色 geek 主题）
       --dark         强制深色主题
       --selfcheck    无头自检：录制 DrawList 并断言结构与文字，不开窗、不截图
+      --profile      显示运行时性能面板（需以 `--features profile` 构建；F4 切换）
   -h, --help         显示本帮助
   -V, --version      显示版本
 
@@ -48,6 +49,9 @@ fn main() {
     let mut open: Option<PathBuf> = None;
     // `None` restores the persisted theme; a flag forces one.
     let mut mode: Option<Mode> = None;
+    #[allow(unused_mut)]
+    #[allow(unused_mut)]
+    let mut profile = false;
     for arg in args {
         match arg.as_str() {
             "--light" => mode = Some(Mode::Light),
@@ -69,6 +73,17 @@ fn main() {
                     std::process::exit(2);
                 }
             }
+            "--profile" => {
+                #[cfg(feature = "profile")]
+                {
+                    profile = true;
+                }
+                #[cfg(not(feature = "profile"))]
+                {
+                    eprintln!("--profile requires a build with `--features profile`");
+                    std::process::exit(2);
+                }
+            }
             "-h" | "--help" => {
                 print!("{HELP}");
                 return;
@@ -84,5 +99,7 @@ fn main() {
             path => open = Some(PathBuf::from(path)),
         }
     }
-    host::run(open, mode);
+    #[cfg(not(feature = "profile"))]
+    let _ = profile;
+    host::run(open, mode, profile);
 }

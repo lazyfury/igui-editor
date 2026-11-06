@@ -36,6 +36,8 @@ pub struct EditorApp {
     editor_id: Option<NodeId>,
     dialogs: Box<dyn Dialogs>,
     window: Option<SharedWindow>,
+    #[cfg(feature = "profile")]
+    profile: Option<Rc<RefCell<crate::profile::ProfileState>>>,
     /// Set while syntax highlighting is still catching up (drives `needs_frame`).
     analysis_behind: bool,
     /// File-drop state shared with the winit observer.
@@ -198,7 +200,15 @@ impl EditorApp {
             recent: Vec::new(),
             title_key: None,
             title_folder: None,
+            #[cfg(feature = "profile")]
+            profile: None,
         }
+    }
+
+    /// Attaches the optional runtime profiler (feature `profile`).
+    #[cfg(feature = "profile")]
+    pub fn set_profile(&mut self, profile: Rc<RefCell<crate::profile::ProfileState>>) {
+        self.profile = Some(profile);
     }
 
     pub fn state(&self) -> Ref<'_, AppState> {
@@ -276,6 +286,10 @@ impl EditorApp {
     /// refresh find matches, run queued dialogs, persist the session, expire the
     /// status message and sync the window title.
     pub fn update(&mut self, _delta: f32) {
+        #[cfg(feature = "profile")]
+        if let Some(profile) = self.profile.clone() {
+            profile.borrow_mut().begin_frame();
+        }
         // Moving the frame from the clock (rather than a nested AppKit drag
         // loop) keeps winit in charge of the event loop. `needs_frame` keeps
         // frames coming while the button is held.
@@ -391,6 +405,10 @@ impl EditorApp {
         self.sync_title();
         self.state.borrow_mut().save_session_if_dirty();
         self.schedule_wake();
+        #[cfg(feature = "profile")]
+        if let Some(profile) = self.profile.clone() {
+            profile.borrow_mut().end_update();
+        }
     }
 
     /// Hands the earliest time-based deadline to the frame clock. Time-based
@@ -422,9 +440,17 @@ impl EditorApp {
             .and_then(|id| self.tree.data::<Control>(id))
             .map(|control| control.data.rect.center().y);
         self.state.borrow_mut().content_center_y = center;
+        #[cfg(feature = "profile")]
+        if let Some(profile) = self.profile.clone() {
+            profile.borrow_mut().end_layout();
+        }
     }
 
     pub fn paint(&mut self, ctx: &mut PaintContext) {
+        #[cfg(feature = "profile")]
+        if let Some(profile) = self.profile.clone() {
+            profile.borrow_mut().begin_paint();
+        }
         // Consume the dirty flag at entry: anything a painter sets during this
         // frame survives for the next one (`needs_frame` also reads it).
         let dirty = std::mem::take(&mut self.state.borrow_mut().dirty);
@@ -461,10 +487,28 @@ impl EditorApp {
         drop(state);
         // The preview debounce deadline is chosen while painting.
         self.schedule_wake();
+        #[cfg(feature = "profile")]
+        if let Some(profile) = self.profile.clone() {
+            let controls = self.control_count();
+            let nodes = self.tree.node_count();
+            profile.borrow_mut().end_paint(controls, nodes);
+            let viewport = self.state.borrow().viewport;
+            profile.borrow_mut().paint(ctx, viewport);
+        }
     }
 
     pub fn event(&mut self, event: &InputEvent) -> EventResult {
         let measurer = igui_ui::text_measurer(&self.tree);
+        #[cfg(feature = "profile")]
+        if let Some(profile) = self.profile.clone() {
+            if matches!(event, InputEvent::KeyDown { key: Key::F4 }) {
+                profile.borrow_mut().toggle();
+                return EventResult::Handled;
+            }
+            if profile.borrow_mut().handle_input(event).is_handled() {
+                return EventResult::Handled;
+            }
+        }
         match event {
             InputEvent::PointerDown {
                 position,
