@@ -546,8 +546,13 @@ parser. Lookup follows VS Code: exact file name, then compound extension
 folder-open artwork. The light theme applies the extension's `light` overrides.
 
 **Explorer → File Icons** turns the whole surface off and back on; the choice
-persists in the session. Without a theme (or with icons off) folders keep the
-chevron marker. Details and limits: [`docs/file-icons.md`](file-icons.md).
+persists in the session. The disclosure arrow has its own fixed slot and is
+never replaced by an icon: every row reserves an 8 px arrow column, then a 6 px
+gap, the 12 px icon, and a 6 px gap before the label. Files keep the arrow slot
+empty, so file and folder icons (and their labels) align. Without a theme (or
+with icons off) the icon column is dropped and the tree returns to its compact
+layout, but the folder arrow stays in place. Details and limits:
+[`docs/file-icons.md`](file-icons.md).
 
 ## Projects, welcome and drag & drop
 

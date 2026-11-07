@@ -215,6 +215,9 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
 
     // Rows, scrolled and clipped to the body.
     let rows = state.ws.tree.rows();
+    // The icon column is reserved for every row while the theme is active (not
+    // per-row on load), so labels never jump between frames.
+    let icon_slot = state.file_icons_active();
     let view = Rect::from_min_size(
         Vec2::new(rect.left(), rect.top()),
         Size::new(rect.width() - 1.0, rect.height().max(0.0)),
@@ -248,13 +251,7 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             .as_deref()
             .is_some_and(|path| path == row.path);
         let hovered = state.sidebar.hover == Some(index);
-        let marker = match state.file_icon(&row.path, row.is_dir, row.expanded) {
-            Some((key, source)) => crate::ui::tree::Marker::Icon { key, source },
-            None if row.is_dir => crate::ui::tree::Marker::Chevron {
-                expanded: row.expanded,
-            },
-            None => crate::ui::tree::Marker::Blank,
-        };
+        let icon = state.file_icon(&row.path, row.is_dir, row.expanded);
         let git = if row.is_dir {
             None
         } else {
@@ -285,7 +282,10 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             &p,
             &crate::ui::tree::Row {
                 depth: row.depth,
-                marker,
+                arrow: row.is_dir.then_some(row.expanded),
+                icon,
+                icon_slot,
+                glyph: None,
                 label: &row.name,
                 color,
                 selected,

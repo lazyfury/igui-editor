@@ -200,3 +200,9 @@ is off, no per-frame file IO, `scripts/check.sh` green, release size within the
   budgets; idle frames are still zero.
 - **Commits**: plan → emoji model → editor paint → preview/terminal/labels →
   icon-theme model → Explorer icons → verification/docs.
+- **Follow-up**: the disclosure arrow got its own fixed 8 px slot (files reserve
+  it empty), folder/file icons share one 12 px column after a 6 px gap, and the
+  label follows with another 6 px gap. Icons off keeps the compact layout; the
+  arrow never moves. Covered by a geometry unit test and the file-icon
+  self-check (arrow present on folders, absent on files, icon/label alignment,
+  compact fallback).

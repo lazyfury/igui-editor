@@ -53,9 +53,15 @@ filled with a scanline pass into coloured `FillRect` spans:
 - `fill-rule="evenodd"` artwork keeps its holes (32 of the bundled icons);
 - spans are cached per resolved icon path and quantized 12 px box, so frames
   only copy rectangles;
-- icons are 12 px, centered in the tree marker slot. Folder rows show
-  folder/folder-open artwork instead of a chevron while the theme is active; a
-  missing theme falls back to the chevrons.
+- icons are 12 px, vertically centered in the row.
+
+The disclosure arrow is **independent of the theme and always occupies the same
+slot**: an 8 px arrow column at the row indent (chevron centre unchanged), then
+a 6 px gap, the 12 px icon column, another 6 px gap, then the label. Files leave
+the arrow slot empty but still reserve it, so file and folder icons start on the
+same x and labels line up. With **File Icons** off the icon column is not
+reserved and rows return to the compact 12 px marker layout; the folder arrow
+does not move.
 
 Parsing, transforms and gradients are the engine parser's limits: SVG
 components it ignores simply draw less (or nothing). The self-check asserts the

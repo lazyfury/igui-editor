@@ -5475,32 +5475,107 @@ fn check_file_icons(dir: &Path) -> Result<(), String> {
         let painted = count_icons(&frame);
         // One merged span per solid square: main.rs (red), notes.md (green)
         // and the closed src folder (blue).
+        let icon_rect = |frame: &RecordedFrame, color: [u8; 4]| {
+            frame.commands().iter().find_map(|command| match command {
+                DrawCommand::FillRect { rect, paint }
+                    if sidebar.intersects(*rect)
+                        && rect.size.width <= crate::ui::fileicon::SIZE + 0.01
+                        && paint.color.to_rgba8() == color =>
+                {
+                    Some(*rect)
+                }
+                _ => None,
+            })
+        };
+        let mut rects = Vec::new();
         for color in [&icon_colors[0], &icon_colors[1], &icon_colors[2]] {
-            let hits = frame
-                .commands()
-                .iter()
-                .filter(|command| {
-                    matches!(
-                        command,
-                        DrawCommand::FillRect { rect, paint }
-                            if sidebar.intersects(*rect)
-                                && rect.size.width <= crate::ui::fileicon::SIZE + 0.01
-                                && paint.color.to_rgba8() == *color
-                    )
-                })
-                .count();
-            if hits == 0 {
+            let Some(rect) = icon_rect(&frame, *color) else {
                 return Err(format!(
                     "the Explorer did not paint the {color:?} icon (spans {painted}, theme {:?}, error {:?})",
                     harness.app.state().file_icons.source(),
                     harness.app.state().file_icons.error()
                 ));
-            }
+            };
+            rects.push(rect);
         }
+        let (file_icon, folder_icon) = (rects[0], rects[2]);
+        // The fixed arrow slot means the icon column is the same for files and
+        // folders: same left edge, same size, same vertical centre.
+        if (file_icon.left() - folder_icon.left()).abs() > 0.01 {
+            return Err(format!(
+                "file icon left {} is not aligned with folder icon left {}",
+                file_icon.left(),
+                folder_icon.left()
+            ));
+        }
+        // Labels follow the icon column with a gap and share the same x.
+        let label_position = |frame: &RecordedFrame, needle: &str| {
+            frame.commands().iter().find_map(|command| match command {
+                DrawCommand::DrawText { text, position, .. }
+                    if text == needle && sidebar.contains(*position) =>
+                {
+                    Some(*position)
+                }
+                _ => None,
+            })
+        };
+        let Some(file_label) = label_position(&frame, "main.rs") else {
+            return Err("main.rs label was not painted".into());
+        };
+        let Some(folder_label) = label_position(&frame, "src") else {
+            return Err("src label was not painted".into());
+        };
+        if (file_label.x - folder_label.x).abs() > 0.01 {
+            return Err(format!(
+                "file label x {} is not aligned with folder label x {}",
+                file_label.x, folder_label.x
+            ));
+        }
+        if file_label.x < file_icon.right() + 5.5 {
+            return Err(format!(
+                "the label gap collapsed: icon right {}, label x {}",
+                file_icon.right(),
+                file_label.x
+            ));
+        }
+        // The arrow keeps its own fixed slot for folders, and files leave it
+        // empty (no line at that x on a file row).
+        let arrow_lines = |frame: &RecordedFrame, row_y: f32| {
+            frame
+                .commands()
+                .iter()
+                .filter(|command| match command {
+                    DrawCommand::Line { from, to, .. } => {
+                        sidebar.contains(*from)
+                            && sidebar.contains(*to)
+                            && (from.y - row_y).abs() < 10.0
+                            && (to.y - row_y).abs() < 10.0
+                    }
+                    _ => false,
+                })
+                .count()
+        };
+        if arrow_lines(&frame, folder_icon.center().y) == 0 {
+            return Err("the folder row lost its disclosure arrow".into());
+        }
+        if arrow_lines(&frame, file_icon.center().y) != 0 {
+            return Err("a file row painted a disclosure arrow".into());
+        }
+        // With icons off the tree returns to the compact chevron layout, but
+        // the folder arrow stays in the same fixed slot.
         harness.app.state_mut().toggle_setting(Row::FileIcons);
         let off = harness.frame()?;
         if count_icons(&off) != 0 {
             return Err("File Icons off still painted theme artwork".into());
+        }
+        let Some(compact_label) = label_position(&off, "main.rs") else {
+            return Err("main.rs label disappeared when icons were disabled".into());
+        };
+        if compact_label.x >= file_label.x - 10.0 {
+            return Err(format!(
+                "labels did not return to the compact layout ({} -> {})",
+                file_label.x, compact_label.x
+            ));
         }
         Ok(())
     })();

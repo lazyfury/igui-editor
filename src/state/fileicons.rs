@@ -130,6 +130,11 @@ impl std::fmt::Debug for FileIcons {
 }
 
 impl super::AppState {
+    /// Whether the Explorer should reserve the icon column.
+    pub(crate) fn file_icons_active(&self) -> bool {
+        self.settings.file_icons && self.file_icons.is_ready()
+    }
+
     /// Resolved `(cache key, SVG text)` for one Explorer row, if icons are on
     /// and the theme has an entry.
     pub(crate) fn file_icon(

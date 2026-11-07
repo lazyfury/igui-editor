@@ -683,6 +683,9 @@ very large documents.
    folders and the `light` override maps), and preloads the SVG sources of the
    visible rows before paint. `ui/fileicon` flattens the fill-based SVG through
    the engine's stroke parser and scanline-fills it into cached coloured spans;
-   painters never open a file. This replaces the deleted `FileKind` table and
+   painters never open a file. The disclosure arrow is a separate fixed 8 px
+   slot (files reserve it empty), followed by a 6 px gap, the 12 px icon column
+   and a 6 px label gap: the theme can never remove the arrow or move the icon
+   column between files and folders. This replaces the deleted `FileKind` table and
    `assets/icons/material`, so a theme update needs no app change. Session key
    `file_icons` (v20) and a settings row own the switch.

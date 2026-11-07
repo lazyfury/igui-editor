@@ -224,10 +224,10 @@ fn paint(state: &mut AppState, env: &mut PaintEnv<'_>, rect: Rect) {
             &p,
             &crate::ui::tree::Row {
                 depth: symbol.depth,
-                marker: crate::ui::tree::Marker::Glyph {
-                    text: symbol_glyph(symbol.kind),
-                    color: symbol_color(symbol.kind, &p),
-                },
+                arrow: None,
+                icon: None,
+                icon_slot: false,
+                glyph: Some((symbol_glyph(symbol.kind), symbol_color(symbol.kind, &p))),
                 label: &symbol.name,
                 color,
                 selected,
