@@ -93,4 +93,4 @@ codesign --verify --deep --strict "$tmp/app/igui-editor.app"
 
 | Tag | Date | Assets | Notes |
 |---|---|---|---|
-| `v0.1.0` | 2026-11-07 | `igui-editor-0.1.0-macos-arm64.zip`, `.sha256` | First tagged macOS arm64 build (emoji, VS Code file icons). |
+| `v0.1.0` | 2026-11-07 | [zip](https://github.com/lazyfury/igui-editor/releases/download/v0.1.0/igui-editor-0.1.0-macos-arm64.zip), [sha256](https://github.com/lazyfury/igui-editor/releases/download/v0.1.0/igui-editor-0.1.0-macos-arm64.zip.sha256) | First tagged macOS arm64 build (emoji, VS Code file icons). SHA-256 `de9d26236524f880a2098e069e7e73aca8d52e65f65c4d688fb0c2dfa10f3cc6`; verified by downloading the published assets (`shasum -c` + `codesign --verify`). |
