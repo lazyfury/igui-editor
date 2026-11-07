@@ -15,6 +15,7 @@ Progressive disclosure: read the smallest document that answers your question.
 | Markdown/preview benchmark | [benchmarks.md](benchmarks.md) |
 | Source ownership | [code-map.md](code-map.md) |
 | macOS packaging/signing | [packaging.md](packaging.md) |
+| GitHub release workflow | [release.md](release.md) |
 | Milestones and gaps | [roadmap.md](roadmap.md) |
 | Review/optimization log | [review.md](review.md) |
 | Current improvement work plan | [improvement-plan.md](improvement-plan.md) |

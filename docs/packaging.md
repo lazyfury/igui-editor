@@ -71,6 +71,10 @@ current host architecture (no universal/lipo step yet).
 
 ## Distribution
 
+Publishing the zip as a GitHub release (tag, checksum, `gh release create`) is
+recorded in [`release.md`](release.md) and automated by
+`packaging/release-macos.sh`.
+
 The script uses an **ad-hoc** signature so the app runs from this machine. For
 distribution, replace it with a Developer ID signature, enable hardened runtime,
 notarize, and staple:
