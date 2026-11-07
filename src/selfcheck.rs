@@ -6440,6 +6440,7 @@ while True:
             "signatureHelpProvider": {"triggerCharacters": ["(", ","]},
             "referencesProvider": True,
             "documentHighlightProvider": True,
+            "documentLinkProvider": {},
             "renameProvider": {"prepareProvider": True},
         }}})
         # Ask for every file change; the editor must report externally created
@@ -6552,6 +6553,14 @@ while True:
             0, 3, 4, 1, 0,
             1, 8, 10, 0, 0,
         ]}})
+    elif method == "textDocument/documentLink":
+        uri = params["textDocument"]["uri"]
+        base = uri.rsplit("/", 1)[0]
+        send({"jsonrpc": "2.0", "id": request_id, "result": [{
+            "range": {"start": {"line": 2, "character": 14},
+                      "end": {"line": 2, "character": 19}},
+            "target": base + "/other.rs",
+        }]})
     elif method == "textDocument/documentSymbol":
         send({"jsonrpc": "2.0", "id": request_id, "result": [{
             "name": "main",
@@ -6635,6 +6644,56 @@ fn check_lsp_flow(dir: &Path, main: &Path) -> Result<(), String> {
             return Err("LSP document symbols were not received".into());
         }
     }
+
+    // Document links cover path strings and open their target on Cmd/Ctrl-click.
+    let other = canonical_target(main.with_file_name("other.rs"));
+    for _ in 0..150 {
+        harness.frame()?;
+        let state = harness.app.state();
+        let Some(doc) = state.ws.active_doc() else {
+            return Err("the active document disappeared before document links".into());
+        };
+        let byte = crate::model::lsp::byte_for_position(doc, 2, 14);
+        if state
+            .lsp
+            .link_at(&path, doc, byte)
+            .as_deref()
+            .is_some_and(|target| target == other.as_path())
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    {
+        let mut state = harness.app.state_mut();
+        let doc = state
+            .ws
+            .active_doc()
+            .ok_or("no active document for document link")?;
+        let byte = crate::model::lsp::byte_for_position(doc, 2, 14);
+        if !state.open_lsp_document_link_at(byte) {
+            return Err("the document link did not open its target".into());
+        }
+    }
+    harness.frame()?;
+    if harness
+        .app
+        .state()
+        .ws
+        .active_doc()
+        .and_then(|doc| doc.path())
+        .map(|path| canonical_target(path.to_path_buf()))
+        != Some(other.clone())
+    {
+        return Err("the document link opened the wrong file".into());
+    }
+    // The link target is a real tab with its own diagnostics; close it before
+    // the PROBLEMS assertions below, then return to the main fixture.
+    let opened = harness.app.state().ws.active;
+    harness.app.state_mut().request_close_tab(opened);
+    harness.frame()?;
+    harness.app.state_mut().open_path(main.to_path_buf());
+    harness.frame()?;
 
     let frame = harness.frame()?;
     let semantic_variable = crate::theme::Theme::new(Mode::Dark)

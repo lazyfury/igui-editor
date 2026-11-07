@@ -3,9 +3,9 @@
 //!
 //! This is a generic JSON-RPC client: a [`LanguageServerSpec`] decides which
 //! executable to launch, which files it owns, and whether to use stdio or
-//! loopback TCP. Rust, Go, TypeScript/JavaScript, C/C++, Python and Godot
-//! GDScript are built in; the spec is declarative so a future external plugin
-//! host can contribute another one without changing the editor.
+//! loopback TCP. Rust and Godot GDScript are built in; the spec is declarative
+//! so a future external plugin host can contribute another one without changing
+//! the editor.
 //!
 //! One session (child process) exists per `(spec, project root)`, so a monorepo
 //! runs one server per language root and tab switches reuse it.
@@ -70,6 +70,8 @@ pub struct ServerCapabilities {
     pub signature_help: bool,
     pub references: bool,
     pub document_highlight: bool,
+    /// `documentLinkProvider`: clickable path strings (`preload`, `load`, …).
+    pub document_link: bool,
     pub rename: bool,
     pub prepare_rename: bool,
 }
@@ -104,6 +106,14 @@ pub struct TextRange {
     pub start_char: u32,
     pub end_line: u32,
     pub end_char: u32,
+}
+
+/// One clickable path range from `textDocument/documentLink`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DocumentLink {
+    pub range: TextRange,
+    /// File URI target, resolved to a local path.
+    pub target: PathBuf,
 }
 
 #[derive(Clone, Debug)]
@@ -281,6 +291,7 @@ enum PendingKind {
     NativeSymbol { class: String, symbol: String },
     Semantic(PathBuf),
     Symbols(PathBuf),
+    Links { path: PathBuf, rev: u64 },
 }
 
 struct OpenDoc {
@@ -980,8 +991,12 @@ struct Session {
     symbols: HashMap<PathBuf, Vec<OutlineSymbol>>,
     /// Occurrence ranges from `textDocument/documentHighlight`, per document.
     highlights: HashMap<PathBuf, Vec<TextRange>>,
+    /// Clickable path strings from `textDocument/documentLink`, per document.
+    links: HashMap<PathBuf, Vec<DocumentLink>>,
     symbols_pending: HashSet<PathBuf>,
     symbols_in_flight: HashSet<PathBuf>,
+    links_pending: HashSet<PathBuf>,
+    links_in_flight: HashSet<PathBuf>,
     pending: HashMap<u64, (PendingKind, Instant)>,
     /// `(registration id, watcher)` pairs the server asked for.
     watchers: Vec<(String, Watcher)>,
@@ -1013,8 +1028,11 @@ impl Session {
             semantic_in_flight: HashSet::new(),
             symbols: HashMap::new(),
             highlights: HashMap::new(),
+            links: HashMap::new(),
             symbols_pending: HashSet::new(),
             symbols_in_flight: HashSet::new(),
+            links_pending: HashSet::new(),
+            links_in_flight: HashSet::new(),
             pending: HashMap::new(),
             watchers: Vec::new(),
             native_classes: HashSet::new(),
@@ -1035,8 +1053,11 @@ impl Session {
         self.semantic_in_flight.clear();
         self.symbols.clear();
         self.highlights.clear();
+        self.links.clear();
         self.symbols_pending.clear();
         self.symbols_in_flight.clear();
+        self.links_pending.clear();
+        self.links_in_flight.clear();
         self.pending.clear();
         // A restarted server registers its watchers again.
         self.watchers.clear();
@@ -1266,8 +1287,11 @@ impl Session {
             self.semantic_in_flight.remove(&path);
             self.symbols.remove(&path);
             self.highlights.remove(&path);
+            self.links.remove(&path);
             self.symbols_pending.remove(&path);
             self.symbols_in_flight.remove(&path);
+            self.links_pending.remove(&path);
+            self.links_in_flight.remove(&path);
         }
 
         let now = Instant::now();
@@ -1277,6 +1301,7 @@ impl Session {
         let force = std::mem::take(&mut self.resync);
         let mut semantic_queue = Vec::new();
         let mut symbol_queue = Vec::new();
+        let mut link_queue = Vec::new();
         for path in owned {
             let Some(doc) = ws
                 .tabs
@@ -1311,12 +1336,17 @@ impl Session {
                     );
                     semantic_queue.push(path.clone());
                     symbol_queue.push(path.clone());
+                    link_queue.push(path.clone());
                 }
                 Some(open) => {
                     if open.rev == doc.rev() && !force {
                         open.changed_at = None;
                         continue;
                     }
+                    // A link range refers to the text the server parsed. Drop
+                    // it as soon as a local edit is seen, not when the
+                    // debounced `didChange` eventually goes out.
+                    self.links.remove(path);
                     let due = force
                         || open
                             .changed_at
@@ -1344,6 +1374,7 @@ impl Session {
                     }
                     semantic_queue.push(path.clone());
                     symbol_queue.push(path.clone());
+                    link_queue.push(path.clone());
                 }
             }
         }
@@ -1353,8 +1384,12 @@ impl Session {
         for path in symbol_queue {
             self.symbols_pending.insert(path);
         }
+        for path in link_queue {
+            self.links_pending.insert(path);
+        }
         self.flush_semantic_requests();
         self.flush_symbol_requests();
+        self.flush_link_requests();
     }
 
     fn flush_semantic_requests(&mut self) {
@@ -1408,6 +1443,44 @@ impl Session {
         }
     }
 
+    fn flush_link_requests(&mut self) {
+        if !self.capabilities.document_link {
+            return;
+        }
+        let paths: Vec<PathBuf> = self
+            .links_pending
+            .iter()
+            .filter(|path| !self.links_in_flight.contains(*path))
+            .cloned()
+            .collect();
+        for path in paths {
+            self.links_pending.remove(&path);
+            let Some(rev) = self.open_docs.get(&path).map(|open| open.rev) else {
+                continue;
+            };
+            let Some(client) = self.client.as_mut() else {
+                return;
+            };
+            let request = client.request(
+                "textDocument/documentLink",
+                json!({"textDocument": {"uri": path_to_uri(&path)}}),
+            );
+            if let Some(id) = request {
+                self.pending.insert(
+                    id,
+                    (
+                        PendingKind::Links {
+                            path: path.clone(),
+                            rev,
+                        },
+                        Instant::now(),
+                    ),
+                );
+                self.links_in_flight.insert(path);
+            }
+        }
+    }
+
     fn cache_native_classes(&mut self, params: &Value) {
         let Some(items) = params.get("native_classes").and_then(Value::as_array) else {
             return;
@@ -1437,6 +1510,9 @@ impl Session {
                 }
                 Some(PendingKind::Symbols(path)) => {
                     self.symbols_in_flight.remove(&path);
+                }
+                Some(PendingKind::Links { path, .. }) => {
+                    self.links_in_flight.remove(&path);
                 }
                 Some(kind) => out.push(kind),
                 None => {}
@@ -1747,6 +1823,7 @@ impl LspController {
                 session.diagnostics.contains_key(path)
                     || session.semantic.contains_key(path)
                     || session.symbols.contains_key(path)
+                    || session.links.contains_key(path)
                     || session.open_docs.contains_key(path)
             })
             .or_else(|| {
@@ -2240,6 +2317,22 @@ impl LspController {
                     self.sessions[index].changed = true;
                 }
             }
+            PendingKind::Links { path, rev } => {
+                self.sessions[index].links_in_flight.remove(&path);
+                if self.sessions[index]
+                    .open_docs
+                    .get(&path)
+                    .is_some_and(|open| open.rev == rev)
+                {
+                    let links = parse_document_links(&result);
+                    if links.is_empty() {
+                        self.sessions[index].links.remove(&path);
+                    } else {
+                        self.sessions[index].links.insert(path, links);
+                    }
+                    self.sessions[index].changed = true;
+                }
+            }
         }
     }
 
@@ -2575,6 +2668,18 @@ impl LspController {
             .unwrap_or(&[])
     }
 
+    /// The document-link target under `byte`, if any. Ranges are converted from
+    /// LSP UTF-16 coordinates against the document text the link was parsed for.
+    pub fn link_at(&self, path: &Path, doc: &Document, byte: usize) -> Option<PathBuf> {
+        let links = self.session_for_path(path)?.links.get(path)?;
+        let byte = byte.min(doc.text().len());
+        links.iter().find_map(|link| {
+            let start = byte_for_position(doc, link.range.start_line, link.range.start_char);
+            let end = byte_for_position(doc, link.range.end_line, link.range.end_char);
+            (start < end && byte >= start && byte < end).then(|| link.target.clone())
+        })
+    }
+
     pub fn semantic_for(&self, path: &Path) -> &[SemanticToken] {
         self.session_for_path(path)
             .and_then(|session| session.semantic.get(path))
@@ -2863,11 +2968,18 @@ impl LspController {
             session
                 .symbols
                 .retain(|cached, _| !cached.starts_with(path));
+            session.links.retain(|cached, _| !cached.starts_with(path));
             session
                 .symbols_pending
                 .retain(|cached| !cached.starts_with(path));
             session
                 .symbols_in_flight
+                .retain(|cached| !cached.starts_with(path));
+            session
+                .links_pending
+                .retain(|cached| !cached.starts_with(path));
+            session
+                .links_in_flight
                 .retain(|cached| !cached.starts_with(path));
             if session.diagnostics.len() != before {
                 session.changed = true;
@@ -3098,6 +3210,7 @@ fn server_capabilities(result: &Value, language: &str) -> ServerCapabilities {
         signature_help: provider_enabled("signatureHelpProvider"),
         references: provider_enabled("referencesProvider"),
         document_highlight: provider_enabled("documentHighlightProvider"),
+        document_link: provider_enabled("documentLinkProvider"),
         rename,
         prepare_rename,
     }
@@ -3624,6 +3737,48 @@ fn parse_text_ranges(result: &Value) -> Vec<TextRange> {
         });
     }
     ranges
+}
+
+fn parse_document_links(result: &Value) -> Vec<DocumentLink> {
+    let Some(items) = result.as_array() else {
+        return Vec::new();
+    };
+    let mut links = Vec::new();
+    for item in items.iter().take(1_000) {
+        let range = &item["range"];
+        let start = &range["start"];
+        let end = &range["end"];
+        let (Some(sl), Some(sc), Some(el), Some(ec)) = (
+            start["line"].as_u64(),
+            start["character"].as_u64(),
+            end["line"].as_u64(),
+            end["character"].as_u64(),
+        ) else {
+            continue;
+        };
+        if (sl, sc) >= (el, ec) {
+            continue;
+        }
+        // Targets are file URIs; an optional `#fragment` is not part of the
+        // path. Links without a resolved target are not clickable.
+        let Some(uri) = item["target"].as_str() else {
+            continue;
+        };
+        let uri = uri.split('#').next().unwrap_or(uri);
+        let Some(target) = uri_to_path(uri) else {
+            continue;
+        };
+        links.push(DocumentLink {
+            range: TextRange {
+                start_line: sl as u32,
+                start_char: sc as u32,
+                end_line: el as u32,
+                end_char: ec as u32,
+            },
+            target,
+        });
+    }
+    links
 }
 
 fn parse_locations(result: &Value) -> Vec<Location> {
@@ -4472,12 +4627,15 @@ mod tests {
                 "signatureHelpProvider": {"triggerCharacters": ["(", ","]},
                 "referencesProvider": true,
                 "documentHighlightProvider": true,
+                "documentLinkProvider": {},
                 "renameProvider": {"prepareProvider": true},
             }
         });
         let caps = server_capabilities(&result, "gdscript");
         assert_eq!(caps.completion_triggers, ['.', '$', '"', '%']);
-        assert!(caps.signature_help && caps.references && caps.document_highlight);
+        assert!(
+            caps.signature_help && caps.references && caps.document_highlight && caps.document_link
+        );
         assert!(caps.rename && caps.prepare_rename);
 
         let caps = server_capabilities(&result, "rust");
@@ -4488,6 +4646,7 @@ mod tests {
         let caps = server_capabilities(&json!({"capabilities": {"renameProvider": true}}), "rust");
         assert!(caps.rename && !caps.prepare_rename);
         assert!(!caps.signature_help && !caps.references && !caps.document_highlight);
+        assert!(!caps.document_link);
     }
 
     #[test]
@@ -4710,6 +4869,61 @@ mod tests {
             ("Node", "name")
         );
         assert_eq!(property.kind, NativeDocKind::Property);
+    }
+
+    #[test]
+    fn parses_document_links_and_finds_the_range_under_a_byte() {
+        let target = std::env::temp_dir().join("igui-link-target.gd");
+        let links = parse_document_links(&json!([
+            {
+                "range": {"start": {"line": 0, "character": 9},
+                          "end": {"line": 0, "character": 19}},
+                "target": path_to_uri(&target),
+            },
+            {"range": {"start": {"line": 0, "character": 0},
+                       "end": {"line": 0, "character": 1}}},
+            {"range": {"start": {"line": 0, "character": 0},
+                       "end": {"line": 2, "character": 1}},
+             "target": "https://example.com/no"},
+        ]));
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, target);
+        assert_eq!(links[0].range.start_char, 9);
+        assert_eq!(links[0].range.end_char, 19);
+
+        let path = std::env::temp_dir().join("igui-link-at.gd");
+        let text = "preload(\"res://a.gd\")\n";
+        let doc = Document::from_snapshot(
+            1,
+            "link-at.gd".into(),
+            Some(path.clone()),
+            text.into(),
+            0,
+            0,
+            crate::model::doc::LineEnding::Lf,
+        );
+        let mut lsp = LspController::default();
+        lsp.sessions.push(Session::new(
+            crate::services::godot::godot_server(),
+            std::env::temp_dir(),
+        ));
+        lsp.sessions[0].links.insert(
+            path.clone(),
+            vec![DocumentLink {
+                range: TextRange {
+                    start_line: 0,
+                    start_char: 9,
+                    end_line: 0,
+                    end_char: 19,
+                },
+                target: target.clone(),
+            }],
+        );
+        let start = text.find("res").unwrap();
+        assert_eq!(lsp.link_at(&path, &doc, start), Some(target.clone()));
+        assert_eq!(lsp.link_at(&path, &doc, start + 9), Some(target));
+        assert_eq!(lsp.link_at(&path, &doc, start - 1), None);
+        assert_eq!(lsp.link_at(&path, &doc, start + 10), None);
     }
 
     #[test]

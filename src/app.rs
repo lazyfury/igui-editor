@@ -755,6 +755,12 @@ impl EditorApp {
                     && state.editor.text_rect.contains(*position)
                 {
                     if let Some(byte) = ui::editor::byte_at(&state, *position, measurer.as_ref()) {
+                        // A document link covers a path string; opening it is
+                        // cheaper and more specific than a hover/definition
+                        // round trip.
+                        if state.open_lsp_document_link_at(byte) {
+                            return EventResult::Handled;
+                        }
                         if let Some(class) = state.native_class_at(byte) {
                             let target = crate::model::lsp::NativeTarget {
                                 class: class.clone(),

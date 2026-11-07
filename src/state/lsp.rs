@@ -95,6 +95,26 @@ impl AppState {
         }
     }
 
+    /// Opens the `textDocument/documentLink` target under `byte`, if the active
+    /// document has one. Returns false when there is no link or its target is
+    /// gone, so the caller can fall back to definition/docs.
+    pub fn open_lsp_document_link_at(&mut self, byte: usize) -> bool {
+        let target = {
+            let Some(doc) = self.ws.active_doc() else {
+                return false;
+            };
+            let Some(path) = doc.path().map(Path::to_path_buf) else {
+                return false;
+            };
+            self.lsp.link_at(&path, doc, byte)
+        };
+        let Some(target) = target.filter(|path| path.is_file()) else {
+            return false;
+        };
+        self.open_path(target);
+        true
+    }
+
     pub fn request_lsp_hover(&mut self) {
         self.hover_target = None;
         self.hover_leave_at = None;

@@ -215,9 +215,12 @@ socket. Godot's server sends diagnostics,
 hover, completion, definition and document symbols; 4.7 also advertises
 signature help, references, occurrence highlights and prepareRename/rename,
 which the client uses when the server offers them. Semantic tokens, formatting,
-code actions, folding ranges and workspace symbols are still `Method not found`
-in Godot, so the client does not request them; the syntax palette remains in
-charge of token colors.
+code actions and workspace symbols are still `Method not found` in Godot, so the
+client does not request them; `textDocument/foldingRange` is implemented but
+returns an empty list and is advertised as unsupported. Document links for
+existing path strings are requested on open/change; Ctrl/Cmd-click over a
+`preload("res://…")`, `load("res://…")` or similar range opens the target file.
+The syntax palette remains in charge of token colors.
 
 Godot's language server does not understand
 `workspace/didChangeWatchedFiles`, and its project scan (the source of the

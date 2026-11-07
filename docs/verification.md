@@ -97,7 +97,9 @@ client; diagnostics appear under the changed line and in the footer, the footer
 chip opens the bottom dock's PROBLEMS tab (workspace rows, click jumps and keeps
 the panel open), `F1` paints
 a hover card, `⌘I`/`Ctrl+I` opens a completion list and inserts the selected
-item, and `F12` jumps to the returned definition. A second scripted server
+item, and `F12` jumps to the returned definition. A `textDocument/documentLink`
+response (a path-string range in the fixture) is cached and opens its target
+file through the document-link entry point. A second scripted server
 checks a `Cargo.lock` monorepo: one `initialize`, two `didOpen`s with the `rust`
 language id, both modules' diagnostics alive at once, the footer dot stopping
 every child (`LSP OFF`, diagnostics cleared) and the settings row restarting it.

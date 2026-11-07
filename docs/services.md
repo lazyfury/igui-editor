@@ -223,8 +223,10 @@ its own language-server binary.
   Completion activation is debounced (140 ms) and the selected item is resolved
   with `completionItem/resolve` to show a hover-style preview; native previews
   open the docs tab, while local methods use a plain resolved docs tab.
-  Ctrl/Cmd-click performs a hover probe for classes, methods, virtual methods,
-  globals and properties before falling back to definition. Completion is prefix-filtered before the UI
+  Ctrl/Cmd-click first opens a `textDocument/documentLink` target when the
+  pointer is inside a path string (Godot returns links for existing
+  `res://…` files), then performs a hover probe for classes, methods, virtual
+  methods, globals and properties before falling back to definition. Completion is prefix-filtered before the UI
   cap so global methods such as `print` are not lost in Godot's ~2000-item
   result. Semantic tokens
   are requested on open/change and composed with the syntax colors before the
@@ -232,6 +234,9 @@ its own language-server binary.
   variable/parameter/field/type color. Document symbols feed the
   right outline panel. Hover and completion are transient overlays. Nothing is
   persisted.
+
+See [`godot-extensions.md`](godot-extensions.md) for the measured GDScript
+addon/GDExtension boundary and the deferred bridge/scene-navigation plan.
 
 Capabilities:
 
